@@ -1,0 +1,109 @@
+on:
+  push:
+    branches: [ master ]
+    tags:
+      - '*'
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - if: runner.os == 'Linux'
+      run: sudo apt-get install -y libudev-dev
+
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        components: rustfmt, clippy
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: cargo fmt
+      uses: actions-rs/cargo@v1
+      with:
+        command: fmt
+        args: --all -- --check
+
+    - name: cargo clippy
+      uses: actions-rs/cargo@v1
+      with:
+        command: clippy
+        args: --workspace --all-targets -- --deny=warnings
+
+    - name: cargo test
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --verbose
+
+    - name: cargo build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+
+  build_release:
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        include:
+        - target: x86_64-unknown-linux-gnu
+          os: ubuntu-latest
+        - target: x86_64-apple-darwin
+          os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v2
+
+    - if: startsWith(matrix.os, 'ubuntu')
+      run: sudo apt-get install -y libudev-dev
+
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        components: rustfmt, clippy
+
+    - name: cargo build --release
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+
+    - run: mv target/release/solana-stake-o-matic solana-stake-o-matic-${{ matrix.target }}
+
+    - uses: actions/upload-artifact@v2
+      with:
+        name: ${{ matrix.target }}
+        path: solana-stake-o-matic-${{ matrix.target }}
+        if-no-files-found: error
+
+  create_release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build_release
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/download-artifact@v2
+
+    - uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          x86_64-apple-darwin/solana-stake-o-matic-x86_64-apple-darwin
+          x86_64-unknown-linux-gnu/solana-stake-o-matic-x86_64-unknown-linux-gnu
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
