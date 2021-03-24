@@ -3067,7 +3067,7 @@ dependencies = [
  "clap",
  "log",
  "reqwest 0.11.2",
- "semver 0.9.0",
+ "semver 0.11.0",
  "serde",
  "serde_json",
  "serde_yaml",
