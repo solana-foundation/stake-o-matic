@@ -1,2 +1,2 @@
-target/
-solana-install/
+/target/
+/solana-stake-o-matic
