@@ -18,8 +18,11 @@ use {
     },
     solana_cli_output::display::format_labeled_address,
     solana_client::{
-        client_error, rpc_client::RpcClient, rpc_config::RpcSimulateTransactionConfig,
-        rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS, rpc_response::RpcVoteAccountInfo,
+        client_error,
+        rpc_client::RpcClient,
+        rpc_config::RpcSimulateTransactionConfig,
+        rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
+        rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
     },
     solana_notifier::Notifier,
     solana_sdk::{
@@ -986,6 +989,27 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         process::exit(1);
     });
 
+    // Fetch vote account status for all the validators
+    let vote_account_info = {
+        let RpcVoteAccountStatus {
+            current,
+            delinquent,
+        } = rpc_client.get_vote_accounts()?;
+
+        current
+            .into_iter()
+            .chain(delinquent.into_iter())
+            .filter_map(|vai| {
+                let node_pubkey = Pubkey::from_str(&vai.node_pubkey).ok()?;
+                if config.validator_list.contains(&node_pubkey) {
+                    Some(vai)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
     let cluster_nodes_with_old_version: HashSet<String> = match config.min_release_version {
         Some(ref min_release_version) => rpc_client
             .get_cluster_nodes()?
@@ -1055,22 +1079,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         ));
     }
 
-    // Fetch vote account status for all the validator_listed validators
-    let vote_account_status = rpc_client.get_vote_accounts()?;
-    let vote_account_info = vote_account_status
-        .current
-        .into_iter()
-        .chain(vote_account_status.delinquent.into_iter())
-        .filter_map(|vai| {
-            let node_pubkey = Pubkey::from_str(&vai.node_pubkey).ok()?;
-            if config.validator_list.contains(&node_pubkey) {
-                Some(vai)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
     let infrastructure_concentration = data_center_info::get()
         .map_err(|e| {
             warn!("infrastructure concentration skipped: {}", e);
@@ -1104,6 +1112,87 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         let formatted_node_pubkey =
             format_labeled_address(&node_pubkey_str, &config.address_labels);
         let node_pubkey = Pubkey::from_str(&node_pubkey_str).unwrap();
+
+        debug!(
+            "\nidentity: {}\n - vote address: {}\n - root slot: {}",
+            node_pubkey, vote_pubkey, root_slot
+        );
+
+        let infrastructure_concentration_destake_memo = infrastructure_concentration
+            .get(&node_pubkey)
+            .map(|concentration| {
+                config.infrastructure_concentration_affects.memo(
+                    &node_pubkey,
+                    *concentration,
+                    &config,
+                )
+            })
+            .and_then(|affect| match affect {
+                InfrastructureConcentrationAffectKind::Destake(memo) => Some(memo),
+                InfrastructureConcentrationAffectKind::Warn(memo) => {
+                    notifications.push(memo);
+                    None
+                }
+            });
+
+        let operation = if let Some(memo) = infrastructure_concentration_destake_memo {
+            Some((ValidatorStakeState::None, memo))
+        } else if *commission > config.max_commission {
+            Some((
+                ValidatorStakeState::None,
+                format!(
+                    "⛔ `{}` {}% commission is too high",
+                    formatted_node_pubkey, commission,
+                ),
+            ))
+        } else if !too_many_old_validators
+            && cluster_nodes_with_old_version.contains(node_pubkey_str)
+        {
+            Some((
+                ValidatorStakeState::None,
+                format!(
+                    "🧮 `{}` is running an old software release",
+                    formatted_node_pubkey,
+                ),
+            ))
+
+        // Destake the validator if it has been delinquent for longer than the grace period
+        } else if *root_slot
+            < epoch_info
+                .absolute_slot
+                .saturating_sub(config.delinquent_grace_slot_distance)
+        {
+            Some((
+                ValidatorStakeState::None,
+                format!("🏖️ `{}` is delinquent", formatted_node_pubkey,),
+            ))
+
+        // Validator is delinquent but less than the grace period.  Take no action
+        } else if *root_slot < epoch_info.absolute_slot - 256 {
+            None
+        } else if quality_block_producers.contains(&node_pubkey) {
+            Some((
+                ValidatorStakeState::Bonus,
+                format!(
+                    "🏅 `{}` was a quality block producer during epoch {}",
+                    formatted_node_pubkey, last_epoch,
+                ),
+            ))
+        } else if !too_many_poor_block_producers && poor_block_producers.contains(&node_pubkey) {
+            Some((
+                ValidatorStakeState::Baseline,
+                format!(
+                    "💔 `{}` was a poor block producer during epoch {}",
+                    formatted_node_pubkey, last_epoch,
+                ),
+            ))
+        } else {
+            Some((
+                ValidatorStakeState::Baseline,
+                format!("🥩 `{}` is current", formatted_node_pubkey),
+            ))
+        };
+
         let baseline_seed = &vote_pubkey.to_string()[..32];
         let bonus_seed = &format!("A{{{}", vote_pubkey)[..32];
         let vote_pubkey = Pubkey::from_str(&vote_pubkey).unwrap();
@@ -1122,8 +1211,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .unwrap();
 
         debug!(
-            "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - baseline stake: {}\n - bonus stake: {}",
-            node_pubkey, vote_pubkey, root_slot, baseline_stake_address, bonus_stake_address
+            "  identity: {} - baseline stake: {}\n - bonus stake: {}",
+            node_pubkey, baseline_stake_address, bonus_stake_address
         );
 
         // Transactions to create the baseline and bonus stake accounts
@@ -1201,81 +1290,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 ),
             ));
         }
-
-        let infrastructure_concentration_destake_memo = infrastructure_concentration
-            .get(&node_pubkey)
-            .map(|concentration| {
-                config.infrastructure_concentration_affects.memo(
-                    &node_pubkey,
-                    *concentration,
-                    &config,
-                )
-            })
-            .and_then(|affect| match affect {
-                InfrastructureConcentrationAffectKind::Destake(memo) => Some(memo),
-                InfrastructureConcentrationAffectKind::Warn(memo) => {
-                    notifications.push(memo);
-                    None
-                }
-            });
-
-        let operation = if let Some(memo) = infrastructure_concentration_destake_memo {
-            Some((ValidatorStakeState::None, memo))
-        } else if *commission > config.max_commission {
-            Some((
-                ValidatorStakeState::None,
-                format!(
-                    "⛔ `{}` {}% commission is too high",
-                    formatted_node_pubkey, commission,
-                ),
-            ))
-        } else if !too_many_old_validators
-            && cluster_nodes_with_old_version.contains(node_pubkey_str)
-        {
-            Some((
-                ValidatorStakeState::None,
-                format!(
-                    "🧮 `{}` is running an old software release",
-                    formatted_node_pubkey,
-                ),
-            ))
-
-        // Destake the validator if it has been delinquent for longer than the grace period
-        } else if *root_slot
-            < epoch_info
-                .absolute_slot
-                .saturating_sub(config.delinquent_grace_slot_distance)
-        {
-            Some((
-                ValidatorStakeState::None,
-                format!("🏖️ `{}` is delinquent", formatted_node_pubkey,),
-            ))
-
-        // Validator is delinquent but less than the grace period.  Take no action
-        } else if *root_slot < epoch_info.absolute_slot - 256 {
-            None
-        } else if quality_block_producers.contains(&node_pubkey) {
-            Some((
-                ValidatorStakeState::Bonus,
-                format!(
-                    "🏅 `{}` was a quality block producer during epoch {}",
-                    formatted_node_pubkey, last_epoch,
-                ),
-            ))
-        } else if !too_many_poor_block_producers && poor_block_producers.contains(&node_pubkey) {
-            Some((
-                ValidatorStakeState::Baseline,
-                format!(
-                    "💔 `{}` was a poor block producer during epoch {}",
-                    formatted_node_pubkey, last_epoch,
-                ),
-            ))
-        } else {
-            Some((
-                ValidatorStakeState::Baseline,
-                format!("🥩 `{}` is current", formatted_node_pubkey),
-            ))
-        };
 
         if let Some((stake_state, memo)) = operation {
             let (baseline, bonus) = match stake_state {
