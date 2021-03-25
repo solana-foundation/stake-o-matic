@@ -41,6 +41,7 @@ use {
 };
 
 mod confirmed_block_cache;
+mod data_center_info;
 mod validator_list;
 mod validators_app;
 
@@ -972,131 +973,6 @@ fn process_confirmations(
     ok
 }
 
-const DATA_CENTER_ID_UNKNOWN: &str = "0-Unknown";
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct DataCenterId {
-    asn: u64,
-    location: String,
-}
-
-impl Default for DataCenterId {
-    fn default() -> Self {
-        Self::from_str(DATA_CENTER_ID_UNKNOWN).unwrap()
-    }
-}
-
-impl std::str::FromStr for DataCenterId {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.splitn(2, '-');
-        let asn = parts.next();
-        let location = parts.next();
-        if let (Some(asn), Some(location)) = (asn, location) {
-            let asn = asn.parse().map_err(|e| format!("{:?}", e))?;
-            let location = location.to_string();
-            Ok(Self { asn, location })
-        } else {
-            Err(format!("cannot construct DataCenterId from input: {}", s))
-        }
-    }
-}
-
-impl std::fmt::Display for DataCenterId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}-{}", self.asn, self.location)
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct DatacenterInfo {
-    id: DataCenterId,
-    stake: u64,
-    stake_percent: f64,
-    validators: Vec<Pubkey>,
-}
-
-impl DatacenterInfo {
-    pub fn new(id: DataCenterId) -> Self {
-        Self {
-            id,
-            ..Self::default()
-        }
-    }
-}
-
-impl std::fmt::Display for DatacenterInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{:<30}  {:>20}  {:>5.2}  {}",
-            self.id.to_string(),
-            self.stake,
-            self.stake_percent,
-            self.validators.len()
-        )
-    }
-}
-
-fn get_data_center_info() -> Result<Vec<DatacenterInfo>, Box<dyn error::Error>> {
-    let token = std::env::var("VALIDATORS_APP_TOKEN")?;
-    let client = validators_app::Client::new(token);
-    let validators = client.validators(None, None)?;
-    let mut data_center_infos = HashMap::new();
-    let mut total_stake = 0;
-    let mut unknown_data_center_stake: u64 = 0;
-    for v in validators.as_ref() {
-        let account = v
-            .account
-            .as_ref()
-            .and_then(|pubkey| Pubkey::from_str(pubkey).ok());
-        let account = if let Some(account) = account {
-            account
-        } else {
-            warn!("No vote pubkey for: {:?}", v);
-            continue;
-        };
-
-        let stake = v.active_stake.unwrap_or(0);
-
-        let data_center = v
-            .data_center_key
-            .as_deref()
-            .or_else(|| {
-                unknown_data_center_stake = unknown_data_center_stake.saturating_add(stake);
-                None
-            })
-            .unwrap_or(DATA_CENTER_ID_UNKNOWN);
-        let data_center_id = DataCenterId::from_str(data_center)
-            .map_err(|e| {
-                unknown_data_center_stake = unknown_data_center_stake.saturating_add(stake);
-                e
-            })
-            .unwrap_or_default();
-
-        let mut data_center_info = data_center_infos
-            .entry(data_center_id.clone())
-            .or_insert_with(|| DatacenterInfo::new(data_center_id));
-        data_center_info.stake += stake;
-        total_stake += stake;
-        data_center_info.validators.push(account);
-    }
-
-    let unknown_percent = 100f64 * (unknown_data_center_stake as f64) / total_stake as f64;
-    if unknown_percent > 3f64 {
-        warn!("unknown data center percentage: {:.0}%", unknown_percent);
-    }
-
-    let data_center_infos = data_center_infos
-        .drain()
-        .map(|(_, mut i)| {
-            i.stake_percent = 100f64 * i.stake as f64 / total_stake as f64;
-            i
-        })
-        .collect();
-    Ok(data_center_infos)
-}
-
 #[allow(clippy::cognitive_complexity)] // Yeah I know...
 fn main() -> Result<(), Box<dyn error::Error>> {
     solana_logger::setup_with_default("solana=info");
@@ -1180,7 +1056,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         })
         .collect::<Vec<_>>();
 
-    let infrastructure_concentration = get_data_center_info()
+    let infrastructure_concentration = data_center_info::get()
         .map_err(|e| {
             warn!("infrastructure concentration skipped: {}", e);
             e
@@ -1460,22 +1336,22 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                     // Delegate bonus stake
                     if !stake_activated_in_current_epoch.contains(&bonus_stake_address) {
                         delegate_stake_transactions.push((
-                        Transaction::new_unsigned(
-                        Message::new(
-                            &[stake_instruction::delegate_stake(
-                                &bonus_stake_address,
-                                &config.authorized_staker.pubkey(),
-                                &vote_pubkey,
-                            )],
-                            Some(&config.authorized_staker.pubkey()),
-                        )),
-                        format!(
-                            "🏅 `{}` was a quality block producer during epoch {}. Added ◎{} bonus stake",
-                            formatted_node_pubkey,
-                            last_epoch,
-                            lamports_to_sol(config.bonus_stake_amount),
-                        ),
-                    ));
+                            Transaction::new_unsigned(
+                            Message::new(
+                                &[stake_instruction::delegate_stake(
+                                    &bonus_stake_address,
+                                    &config.authorized_staker.pubkey(),
+                                    &vote_pubkey,
+                                )],
+                                Some(&config.authorized_staker.pubkey()),
+                            )),
+                            format!(
+                                "🏅 `{}` was a quality block producer during epoch {}. Added ◎{} bonus stake",
+                                formatted_node_pubkey,
+                                last_epoch,
+                                lamports_to_sol(config.bonus_stake_amount),
+                            ),
+                        ));
                     }
                 } else if poor_block_producers.contains(&node_pubkey) {
                     // Deactivate bonus stake
