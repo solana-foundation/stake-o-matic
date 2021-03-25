@@ -767,7 +767,7 @@ fn validate_source_stake_account(
         get_stake_account(&rpc_client, &config.source_stake_address)?;
 
     info!(
-        "stake account balance: {} SOL",
+        "source stake account balance: {} SOL",
         lamports_to_sol(source_stake_balance)
     );
     match &source_stake_state {
@@ -1020,8 +1020,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             min_release_version, cluster_nodes_with_old_version,
         );
     }
-
-    let source_stake_balance = validate_source_stake_account(&rpc_client, &config)?;
 
     let epoch_info = rpc_client.get_epoch_info()?;
     let last_epoch = epoch_info.epoch - 1;
@@ -1442,6 +1440,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             lamports_to_sol(source_stake_lamports_required),
             create_stake_transactions.len()
         );
+
+        let source_stake_balance = validate_source_stake_account(&rpc_client, &config)?;
         if source_stake_balance < source_stake_lamports_required {
             error!(
                 "Source stake account has insufficient balance: {} SOL, but {} SOL is required",
