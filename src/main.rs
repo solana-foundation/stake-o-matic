@@ -46,6 +46,13 @@ use {
     thiserror::Error,
 };
 
+/// The staking states that a validator can be in
+enum ValidatorStakeState {
+    None,     // Validator gets no stake
+    Baseline, // Validator has been awarded a baseline stake
+    Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
+}
+
 enum InfrastructureConcentrationAffectKind {
     Destake(String),
     Warn(String),
@@ -834,7 +841,7 @@ fn send_and_confirm_transactions(
     dry_run: bool,
     transactions: Vec<(Transaction, String)>,
     authorized_staker: &Keypair,
-    notifier: Option<&Notifier>,
+    notifications: &mut Vec<String>,
 ) -> Result<bool, Box<dyn error::Error>> {
     let transactions = simulate_transactions(rpc_client, transactions)?;
 
@@ -961,9 +968,7 @@ fn send_and_confirm_transactions(
     {
         if success {
             info!("OK:   {}: {}", signature, memo);
-            if let Some(notifier) = notifier {
-                notifier.send(&memo)
-            }
+            notifications.push(memo)
         } else {
             error!("FAIL: {}: {}", signature, memo);
             ok = false
@@ -1228,203 +1233,127 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 }
             });
 
-        if let Some(memo_base) = infrastructure_concentration_destake_memo {
-            // Deactivate baseline stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &baseline_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!("{} {}", memo_base, "base stake"),
-            ));
-
-            // Deactivate bonus stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &bonus_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!("{} {}", memo_base, "bonus stake"),
-            ));
+        let operation = if let Some(memo) = infrastructure_concentration_destake_memo {
+            Some((ValidatorStakeState::None, memo))
         } else if *commission > config.max_commission {
-            // Deactivate baseline stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &baseline_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
+            Some((
+                ValidatorStakeState::None,
                 format!(
-                    "⛔ `{}` commission of {}% is too high. Max commission is {}%. Removed ◎{} baseline stake",
-                    formatted_node_pubkey,
-                    commission,
-                    config.max_commission,
-                    lamports_to_sol(config.baseline_stake_amount),
+                    "⛔ `{}` {}% commission is too high",
+                    formatted_node_pubkey, commission,
                 ),
-            ));
-
-            // Deactivate bonus stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &bonus_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!(
-                    "⛔ `{}` commission of {}% is too high. Max commission is {}%. Removed ◎{} bonus stake",
-                    formatted_node_pubkey,
-                    commission,
-                    config.max_commission,
-                    lamports_to_sol(config.bonus_stake_amount),
-                ),
-            ));
+            ))
         } else if !too_many_old_validators
             && cluster_nodes_with_old_version.contains(node_pubkey_str)
         {
-            // Deactivate baseline stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &baseline_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
+            Some((
+                ValidatorStakeState::None,
                 format!(
-                    "🧮 `{}` is running an old software release. Removed ◎{} baseline stake",
+                    "🧮 `{}` is running an old software release",
                     formatted_node_pubkey,
-                    lamports_to_sol(config.baseline_stake_amount),
                 ),
-            ));
+            ))
 
-            // Deactivate bonus stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &bonus_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
+        // Destake the validator if it has been delinquent for longer than the grace period
+        } else if *root_slot
+            < epoch_info
+                .absolute_slot
+                .saturating_sub(config.delinquent_grace_slot_distance)
+        {
+            Some((
+                ValidatorStakeState::None,
+                format!("🏖️ `{}` is delinquent", formatted_node_pubkey,),
+            ))
+
+        // Validator is delinquent but less than the grace period.  Take no action
+        } else if *root_slot < epoch_info.absolute_slot - 256 {
+            None
+        } else if quality_block_producers.contains(&node_pubkey) {
+            Some((
+                ValidatorStakeState::Bonus,
                 format!(
-                    "🧮 `{}` is running an old software release. Removed ◎{} bonus stake",
-                    formatted_node_pubkey,
-                    lamports_to_sol(config.bonus_stake_amount),
+                    "🏅 `{}` was a quality block producer during epoch {}",
+                    formatted_node_pubkey, last_epoch,
                 ),
-            ));
+            ))
+        } else if !too_many_poor_block_producers && poor_block_producers.contains(&node_pubkey) {
+            Some((
+                ValidatorStakeState::Baseline,
+                format!(
+                    "💔 `{}` was a poor block producer during epoch {}",
+                    formatted_node_pubkey, last_epoch,
+                ),
+            ))
+        } else {
+            Some((
+                ValidatorStakeState::Baseline,
+                format!("🥩 `{}` is current", formatted_node_pubkey),
+            ))
+        };
 
-        // Validator is not considered delinquent if its root slot is less than 256 slots behind the current
-        // slot.  This is very generous.
-        } else if *root_slot > epoch_info.absolute_slot - 256 {
-            // Delegate baseline stake
-            if !stake_activated_in_current_epoch.contains(&baseline_stake_address) {
+        if let Some((stake_state, memo)) = operation {
+            let (baseline, bonus) = match stake_state {
+                ValidatorStakeState::None => (false, false),
+                ValidatorStakeState::Baseline => (true, false),
+                ValidatorStakeState::Bonus => (true, true),
+            };
+
+            if baseline {
+                if !stake_activated_in_current_epoch.contains(&baseline_stake_address) {
+                    delegate_stake_transactions.push((
+                        Transaction::new_unsigned(Message::new(
+                            &[stake_instruction::delegate_stake(
+                                &baseline_stake_address,
+                                &config.authorized_staker.pubkey(),
+                                &vote_pubkey,
+                            )],
+                            Some(&config.authorized_staker.pubkey()),
+                        )),
+                        memo.clone(),
+                    ));
+                }
+            } else {
+                // Deactivate baseline stake
                 delegate_stake_transactions.push((
                     Transaction::new_unsigned(Message::new(
-                        &[stake_instruction::delegate_stake(
+                        &[stake_instruction::deactivate_stake(
                             &baseline_stake_address,
                             &config.authorized_staker.pubkey(),
-                            &vote_pubkey,
                         )],
                         Some(&config.authorized_staker.pubkey()),
                     )),
-                    format!(
-                        "🥩 `{}` is current. Added ◎{} baseline stake",
-                        formatted_node_pubkey,
-                        lamports_to_sol(config.baseline_stake_amount),
-                    ),
+                    memo.clone(),
                 ));
             }
 
-            if !too_many_poor_block_producers {
-                if quality_block_producers.contains(&node_pubkey) {
-                    // Delegate bonus stake
-                    if !stake_activated_in_current_epoch.contains(&bonus_stake_address) {
-                        delegate_stake_transactions.push((
-                            Transaction::new_unsigned(
-                            Message::new(
-                                &[stake_instruction::delegate_stake(
-                                    &bonus_stake_address,
-                                    &config.authorized_staker.pubkey(),
-                                    &vote_pubkey,
-                                )],
-                                Some(&config.authorized_staker.pubkey()),
-                            )),
-                            format!(
-                                "🏅 `{}` was a quality block producer during epoch {}. Added ◎{} bonus stake",
-                                formatted_node_pubkey,
-                                last_epoch,
-                                lamports_to_sol(config.bonus_stake_amount),
-                            ),
-                        ));
-                    }
-                } else if poor_block_producers.contains(&node_pubkey) {
-                    // Deactivate bonus stake
+            if bonus {
+                // Activate bonus stake
+                if !stake_activated_in_current_epoch.contains(&bonus_stake_address) {
                     delegate_stake_transactions.push((
-                    Transaction::new_unsigned(
-                    Message::new(
+                        Transaction::new_unsigned(Message::new(
+                            &[stake_instruction::delegate_stake(
+                                &bonus_stake_address,
+                                &config.authorized_staker.pubkey(),
+                                &vote_pubkey,
+                            )],
+                            Some(&config.authorized_staker.pubkey()),
+                        )),
+                        memo.clone(),
+                    ));
+                }
+            } else {
+                // Deactivate bonus stake
+                delegate_stake_transactions.push((
+                    Transaction::new_unsigned(Message::new(
                         &[stake_instruction::deactivate_stake(
                             &bonus_stake_address,
                             &config.authorized_staker.pubkey(),
                         )],
                         Some(&config.authorized_staker.pubkey()),
                     )),
-                    format!(
-                        "💔 `{}` was a poor block producer during epoch {}. Removed ◎{} bonus stake",
-                        formatted_node_pubkey,
-                        last_epoch,
-                        lamports_to_sol(config.bonus_stake_amount),
-                    ),
+                    memo.clone(),
                 ));
-                }
             }
-
-            // Destake the validator if it has been delinquent for longer than the grace period
-        } else if *root_slot
-            < epoch_info
-                .absolute_slot
-                .saturating_sub(config.delinquent_grace_slot_distance)
-        {
-            // Deactivate baseline stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &baseline_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!(
-                    "🏖️ `{}` is delinquent. Removed ◎{} baseline stake",
-                    formatted_node_pubkey,
-                    lamports_to_sol(config.baseline_stake_amount),
-                ),
-            ));
-
-            // Deactivate bonus stake
-            delegate_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::deactivate_stake(
-                        &bonus_stake_address,
-                        &config.authorized_staker.pubkey(),
-                    )],
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!(
-                    "🏖️ `{}` is delinquent. Removed ◎{} bonus stake",
-                    formatted_node_pubkey,
-                    lamports_to_sol(config.bonus_stake_amount),
-                ),
-            ));
         }
     }
 
@@ -1450,25 +1379,27 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             config.dry_run,
             create_stake_transactions,
             &config.authorized_staker,
-            None,
+            &mut vec![],
         )? {
             error!("Failed to create one or more stake accounts.  Unable to continue");
             process::exit(1);
         }
     }
 
+    let error = send_and_confirm_transactions(
+        &rpc_client,
+        config.dry_run,
+        delegate_stake_transactions,
+        &config.authorized_staker,
+        &mut notifications,
+    )?;
+
     for notification in notifications {
         warn!("{}", notification);
         notifier.send(&notification);
     }
 
-    if !send_and_confirm_transactions(
-        &rpc_client,
-        config.dry_run,
-        delegate_stake_transactions,
-        &config.authorized_staker,
-        Some(&notifier),
-    )? {
+    if error {
         process::exit(1);
     }
 
