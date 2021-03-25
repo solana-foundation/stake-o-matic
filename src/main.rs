@@ -349,7 +349,8 @@ fn get_config() -> Config {
                 .takes_value(true)
                 .default_value("15")
                 .validator(is_valid_percentage)
-                .help("Quality validators have a skip rate within this percentage of the cluster average in the previous epoch.")
+                .help("Quality validators have a skip rate within this percentage of \
+                       the cluster average in the previous epoch.")
         )
         .arg(
             Arg::with_name("bad_cluster_average_skip_rate")
@@ -367,7 +368,9 @@ fn get_config() -> Config {
                 .takes_value(true)
                 .default_value("20")
                 .validator(is_valid_percentage)
-                .help("Do not add or remove bonus stake from any non-delinquent validators if at least this percentage of all validators are poor block producers")
+                .help("Do not add or remove bonus stake from any
+                       non-delinquent validators if at least this percentage of \
+                       all validators are poor block producers")
         )
         .arg(
             Arg::with_name("baseline_stake_amount")
@@ -792,12 +795,6 @@ fn validate_source_stake_account(
     }
 }
 
-struct ConfirmedTransaction {
-    success: bool,
-    signature: Signature,
-    memo: String,
-}
-
 /// Simulate a list of transactions and filter out the ones that will fail
 fn simulate_transactions(
     rpc_client: &RpcClient,
@@ -833,12 +830,15 @@ fn simulate_transactions(
     Ok(simulated_transactions)
 }
 
-fn transact(
+fn send_and_confirm_transactions(
     rpc_client: &RpcClient,
     dry_run: bool,
     transactions: Vec<(Transaction, String)>,
     authorized_staker: &Keypair,
-) -> Result<Vec<ConfirmedTransaction>, Box<dyn error::Error>> {
+    notifier: Option<&Notifier>,
+) -> Result<bool, Box<dyn error::Error>> {
+    let transactions = simulate_transactions(rpc_client, transactions)?;
+
     let authorized_staker_balance = rpc_client.get_balance(&authorized_staker.pubkey())?;
     info!(
         "Authorized staker balance: {} SOL",
@@ -868,7 +868,13 @@ fn transact(
         }
     }
 
-    let mut finalized_transactions = vec![];
+    struct ConfirmedTransaction {
+        success: bool,
+        signature: Signature,
+        memo: String,
+    }
+
+    let mut confirmed_transactions = vec![];
     loop {
         if pending_transactions.is_empty() {
             break;
@@ -890,7 +896,7 @@ fn transact(
             );
 
             for (signature, memo) in pending_transactions.into_iter() {
-                finalized_transactions.push(ConfirmedTransaction {
+                confirmed_transactions.push(ConfirmedTransaction {
                     success: false,
                     signature,
                     memo,
@@ -934,7 +940,7 @@ fn transact(
             if let Some(success) = completed {
                 warn!("{}: completed.  success={}", signature, success);
                 let memo = pending_transactions.remove(&signature).unwrap();
-                finalized_transactions.push(ConfirmedTransaction {
+                confirmed_transactions.push(ConfirmedTransaction {
                     success,
                     signature,
                     memo,
@@ -944,21 +950,15 @@ fn transact(
         sleep(Duration::from_secs(5));
     }
 
-    Ok(finalized_transactions)
-}
+    confirmed_transactions.sort_by(|a, b| a.memo.cmp(&b.memo));
 
-fn process_confirmations(
-    mut confirmations: Vec<ConfirmedTransaction>,
-    notifier: Option<&Notifier>,
-) -> bool {
     let mut ok = true;
 
-    confirmations.sort_by(|a, b| a.memo.cmp(&b.memo));
     for ConfirmedTransaction {
         success,
         signature,
         memo,
-    } in confirmations
+    } in confirmed_transactions
     {
         if success {
             info!("OK:   {}: {}", signature, memo);
@@ -970,10 +970,9 @@ fn process_confirmations(
             ok = false
         }
     }
-    ok
+    Ok(ok)
 }
 
-#[allow(clippy::cognitive_complexity)] // Yeah I know...
 fn main() -> Result<(), Box<dyn error::Error>> {
     solana_logger::setup_with_default("solana=info");
     let config = get_config();
@@ -1437,9 +1436,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         }
     }
 
-    if create_stake_transactions.is_empty() {
-        info!("All stake accounts exist");
-    } else {
+    if !create_stake_transactions.is_empty() {
         info!(
             "{} SOL is required to create {} stake accounts",
             lamports_to_sol(source_stake_lamports_required),
@@ -1456,28 +1453,24 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             process::exit(1);
         }
 
-        let create_stake_transactions =
-            simulate_transactions(&rpc_client, create_stake_transactions)?;
-        let confirmations = transact(
+        if !send_and_confirm_transactions(
             &rpc_client,
             config.dry_run,
             create_stake_transactions,
             &config.authorized_staker,
-        )?;
-
-        if !process_confirmations(confirmations, None) {
+            None,
+        )? {
             error!("Failed to create one or more stake accounts.  Unable to continue");
             process::exit(1);
         }
     }
 
-    let delegate_stake_transactions =
-        simulate_transactions(&rpc_client, delegate_stake_transactions)?;
-    let confirmations = transact(
+    let success = send_and_confirm_transactions(
         &rpc_client,
         config.dry_run,
         delegate_stake_transactions,
         &config.authorized_staker,
+        Some(&notifier),
     )?;
 
     if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
@@ -1509,14 +1502,12 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         notifier.send(&message);
     }
 
-    let confirmations_succeeded = process_confirmations(confirmations, Some(&notifier));
-
     for memo in &infrastructure_concentration_warnings {
         warn!("{}", memo);
         notifier.send(memo)
     }
 
-    if !confirmations_succeeded {
+    if !success {
         process::exit(1);
     }
 
