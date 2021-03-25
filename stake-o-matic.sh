@@ -4,5 +4,5 @@
 #
 set -ex
 
-"$(dirname "$0")"/fetch-release.sh
+"$(dirname "$0")"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
 exec ./solana-stake-o-matic "$@"
