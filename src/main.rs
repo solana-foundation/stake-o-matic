@@ -1,6 +1,13 @@
 #![allow(clippy::integer_arithmetic)]
+
+mod confirmed_block_cache;
+mod data_center_info;
+mod validator_list;
+mod validators_app;
+
 use {
     clap::{crate_description, crate_name, value_t, value_t_or_exit, App, Arg, ArgMatches},
+    confirmed_block_cache::ConfirmedBlockCache,
     log::*,
     reqwest::StatusCode,
     solana_clap_utils::{
@@ -39,13 +46,6 @@ use {
     },
     thiserror::Error,
 };
-
-mod confirmed_block_cache;
-mod data_center_info;
-mod validator_list;
-mod validators_app;
-
-use confirmed_block_cache::ConfirmedBlockCache;
 
 enum InfrastructureConcentrationAffectKind {
     Destake(String),
@@ -667,11 +667,11 @@ fn classify_producers(
             e.1 += validator_slots;
         }
     }
-    let cluster_average_rate = 100 - total_blocks * 100 / total_slots;
+    let cluster_average_skip_rate = 100 - total_blocks * 100 / total_slots;
     for (validator_identity, (blocks, slots)) in blocks_and_slots {
         let skip_rate: usize = 100 - (blocks * 100 / slots);
         let skip_rate_floor = if config.use_cluster_average_skip_rate {
-            cluster_average_rate
+            cluster_average_skip_rate
         } else {
             0
         };
@@ -694,7 +694,7 @@ fn classify_producers(
     let too_many_poor_block_producers =
         poor_block_producer_percentage > config.max_poor_block_producer_percentage;
 
-    info!("cluster_average_skip_rate: {}", cluster_average_rate);
+    info!("cluster_average_skip_rate: {}", cluster_average_skip_rate);
     info!("quality_block_producers: {}", quality_block_producers.len());
     trace!("quality_block_producers: {:?}", quality_block_producers);
     info!("poor_block_producers: {}", poor_block_producers.len());
@@ -707,7 +707,7 @@ fn classify_producers(
     Ok((
         quality_block_producers,
         poor_block_producers,
-        cluster_average_rate,
+        cluster_average_skip_rate,
         too_many_poor_block_producers,
     ))
 }
@@ -1027,6 +1027,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     let epoch_info = rpc_client.get_epoch_info()?;
     let last_epoch = epoch_info.epoch - 1;
+    let mut notifications = vec![];
 
     info!("Epoch info: {:?}", epoch_info);
 
@@ -1037,10 +1038,32 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         too_many_poor_block_producers,
     ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
 
+    if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
+        notifications.push(format!(
+            "Cluster average skip rate: {} is above threshold: {}",
+            cluster_average_skip_rate, config.bad_cluster_average_skip_rate
+        ));
+    }
+
+    if too_many_poor_block_producers {
+        notifications.push(format!(
+            "Over {}% of validators classified as poor block producers in epoch {}",
+            config.max_poor_block_producer_percentage, last_epoch,
+        ));
+    }
+
     let too_many_old_validators = cluster_nodes_with_old_version.len()
         > (poor_block_producers.len() + quality_block_producers.len())
             * config.max_old_release_version_percentage
             / 100;
+
+    if too_many_old_validators {
+        notifications.push(format!(
+            "Over {}% of validators classified \
+                     as running an older release",
+            config.max_old_release_version_percentage
+        ));
+    }
 
     // Fetch vote account status for all the validator_listed validators
     let vote_account_status = rpc_client.get_vote_accounts()?;
@@ -1079,7 +1102,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let mut create_stake_transactions = vec![];
     let mut delegate_stake_transactions = vec![];
     let mut stake_activated_in_current_epoch: HashSet<Pubkey> = HashSet::new();
-    let mut infrastructure_concentration_warnings = vec![];
 
     for RpcVoteAccountInfo {
         commission,
@@ -1202,7 +1224,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             .and_then(|affect| match affect {
                 InfrastructureConcentrationAffectKind::Destake(memo) => Some(memo),
                 InfrastructureConcentrationAffectKind::Warn(memo) => {
-                    infrastructure_concentration_warnings.push(memo);
+                    notifications.push(memo);
                     None
                 }
             });
@@ -1465,49 +1487,18 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         }
     }
 
-    let success = send_and_confirm_transactions(
+    for notification in notifications {
+        warn!("{}", notification);
+        notifier.send(&notification);
+    }
+
+    if !send_and_confirm_transactions(
         &rpc_client,
         config.dry_run,
         delegate_stake_transactions,
         &config.authorized_staker,
         Some(&notifier),
-    )?;
-
-    if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
-        let message = format!(
-            "Cluster average skip rate: {} is above threshold: {}",
-            cluster_average_skip_rate, config.bad_cluster_average_skip_rate
-        );
-        warn!("{}", message);
-        notifier.send(&message);
-    }
-
-    if too_many_poor_block_producers {
-        let message = format!(
-            "Note: Something is wrong, more than {}% of validators classified \
-                       as poor block producers in epoch {}.  Bonus stake frozen",
-            config.max_poor_block_producer_percentage, last_epoch,
-        );
-        warn!("{}", message);
-        notifier.send(&message);
-    }
-
-    if too_many_old_validators {
-        let message = format!(
-            "Note: Something is wrong, more than {}% of validators classified \
-                     as running an older release",
-            config.max_old_release_version_percentage
-        );
-        warn!("{}", message);
-        notifier.send(&message);
-    }
-
-    for memo in &infrastructure_concentration_warnings {
-        warn!("{}", memo);
-        notifier.send(memo)
-    }
-
-    if !success {
+    )? {
         process::exit(1);
     }
 
