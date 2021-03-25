@@ -21,7 +21,6 @@ use {
         client_error, rpc_client::RpcClient, rpc_config::RpcSimulateTransactionConfig,
         rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS, rpc_response::RpcVoteAccountInfo,
     },
-    solana_metrics::datapoint_info,
     solana_notifier::Notifier,
     solana_sdk::{
         account_utils::StateMut,
@@ -1327,15 +1326,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         // Validator is not considered delinquent if its root slot is less than 256 slots behind the current
         // slot.  This is very generous.
         } else if *root_slot > epoch_info.absolute_slot - 256 {
-            datapoint_info!(
-                "validator-status",
-                ("cluster", config.cluster, String),
-                ("id", node_pubkey.to_string(), String),
-                ("slot", epoch_info.absolute_slot, i64),
-                ("root-slot", *root_slot, i64),
-                ("ok", true, bool)
-            );
-
             // Delegate baseline stake
             if !stake_activated_in_current_epoch.contains(&baseline_stake_address) {
                 delegate_stake_transactions.push((
@@ -1397,64 +1387,44 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 ));
                 }
             }
-        } else {
+
             // Destake the validator if it has been delinquent for longer than the grace period
-            if *root_slot
-                < epoch_info
-                    .absolute_slot
-                    .saturating_sub(config.delinquent_grace_slot_distance)
-            {
-                // Deactivate baseline stake
-                delegate_stake_transactions.push((
-                    Transaction::new_unsigned(Message::new(
-                        &[stake_instruction::deactivate_stake(
-                            &baseline_stake_address,
-                            &config.authorized_staker.pubkey(),
-                        )],
-                        Some(&config.authorized_staker.pubkey()),
-                    )),
-                    format!(
-                        "🏖️ `{}` is delinquent. Removed ◎{} baseline stake",
-                        formatted_node_pubkey,
-                        lamports_to_sol(config.baseline_stake_amount),
-                    ),
-                ));
+        } else if *root_slot
+            < epoch_info
+                .absolute_slot
+                .saturating_sub(config.delinquent_grace_slot_distance)
+        {
+            // Deactivate baseline stake
+            delegate_stake_transactions.push((
+                Transaction::new_unsigned(Message::new(
+                    &[stake_instruction::deactivate_stake(
+                        &baseline_stake_address,
+                        &config.authorized_staker.pubkey(),
+                    )],
+                    Some(&config.authorized_staker.pubkey()),
+                )),
+                format!(
+                    "🏖️ `{}` is delinquent. Removed ◎{} baseline stake",
+                    formatted_node_pubkey,
+                    lamports_to_sol(config.baseline_stake_amount),
+                ),
+            ));
 
-                // Deactivate bonus stake
-                delegate_stake_transactions.push((
-                    Transaction::new_unsigned(Message::new(
-                        &[stake_instruction::deactivate_stake(
-                            &bonus_stake_address,
-                            &config.authorized_staker.pubkey(),
-                        )],
-                        Some(&config.authorized_staker.pubkey()),
-                    )),
-                    format!(
-                        "🏖️ `{}` is delinquent. Removed ◎{} bonus stake",
-                        formatted_node_pubkey,
-                        lamports_to_sol(config.bonus_stake_amount),
-                    ),
-                ));
-
-                datapoint_info!(
-                    "validator-status",
-                    ("cluster", config.cluster, String),
-                    ("id", node_pubkey.to_string(), String),
-                    ("slot", epoch_info.absolute_slot, i64),
-                    ("root-slot", *root_slot, i64),
-                    ("ok", false, bool)
-                );
-            } else {
-                // The validator is still considered current for the purposes of metrics reporting,
-                datapoint_info!(
-                    "validator-status",
-                    ("cluster", config.cluster, String),
-                    ("id", node_pubkey.to_string(), String),
-                    ("slot", epoch_info.absolute_slot, i64),
-                    ("root-slot", *root_slot, i64),
-                    ("ok", true, bool)
-                );
-            }
+            // Deactivate bonus stake
+            delegate_stake_transactions.push((
+                Transaction::new_unsigned(Message::new(
+                    &[stake_instruction::deactivate_stake(
+                        &bonus_stake_address,
+                        &config.authorized_staker.pubkey(),
+                    )],
+                    Some(&config.authorized_staker.pubkey()),
+                )),
+                format!(
+                    "🏖️ `{}` is delinquent. Removed ◎{} bonus stake",
+                    formatted_node_pubkey,
+                    lamports_to_sol(config.bonus_stake_amount),
+                ),
+            ));
         }
     }
 
