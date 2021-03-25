@@ -1,11 +1,12 @@
-#![allow(clippy::integer_arithmetic)]
-
 mod confirmed_block_cache;
 mod data_center_info;
+mod legacy_stake_pool;
+mod stake_pool;
 mod validator_list;
 mod validators_app;
 
 use {
+    crate::stake_pool::*,
     clap::{crate_description, crate_name, value_t, value_t_or_exit, App, Arg, ArgMatches},
     confirmed_block_cache::ConfirmedBlockCache,
     log::*,
@@ -16,7 +17,6 @@ use {
             is_amount, is_keypair, is_pubkey_or_keypair, is_url, is_valid_percentage,
         },
     },
-    solana_cli_output::display::format_labeled_address,
     solana_client::{
         client_error,
         rpc_client::RpcClient,
@@ -26,16 +26,13 @@ use {
     },
     solana_notifier::Notifier,
     solana_sdk::{
-        account_utils::StateMut,
         clock::{Epoch, Slot},
         commitment_config::CommitmentConfig,
-        message::Message,
         native_token::*,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
     },
-    solana_stake_program::{stake_instruction, stake_state::StakeState},
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -48,13 +45,6 @@ use {
     },
     thiserror::Error,
 };
-
-/// The staking states that a validator can be in
-enum ValidatorStakeState {
-    None,     // Validator gets no stake
-    Baseline, // Validator has been awarded a baseline stake
-    Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
-}
 
 enum InfrastructureConcentrationAffectKind {
     Destake(String),
@@ -71,11 +61,10 @@ enum InfrastructureConcentrationAffects {
 impl InfrastructureConcentrationAffects {
     fn destake_memo(validator_id: &Pubkey, concentration: f64, config: &Config) -> String {
         format!(
-            "🏟️ `{}` infrastructure concentration {:.1}% is too high. Max concentration is {:.0}%. Removed ◎{}",
+            "🏟️ `{}` infrastructure concentration {:.1}% is too high. Max concentration is {:.0}%. Removed stake",
             validator_id,
             concentration,
             config.max_infrastructure_concentration,
-            lamports_to_sol(config.baseline_stake_amount),
         )
     }
     fn warning_memo(validator_id: &Pubkey, concentration: f64, config: &Config) -> String {
@@ -148,7 +137,7 @@ impl FromStr for InfrastructureConcentrationAffects {
     }
 }
 
-pub fn is_release_version(string: String) -> Result<(), String> {
+fn is_release_version(string: String) -> Result<(), String> {
     if string.starts_with('v') && semver::Version::parse(string.split_at(1).1).is_ok() {
         return Ok(());
     }
@@ -157,7 +146,7 @@ pub fn is_release_version(string: String) -> Result<(), String> {
         .map_err(|err| format!("{:?}", err))
 }
 
-pub fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Version> {
+fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Version> {
     matches
         .value_of(name)
         .map(ToString::to_string)
@@ -175,19 +164,9 @@ pub fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver
 struct Config {
     json_rpc_url: String,
     cluster: String,
-    source_stake_address: Pubkey,
     authorized_staker: Keypair,
 
-    /// Only validators with an identity pubkey in this validator_list will be staked
-    validator_list: HashSet<Pubkey>,
-
     dry_run: bool,
-
-    /// Amount of lamports to stake any validator in the validator_list that is not delinquent
-    baseline_stake_amount: u64,
-
-    /// Amount of additional lamports to stake quality block producers in the validator_list
-    bonus_stake_amount: u64,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
@@ -204,8 +183,6 @@ struct Config {
 
     /// Vote accounts with a larger commission than this amount will not be staked.
     max_commission: u8,
-
-    address_labels: HashMap<String, String>,
 
     /// If Some(), destake validators with a version less than this version subject to the
     /// `max_old_release_version_percentage` limit
@@ -239,19 +216,14 @@ impl Config {
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self {
-            json_rpc_url: "https://api.mainnet-beta.com".to_string(),
+            json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: "mainnet-beta".to_string(),
-            source_stake_address: Pubkey::new_unique(),
             authorized_staker: Keypair::new(),
-            validator_list: HashSet::default(),
             dry_run: true,
-            baseline_stake_amount: 25_000,
-            bonus_stake_amount: 175_000,
             quality_block_producer_percentage: 15,
             delinquent_grace_slot_distance: 21_600,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
-            address_labels: HashMap::default(),
             min_release_version: None,
             max_old_release_version_percentage: 10,
             confirmed_block_cache_path: default_confirmed_block_cache_path(),
@@ -279,7 +251,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> Config {
+fn get_config() -> (Config, Box<dyn StakePool>) {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -555,17 +527,12 @@ fn get_config() -> Config {
     let config = Config {
         json_rpc_url,
         cluster,
-        source_stake_address,
         authorized_staker,
-        validator_list,
         dry_run,
-        baseline_stake_amount,
-        bonus_stake_amount,
         delinquent_grace_slot_distance: 21600, // ~24 hours worth of slots at 2.5 slots per second
         quality_block_producer_percentage,
         max_commission,
         max_poor_block_producer_percentage,
-        address_labels: config.address_labels,
         min_release_version,
         max_old_release_version_percentage,
         confirmed_block_cache_path,
@@ -576,41 +543,18 @@ fn get_config() -> Config {
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
-    config
+
+    let stake_pool = Box::new(legacy_stake_pool::LegacyStakePool::new(
+        baseline_stake_amount,
+        bonus_stake_amount,
+        source_stake_address,
+        validator_list,
+    ));
+
+    (config, stake_pool)
 }
 
-fn get_stake_account(
-    rpc_client: &RpcClient,
-    address: &Pubkey,
-) -> Result<(u64, StakeState), String> {
-    let account = rpc_client.get_account(address).map_err(|e| {
-        format!(
-            "Failed to fetch stake account {}: {}",
-            address,
-            e.to_string()
-        )
-    })?;
-
-    if account.owner != solana_stake_program::id() {
-        return Err(format!(
-            "not a stake account (owned by {}): {}",
-            account.owner, address
-        ));
-    }
-
-    account
-        .state()
-        .map_err(|e| {
-            format!(
-                "Failed to decode stake account at {}: {}",
-                address,
-                e.to_string()
-            )
-        })
-        .map(|stake_state| (account.lamports, stake_state))
-}
-
-pub fn retry_rpc_operation<T, F>(mut retries: usize, op: F) -> client_error::Result<T>
+fn retry_rpc_operation<T, F>(mut retries: usize, op: F) -> client_error::Result<T>
 where
     F: Fn() -> client_error::Result<T>,
 {
@@ -756,46 +700,12 @@ fn classify_block_producers(
     )
 }
 
-fn validate_source_stake_account(
-    rpc_client: &RpcClient,
-    config: &Config,
-) -> Result<u64, Box<dyn error::Error>> {
-    // check source stake account
-    let (source_stake_balance, source_stake_state) =
-        get_stake_account(&rpc_client, &config.source_stake_address)?;
-
-    info!(
-        "source stake account balance: {} SOL",
-        lamports_to_sol(source_stake_balance)
-    );
-    match &source_stake_state {
-        StakeState::Initialized(_) | StakeState::Stake(_, _) => source_stake_state
-            .authorized()
-            .map_or(Ok(source_stake_balance), |authorized| {
-                if authorized.staker != config.authorized_staker.pubkey() {
-                    Err(format!(
-                        "The authorized staker for the source stake account is not {}",
-                        config.authorized_staker.pubkey()
-                    )
-                    .into())
-                } else {
-                    Ok(source_stake_balance)
-                }
-            }),
-        _ => Err(format!(
-            "Source stake account is not in the initialized state: {:?}",
-            source_stake_state
-        )
-        .into()),
-    }
-}
-
 /// Simulate a list of transactions and filter out the ones that will fail
 fn simulate_transactions(
     rpc_client: &RpcClient,
     candidate_transactions: Vec<(Transaction, String)>,
 ) -> client_error::Result<Vec<(Transaction, String)>> {
-    info!("Simulating {} transactions", candidate_transactions.len(),);
+    info!("Simulating {} transactions", candidate_transactions.len());
     let mut simulated_transactions = vec![];
     for (mut transaction, memo) in candidate_transactions {
         transaction.message.recent_blockhash =
@@ -968,7 +878,7 @@ fn send_and_confirm_transactions(
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     solana_logger::setup_with_default("solana=info");
-    let config = get_config();
+    let (config, mut stake_pool) = get_config();
 
     let notifier = if config.dry_run {
         Notifier::new("DRYRUN")
@@ -977,19 +887,19 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     };
 
     if !config.dry_run && notifier.is_empty() {
-        error!("A notifier must be active with --confirm");
-        process::exit(1);
+        return Err("A notifier must be active with --confirm".into());
     }
 
     let rpc_client = RpcClient::new(config.json_rpc_url.clone());
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
-    rpc_client.get_health().unwrap_or_else(|err| {
-        error!("RPC endpoint is unhealthy: {:?}", err);
-        process::exit(1);
-    });
+    rpc_client
+        .get_health()
+        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
-    // Fetch vote account status for all the validators
+    let epoch_info = rpc_client.get_epoch_info()?;
+    info!("Epoch info: {:?}", epoch_info);
+
     let vote_account_info = {
         let RpcVoteAccountStatus {
             current,
@@ -999,16 +909,24 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         current
             .into_iter()
             .chain(delinquent.into_iter())
-            .filter_map(|vai| {
-                let node_pubkey = Pubkey::from_str(&vai.node_pubkey).ok()?;
-                if config.validator_list.contains(&node_pubkey) {
-                    Some(vai)
-                } else {
-                    None
-                }
-            })
             .collect::<Vec<_>>()
     };
+
+    let init_transactions = stake_pool.init(
+        &rpc_client,
+        config.authorized_staker.pubkey(),
+        &vote_account_info,
+        &epoch_info,
+    )?;
+    if !send_and_confirm_transactions(
+        &rpc_client,
+        config.dry_run,
+        init_transactions,
+        &config.authorized_staker,
+        &mut vec![],
+    )? {
+        return Err("Failed to initialize stake pool. Unable to continue".into());
+    }
 
     let cluster_nodes_with_old_version: HashSet<String> = match config.min_release_version {
         Some(ref min_release_version) => rpc_client
@@ -1016,7 +934,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             .into_iter()
             .filter_map(|rpc_contact_info| {
                 if let Ok(pubkey) = Pubkey::from_str(&rpc_contact_info.pubkey) {
-                    if config.validator_list.contains(&pubkey) {
+                    if stake_pool.is_enrolled(&pubkey) {
                         if let Some(ref version) = rpc_contact_info.version {
                             if let Ok(semver) = semver::Version::parse(version) {
                                 if semver < *min_release_version {
@@ -1039,11 +957,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         );
     }
 
-    let epoch_info = rpc_client.get_epoch_info()?;
     let last_epoch = epoch_info.epoch - 1;
     let mut notifications = vec![];
-
-    info!("Epoch info: {:?}", epoch_info);
 
     let (
         quality_block_producers,
@@ -1073,8 +988,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     if too_many_old_validators {
         notifications.push(format!(
-            "Over {}% of validators classified \
-                     as running an older release",
+            "Over {}% of validators classified as running an older release",
             config.max_old_release_version_percentage
         ));
     }
@@ -1096,10 +1010,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let mut source_stake_lamports_required = 0;
-    let mut create_stake_transactions = vec![];
-    let mut delegate_stake_transactions = vec![];
-    let mut stake_activated_in_current_epoch: HashSet<Pubkey> = HashSet::new();
+    let mut transactions = vec![];
 
     for RpcVoteAccountInfo {
         commission,
@@ -1109,9 +1020,10 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         ..
     } in &vote_account_info
     {
-        let formatted_node_pubkey =
-            format_labeled_address(&node_pubkey_str, &config.address_labels);
         let node_pubkey = Pubkey::from_str(&node_pubkey_str).unwrap();
+        if !stake_pool.is_enrolled(&node_pubkey) {
+            continue;
+        }
 
         debug!(
             "\nidentity: {}\n - vote address: {}\n - root slot: {}",
@@ -1142,7 +1054,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 ValidatorStakeState::None,
                 format!(
                     "⛔ `{}` {}% commission is too high",
-                    formatted_node_pubkey, commission,
+                    node_pubkey, commission,
                 ),
             ))
         } else if !too_many_old_validators
@@ -1150,10 +1062,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         {
             Some((
                 ValidatorStakeState::None,
-                format!(
-                    "🧮 `{}` is running an old software release",
-                    formatted_node_pubkey,
-                ),
+                format!("🧮 `{}` is running an old software release", node_pubkey),
             ))
 
         // Destake the validator if it has been delinquent for longer than the grace period
@@ -1164,7 +1073,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         {
             Some((
                 ValidatorStakeState::None,
-                format!("🏖️ `{}` is delinquent", formatted_node_pubkey,),
+                format!("🏖️ `{}` is delinquent", node_pubkey),
             ))
 
         // Validator is delinquent but less than the grace period.  Take no action
@@ -1175,7 +1084,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 ValidatorStakeState::Bonus,
                 format!(
                     "🏅 `{}` was a quality block producer during epoch {}",
-                    formatted_node_pubkey, last_epoch,
+                    node_pubkey, last_epoch,
                 ),
             ))
         } else if !too_many_poor_block_producers && poor_block_producers.contains(&node_pubkey) {
@@ -1183,213 +1092,35 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 ValidatorStakeState::Baseline,
                 format!(
                     "💔 `{}` was a poor block producer during epoch {}",
-                    formatted_node_pubkey, last_epoch,
+                    node_pubkey, last_epoch,
                 ),
             ))
         } else {
             Some((
                 ValidatorStakeState::Baseline,
-                format!("🥩 `{}` is current", formatted_node_pubkey),
+                format!("🥩 `{}` is current", node_pubkey),
             ))
         };
 
-        let baseline_seed = &vote_pubkey.to_string()[..32];
-        let bonus_seed = &format!("A{{{}", vote_pubkey)[..32];
-        let vote_pubkey = Pubkey::from_str(&vote_pubkey).unwrap();
-
-        let baseline_stake_address = Pubkey::create_with_seed(
-            &config.authorized_staker.pubkey(),
-            baseline_seed,
-            &solana_stake_program::id(),
-        )
-        .unwrap();
-        let bonus_stake_address = Pubkey::create_with_seed(
-            &config.authorized_staker.pubkey(),
-            bonus_seed,
-            &solana_stake_program::id(),
-        )
-        .unwrap();
-
-        debug!(
-            "  identity: {} - baseline stake: {}\n - bonus stake: {}",
-            node_pubkey, baseline_stake_address, bonus_stake_address
-        );
-
-        // Transactions to create the baseline and bonus stake accounts
-        if let Ok((balance, stake_state)) = get_stake_account(&rpc_client, &baseline_stake_address)
-        {
-            if balance <= config.baseline_stake_amount {
-                info!(
-                    "Unexpected balance in stake account {}: {}, expected {}",
-                    baseline_stake_address, balance, config.baseline_stake_amount
-                );
-            }
-            if let Some(delegation) = stake_state.delegation() {
-                if epoch_info.epoch == delegation.activation_epoch {
-                    stake_activated_in_current_epoch.insert(baseline_stake_address);
-                }
-            }
-        } else {
-            info!(
-                "Need to create baseline stake account for validator {}",
-                formatted_node_pubkey
-            );
-            source_stake_lamports_required += config.baseline_stake_amount;
-            create_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &stake_instruction::split_with_seed(
-                        &config.source_stake_address,
-                        &config.authorized_staker.pubkey(),
-                        config.baseline_stake_amount,
-                        &baseline_stake_address,
-                        &config.authorized_staker.pubkey(),
-                        baseline_seed,
-                    ),
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!(
-                    "Creating baseline stake account for validator {} ({})",
-                    formatted_node_pubkey, baseline_stake_address
-                ),
-            ));
-        }
-
-        if let Ok((balance, stake_state)) = get_stake_account(&rpc_client, &bonus_stake_address) {
-            if balance <= config.bonus_stake_amount {
-                info!(
-                    "Unexpected balance in stake account {}: {}, expected {}",
-                    bonus_stake_address, balance, config.bonus_stake_amount
-                );
-            }
-            if let Some(delegation) = stake_state.delegation() {
-                if epoch_info.epoch == delegation.activation_epoch {
-                    stake_activated_in_current_epoch.insert(bonus_stake_address);
-                }
-            }
-        } else {
-            info!(
-                "Need to create bonus stake account for validator {}",
-                formatted_node_pubkey
-            );
-            source_stake_lamports_required += config.bonus_stake_amount;
-            create_stake_transactions.push((
-                Transaction::new_unsigned(Message::new(
-                    &stake_instruction::split_with_seed(
-                        &config.source_stake_address,
-                        &config.authorized_staker.pubkey(),
-                        config.bonus_stake_amount,
-                        &bonus_stake_address,
-                        &config.authorized_staker.pubkey(),
-                        bonus_seed,
-                    ),
-                    Some(&config.authorized_staker.pubkey()),
-                )),
-                format!(
-                    "Creating bonus stake account for validator {} ({})",
-                    formatted_node_pubkey, bonus_stake_address
-                ),
-            ));
-        }
-
         if let Some((stake_state, memo)) = operation {
-            let (baseline, bonus) = match stake_state {
-                ValidatorStakeState::None => (false, false),
-                ValidatorStakeState::Baseline => (true, false),
-                ValidatorStakeState::Bonus => (true, true),
-            };
-
-            if baseline {
-                if !stake_activated_in_current_epoch.contains(&baseline_stake_address) {
-                    delegate_stake_transactions.push((
-                        Transaction::new_unsigned(Message::new(
-                            &[stake_instruction::delegate_stake(
-                                &baseline_stake_address,
-                                &config.authorized_staker.pubkey(),
-                                &vote_pubkey,
-                            )],
-                            Some(&config.authorized_staker.pubkey()),
-                        )),
-                        memo.clone(),
-                    ));
-                }
-            } else {
-                // Deactivate baseline stake
-                delegate_stake_transactions.push((
-                    Transaction::new_unsigned(Message::new(
-                        &[stake_instruction::deactivate_stake(
-                            &baseline_stake_address,
-                            &config.authorized_staker.pubkey(),
-                        )],
-                        Some(&config.authorized_staker.pubkey()),
-                    )),
-                    memo.clone(),
-                ));
-            }
-
-            if bonus {
-                // Activate bonus stake
-                if !stake_activated_in_current_epoch.contains(&bonus_stake_address) {
-                    delegate_stake_transactions.push((
-                        Transaction::new_unsigned(Message::new(
-                            &[stake_instruction::delegate_stake(
-                                &bonus_stake_address,
-                                &config.authorized_staker.pubkey(),
-                                &vote_pubkey,
-                            )],
-                            Some(&config.authorized_staker.pubkey()),
-                        )),
-                        memo.clone(),
-                    ));
-                }
-            } else {
-                // Deactivate bonus stake
-                delegate_stake_transactions.push((
-                    Transaction::new_unsigned(Message::new(
-                        &[stake_instruction::deactivate_stake(
-                            &bonus_stake_address,
-                            &config.authorized_staker.pubkey(),
-                        )],
-                        Some(&config.authorized_staker.pubkey()),
-                    )),
-                    memo.clone(),
-                ));
-            }
-        }
-    }
-
-    if !create_stake_transactions.is_empty() {
-        info!(
-            "{} SOL is required to create {} stake accounts",
-            lamports_to_sol(source_stake_lamports_required),
-            create_stake_transactions.len()
-        );
-
-        let source_stake_balance = validate_source_stake_account(&rpc_client, &config)?;
-        if source_stake_balance < source_stake_lamports_required {
-            error!(
-                "Source stake account has insufficient balance: {} SOL, but {} SOL is required",
-                lamports_to_sol(source_stake_balance),
-                lamports_to_sol(source_stake_lamports_required)
+            transactions.extend(
+                stake_pool
+                    .apply_validator_stake_state(
+                        &rpc_client,
+                        config.authorized_staker.pubkey(),
+                        node_pubkey,
+                        stake_state,
+                    )?
+                    .into_iter()
+                    .map(|transaction| (transaction, memo.clone())),
             );
-            process::exit(1);
-        }
-
-        if !send_and_confirm_transactions(
-            &rpc_client,
-            config.dry_run,
-            create_stake_transactions,
-            &config.authorized_staker,
-            &mut vec![],
-        )? {
-            error!("Failed to create one or more stake accounts.  Unable to continue");
-            process::exit(1);
         }
     }
 
     let ok = send_and_confirm_transactions(
         &rpc_client,
         config.dry_run,
-        delegate_stake_transactions,
+        transactions,
         &config.authorized_staker,
         &mut notifications,
     )?;
@@ -1400,10 +1131,10 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     }
 
     if !ok {
-        process::exit(1);
+        Err("One or more transactions failed to execute".into())
+    } else {
+        Ok(())
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
