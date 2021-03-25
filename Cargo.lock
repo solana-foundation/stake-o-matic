@@ -2678,30 +2678,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-cli-output"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25cc5dc7aa0917e1e497cc3477f9bd9193db84aad686598cbacfabbe34731281"
-dependencies = [
- "Inflector",
- "base64 0.13.0",
- "chrono",
- "console 0.11.3",
- "humantime",
- "indicatif",
- "serde",
- "serde_derive",
- "serde_json",
- "solana-account-decoder",
- "solana-clap-utils",
- "solana-client",
- "solana-sdk",
- "solana-stake-program",
- "solana-transaction-status",
- "solana-vote-program",
-]
-
-[[package]]
 name = "solana-client"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3073,7 +3049,6 @@ dependencies = [
  "serde_yaml",
  "solana-clap-utils",
  "solana-cli-config",
- "solana-cli-output",
  "solana-client",
  "solana-logger",
  "solana-notifier",
