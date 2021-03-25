@@ -1520,7 +1520,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     );
 
     for memo in &infrastructure_concentration_warnings {
-        if config.dry_run && !notifier.is_empty() {
+        warn!("{}", memo);
+        if !config.dry_run {
             notifier.send(memo)
         }
     }
