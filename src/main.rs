@@ -1,9 +1,6 @@
 #![allow(clippy::integer_arithmetic)]
 use {
-    clap::{
-        crate_description, crate_name, crate_version, value_t, value_t_or_exit, App, Arg,
-        ArgMatches,
-    },
+    clap::{crate_description, crate_name, value_t, value_t_or_exit, App, Arg, ArgMatches},
     log::*,
     reqwest::StatusCode,
     solana_clap_utils::{
@@ -261,14 +258,26 @@ fn default_confirmed_block_cache_path() -> PathBuf {
     PathBuf::from(home_dir).join(".cache/solana/som/confirmed-block-cache/")
 }
 
+fn app_version() -> String {
+    // Determine version based on the environment variables set by Github Actions
+    let tag = option_env!("GITHUB_REF")
+        .and_then(|github_ref| github_ref.strip_prefix("refs/tags/").map(|s| s.to_string()));
+
+    tag.unwrap_or_else(|| match option_env!("GITHUB_SHA") {
+        None => "devbuild".to_string(),
+        Some(commit) => commit[..8].to_string(),
+    })
+}
+
 fn get_config() -> Config {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
         .to_string();
+    let app_version = &*app_version();
     let matches = App::new(crate_name!())
         .about(crate_description!())
-        .version(crate_version!())
+        .version(app_version)
         .arg({
             let arg = Arg::with_name("config_file")
                 .short("C")
