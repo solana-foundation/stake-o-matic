@@ -640,7 +640,6 @@ type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ClassifyResult = (HashSet<Pubkey>, HashSet<Pubkey>, usize, bool);
 
 fn classify_producers(
-    first_slot: Slot,
     first_slot_in_epoch: Slot,
     confirmed_blocks: HashSet<u64>,
     leader_schedule: HashMap<String, Vec<usize>>,
@@ -657,13 +656,11 @@ fn classify_producers(
         let mut validator_slots = 0;
         for relative_slot in relative_slots {
             let slot = first_slot_in_epoch + relative_slot as Slot;
-            if slot >= first_slot {
-                total_slots += 1;
-                validator_slots += 1;
-                if confirmed_blocks.contains(&slot) {
-                    total_blocks += 1;
-                    validator_blocks += 1;
-                }
+            total_slots += 1;
+            validator_slots += 1;
+            if confirmed_blocks.contains(&slot) {
+                total_blocks += 1;
+                validator_blocks += 1;
             }
         }
         if validator_slots > 0 {
@@ -729,37 +726,26 @@ fn classify_block_producers(
     let last_slot_in_epoch = epoch_schedule.get_last_slot_in_epoch(epoch);
 
     let first_available_block = rpc_client.get_first_available_block()?;
-    let minimum_ledger_slot = rpc_client.minimum_ledger_slot()?;
-    debug!(
-        "first_available_block: {}, minimum_ledger_slot: {}",
-        first_available_block, minimum_ledger_slot
-    );
-
-    if first_available_block >= last_slot_in_epoch {
+    if first_available_block >= first_slot_in_epoch {
         return Err(format!(
-            "First available block is newer than the last epoch: {} > {}",
-            first_available_block, last_slot_in_epoch
+            "First available block is newer than the start of epoch {}: {} > {}",
+            epoch, first_available_block, first_slot_in_epoch,
         )
         .into());
     }
 
-    let first_slot = if first_available_block > first_slot_in_epoch {
-        first_available_block
-    } else {
-        first_slot_in_epoch
-    };
-
-    let leader_schedule = rpc_client.get_leader_schedule(Some(first_slot))?.unwrap();
+    let leader_schedule = rpc_client
+        .get_leader_schedule(Some(first_slot_in_epoch))?
+        .unwrap();
 
     let cache_path = config.confirmed_block_cache_path.join(&config.cluster);
     let cbc = ConfirmedBlockCache::open(cache_path, &config.json_rpc_url).unwrap();
     let confirmed_blocks = cbc
-        .query(first_slot, last_slot_in_epoch)?
+        .query(first_slot_in_epoch, last_slot_in_epoch)?
         .into_iter()
         .collect::<HashSet<_>>();
 
     classify_producers(
-        first_slot,
         first_slot_in_epoch,
         confirmed_blocks,
         leader_schedule,
@@ -1438,7 +1424,7 @@ mod test {
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
         let (quality, poor, _cluster_average, too_many_poor_block_producers) =
-            classify_producers(0, 0, confirmed_blocks, leader_schedule, &config).unwrap();
+            classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
         assert!(quality.contains(&l1));
         assert!(quality.contains(&l5));
         assert!(quality.contains(&l2));
@@ -1469,7 +1455,7 @@ mod test {
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
         let (quality, poor, _cluster_average, too_many_poor_block_producers) =
-            classify_producers(0, 0, confirmed_blocks, leader_schedule, &config).unwrap();
+            classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
         assert!(quality.is_empty());
         assert_eq!(poor.len(), 5);
         assert!(too_many_poor_block_producers);
