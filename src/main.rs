@@ -978,13 +978,18 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     solana_logger::setup_with_default("solana=info");
     let config = get_config();
 
-    let notifier = Notifier::default();
-    let rpc_client = RpcClient::new(config.json_rpc_url.clone());
+    let notifier = if config.dry_run {
+        Notifier::new("DRYRUN")
+    } else {
+        Notifier::default()
+    };
 
     if !config.dry_run && notifier.is_empty() {
         error!("A notifier must be active with --confirm");
         process::exit(1);
     }
+
+    let rpc_client = RpcClient::new(config.json_rpc_url.clone());
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
     rpc_client.get_health().unwrap_or_else(|err| {
@@ -1481,9 +1486,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             cluster_average_skip_rate, config.bad_cluster_average_skip_rate
         );
         warn!("{}", message);
-        if !config.dry_run {
-            notifier.send(&message);
-        }
+        notifier.send(&message);
     }
 
     if too_many_poor_block_producers {
@@ -1493,9 +1496,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             config.max_poor_block_producer_percentage, last_epoch,
         );
         warn!("{}", message);
-        if !config.dry_run {
-            notifier.send(&message);
-        }
+        notifier.send(&message);
     }
 
     if too_many_old_validators {
@@ -1505,25 +1506,14 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             config.max_old_release_version_percentage
         );
         warn!("{}", message);
-        if !config.dry_run {
-            notifier.send(&message);
-        }
+        notifier.send(&message);
     }
 
-    let confirmations_succeeded = process_confirmations(
-        confirmations,
-        if config.dry_run {
-            None
-        } else {
-            Some(&notifier)
-        },
-    );
+    let confirmations_succeeded = process_confirmations(confirmations, Some(&notifier));
 
     for memo in &infrastructure_concentration_warnings {
         warn!("{}", memo);
-        if !config.dry_run {
-            notifier.send(memo)
-        }
+        notifier.send(memo)
     }
 
     if !confirmations_succeeded {
