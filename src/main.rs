@@ -1386,7 +1386,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         }
     }
 
-    let error = send_and_confirm_transactions(
+    let ok = send_and_confirm_transactions(
         &rpc_client,
         config.dry_run,
         delegate_stake_transactions,
@@ -1399,7 +1399,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         notifier.send(&notification);
     }
 
-    if error {
+    if !ok {
         process::exit(1);
     }
 
