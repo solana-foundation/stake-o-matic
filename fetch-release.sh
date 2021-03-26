@@ -15,7 +15,9 @@ Darwin)
   ;;
 esac
 
-if [[ -n $1 ]]; then
+if [[ $1 = master ]]; then
+  RELEASE_BINARY=https://github.com/solana-labs/stake-o-matic/raw/master-bin/sys-$TARGET
+elif [[ -n $1 ]]; then
   RELEASE_BINARY=https://github.com/solana-labs/stake-o-matic/releases/download/$1/solana-stake-o-matic-$TARGET
 else
   RELEASE_BINARY=https://github.com/solana-labs/stake-o-matic/releases/latest/download/solana-stake-o-matic-$TARGET
