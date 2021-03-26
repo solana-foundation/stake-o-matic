@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-set -e
+BIN=solana-stake-o-matic
+REPO=https://github.com/solana-labs/stake-o-matic
 
 case "$(uname)" in
 Linux)
@@ -15,18 +16,17 @@ Darwin)
   ;;
 esac
 
-BIN=solana-stake-o-matic
 BIN_TARGET=$BIN-$TARGET
 
 if [[ $1 = master ]]; then
-  URL=https://github.com/solana-labs/stake-o-matic/raw/master-bin/$BIN_TARGET
+  URL=$REPO/raw/master-bin/$BIN_TARGET
 elif [[ -n $1 ]]; then
-  URL=https://github.com/solana-labs/stake-o-matic/releases/download/$1/$BIN_TARGET
+  URL=$REPO/releases/download/$1/$BIN_TARGET
 else
-  URL=https://github.com/solana-labs/stake-o-matic/releases/latest/download/$BIN_TARGET
+  URL=$REPO/releases/latest/download/$BIN_TARGET
 fi
 
-set -x
+set -ex
 curl -fL $URL -o $BIN
 chmod +x $BIN
 ls -l $BIN
