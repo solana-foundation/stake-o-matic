@@ -3,6 +3,11 @@
 BIN=solana-stake-o-matic
 REPO=https://github.com/solana-labs/stake-o-matic
 
+# Uncomment if the latest `master` build should be fetched by default instead of
+# the latest release build.
+#
+#DEFAULT_TO_MASTER=1
+
 case "$(uname)" in
 Linux)
   TARGET=x86_64-unknown-linux-gnu
@@ -18,7 +23,7 @@ esac
 
 BIN_TARGET=$BIN-$TARGET
 
-if [[ $1 = master ]]; then
+if [[ ( -z $1 && -n $DEFAULT_TO_MASTER ) || $1 = master ]]; then
   URL=$REPO/raw/master-bin/$BIN_TARGET
 elif [[ -n $1 ]]; then
   URL=$REPO/releases/download/$1/$BIN_TARGET
