@@ -15,16 +15,19 @@ Darwin)
   ;;
 esac
 
+BIN=solana-stake-o-matic
+BIN_TARGET=$BIN-$TARGET
+
 if [[ $1 = master ]]; then
-  RELEASE_BINARY=https://github.com/solana-labs/stake-o-matic/raw/master-bin/sys-$TARGET
+  URL=https://github.com/solana-labs/stake-o-matic/raw/master-bin/$BIN_TARGET
 elif [[ -n $1 ]]; then
-  RELEASE_BINARY=https://github.com/solana-labs/stake-o-matic/releases/download/$1/solana-stake-o-matic-$TARGET
+  URL=https://github.com/solana-labs/stake-o-matic/releases/download/$1/$BIN_TARGET
 else
-  RELEASE_BINARY=https://github.com/solana-labs/stake-o-matic/releases/latest/download/solana-stake-o-matic-$TARGET
+  URL=https://github.com/solana-labs/stake-o-matic/releases/latest/download/$BIN_TARGET
 fi
 
 set -x
-curl -sSfL $RELEASE_BINARY -o solana-stake-o-matic
-chmod +x solana-stake-o-matic
-ls -l solana-stake-o-matic
-./solana-stake-o-matic --version
+curl -fL $URL -o $BIN
+chmod +x $BIN
+ls -l $BIN
+./$BIN --version
