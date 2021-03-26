@@ -104,7 +104,7 @@ impl StakePool for LegacyStakePool {
             if let Ok((balance, stake_state)) =
                 get_stake_account(rpc_client, &baseline_stake_address)
             {
-                if balance <= self.baseline_stake_amount {
+                if balance < self.baseline_stake_amount {
                     info!(
                         "Unexpected balance in stake account {}: {}, expected {}",
                         baseline_stake_address, balance, self.baseline_stake_amount
@@ -143,7 +143,7 @@ impl StakePool for LegacyStakePool {
 
             if let Ok((balance, stake_state)) = get_stake_account(rpc_client, &bonus_stake_address)
             {
-                if balance <= self.bonus_stake_amount {
+                if balance < self.bonus_stake_amount {
                     info!(
                         "Unexpected balance in stake account {}: {}, expected {}",
                         bonus_stake_address, balance, self.bonus_stake_amount
