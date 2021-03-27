@@ -27,5 +27,8 @@ solana-stake-program = "1.6.2"
 solana-transaction-status = "1.6.2"
 thiserror = "1.0.21"
 
+spl-stake-pool = { git = "https://github.com/solana-labs/solana-program-library", rev = "938dd01e9b6ca60a184abad359a9385abf0ffbfa" }
+#spl-stake-pool = { path = "../spl/stake-pool/program" }
+
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
