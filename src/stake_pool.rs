@@ -5,6 +5,7 @@ use {
 };
 
 /// The staking states that a validator can be in
+#[derive(Debug)]
 pub enum ValidatorStakeState {
     None,     // Validator should receive no stake
     Baseline, // Validator has been awarded a baseline stake
