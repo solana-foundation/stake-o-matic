@@ -1,12 +1,15 @@
 use {
     crate::stake_pool::*,
     log::*,
-    solana_client::{rpc_client::RpcClient, rpc_response::RpcVoteAccountInfo},
-    solana_sdk::{
-        account_utils::StateMut, epoch_info::EpochInfo, message::Message, native_token::*,
-        pubkey::Pubkey, transaction::Transaction,
+    solana_client::{
+        rpc_client::RpcClient,
+        rpc_response::{RpcVoteAccountInfo, StakeActivationState},
     },
-    solana_stake_program::{stake_instruction, stake_state::StakeState},
+    solana_sdk::{
+        epoch_info::EpochInfo, message::Message, native_token::*, pubkey::Pubkey,
+        transaction::Transaction,
+    },
+    solana_stake_program::stake_instruction,
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -18,6 +21,8 @@ struct ValidatorInfo {
     vote_pubkey: Pubkey,
     baseline_stake_address: Pubkey,
     bonus_stake_address: Pubkey,
+    baseline_stake_activation_state: StakeActivationState,
+    bonus_stake_activation_state: StakeActivationState,
 }
 
 pub struct LegacyStakePool {
@@ -26,7 +31,6 @@ pub struct LegacyStakePool {
     source_stake_address: Pubkey,
     validator_list: HashSet<Pubkey>,
     validator_info: HashMap<Pubkey, ValidatorInfo>,
-    stake_activated_in_current_epoch: HashSet<Pubkey>,
 }
 
 impl LegacyStakePool {
@@ -42,7 +46,6 @@ impl LegacyStakePool {
             source_stake_address,
             validator_list,
             validator_info: HashMap::new(),
-            stake_activated_in_current_epoch: HashSet::new(),
         }
     }
 }
@@ -57,6 +60,25 @@ impl StakePool for LegacyStakePool {
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
         let mut transactions = vec![];
         let mut source_stake_lamports_required = 0;
+
+        let source_stake_balance = {
+            let source_stake_activation = rpc_client
+                .get_stake_activation(self.source_stake_address, Some(epoch_info.epoch))
+                .map_err(|err| {
+                    format!(
+                        "Unable to get activation information for source stake account: {}: {}",
+                        self.source_stake_address, err
+                    )
+                })?;
+            if source_stake_activation.state != StakeActivationState::Inactive {
+                return Err("Source stake account is not inactive".into());
+            }
+            source_stake_activation.inactive
+        };
+        info!(
+            "source stake account balance: {}",
+            Sol(source_stake_balance)
+        );
 
         for RpcVoteAccountInfo {
             node_pubkey: node_pubkey_str,
@@ -86,41 +108,25 @@ impl StakePool for LegacyStakePool {
             )
             .unwrap();
 
-            self.validator_info.insert(
-                node_pubkey,
-                ValidatorInfo {
-                    vote_pubkey,
-                    baseline_stake_address,
-                    bonus_stake_address,
-                },
-            );
-
             debug!(
                 "identity: {} - baseline stake: {}\n - bonus stake: {}",
                 node_pubkey, baseline_stake_address, bonus_stake_address
             );
 
-            // Transactions to create the baseline and bonus stake accounts
-            if let Ok((balance, stake_state)) =
-                get_stake_account(rpc_client, &baseline_stake_address)
+            let baseline_stake_activation_state = if rpc_client
+                .get_account_with_commitment(&baseline_stake_address, rpc_client.commitment())?
+                .value
+                .is_some()
             {
-                if balance < self.baseline_stake_amount {
-                    info!(
-                        "Unexpected balance in stake account {}: {}, expected {}",
-                        baseline_stake_address, balance, self.baseline_stake_amount
-                    );
-                }
-                if let Some(delegation) = stake_state.delegation() {
-                    if epoch_info.epoch == delegation.activation_epoch {
-                        self.stake_activated_in_current_epoch
-                            .insert(baseline_stake_address);
-                    }
-                }
+                rpc_client
+                    .get_stake_activation(baseline_stake_address, Some(epoch_info.epoch))
+                    .map_err(|err| {
+                        format!(
+                            "Unable to get activation information for baseline stake account: {}: {}",
+                            self.source_stake_address, err
+                        )
+                    })?.state
             } else {
-                info!(
-                    "Need to create baseline stake account for validator {}",
-                    node_pubkey
-                );
                 source_stake_lamports_required += self.baseline_stake_amount;
                 transactions.push((
                     Transaction::new_unsigned(Message::new(
@@ -139,27 +145,24 @@ impl StakePool for LegacyStakePool {
                         node_pubkey, baseline_stake_address
                     ),
                 ));
-            }
+                StakeActivationState::Inactive
+            };
 
-            if let Ok((balance, stake_state)) = get_stake_account(rpc_client, &bonus_stake_address)
+            let bonus_stake_activation_state = if rpc_client
+                .get_account_with_commitment(&bonus_stake_address, rpc_client.commitment())?
+                .value
+                .is_some()
             {
-                if balance < self.bonus_stake_amount {
-                    info!(
-                        "Unexpected balance in stake account {}: {}, expected {}",
-                        bonus_stake_address, balance, self.bonus_stake_amount
-                    );
-                }
-                if let Some(delegation) = stake_state.delegation() {
-                    if epoch_info.epoch == delegation.activation_epoch {
-                        self.stake_activated_in_current_epoch
-                            .insert(bonus_stake_address);
-                    }
-                }
+                rpc_client
+                    .get_stake_activation(bonus_stake_address, Some(epoch_info.epoch))
+                    .map_err(|err| {
+                        format!(
+                            "Unable to get activation information for bonus stake account: {}: {}",
+                            self.source_stake_address, err
+                        )
+                    })?
+                    .state
             } else {
-                info!(
-                    "Need to create bonus stake account for validator {}",
-                    node_pubkey
-                );
                 source_stake_lamports_required += self.bonus_stake_amount;
                 transactions.push((
                     Transaction::new_unsigned(Message::new(
@@ -178,47 +181,35 @@ impl StakePool for LegacyStakePool {
                         node_pubkey, bonus_stake_address
                     ),
                 ));
-            }
+                StakeActivationState::Inactive
+            };
+
+            self.validator_info.insert(
+                node_pubkey,
+                ValidatorInfo {
+                    vote_pubkey,
+                    baseline_stake_address,
+                    bonus_stake_address,
+                    baseline_stake_activation_state,
+                    bonus_stake_activation_state,
+                },
+            );
         }
 
-        info!(
-            "{} SOL is required to create {} stake accounts",
-            lamports_to_sol(source_stake_lamports_required),
-            transactions.len()
-        );
+        if !transactions.is_empty() {
+            info!(
+                "{} is required to create {} stake accounts",
+                Sol(source_stake_lamports_required),
+                transactions.len()
+            );
 
-        // check source stake account
-        let (source_stake_balance, source_stake_state) =
-            get_stake_account(rpc_client, &self.source_stake_address)?;
-
-        info!(
-            "source stake account balance: {} SOL",
-            lamports_to_sol(source_stake_balance)
-        );
-
-        match &source_stake_state {
-            StakeState::Initialized(_) | StakeState::Stake(_, _) => {
-                if source_stake_state.authorized().unwrap().staker != authorized_staker {
-                    return Err(format!(
-                        "The authorized staker for the source stake account is not {}",
-                        authorized_staker,
-                    )
-                    .into());
-                } else if source_stake_balance < source_stake_lamports_required {
-                    return Err(format!(
-                                "Source stake account has insufficient balance: {} SOL, but {} SOL is required",
-                                lamports_to_sol(source_stake_balance),
-                                lamports_to_sol(source_stake_lamports_required)
-                            )
-                            .into());
-                }
-            }
-            _ => {
+            if source_stake_balance < source_stake_lamports_required {
                 return Err(format!(
-                    "Source stake account is not in the initialized state: {:?}",
-                    source_stake_state
+                    "Source stake account has insufficient balance: {} , but {} is required",
+                    Sol(source_stake_balance),
+                    Sol(source_stake_lamports_required)
                 )
-                .into())
+                .into());
             }
         }
 
@@ -240,6 +231,8 @@ impl StakePool for LegacyStakePool {
             vote_pubkey,
             baseline_stake_address,
             bonus_stake_address,
+            baseline_stake_activation_state,
+            bonus_stake_activation_state,
         } = self
             .validator_info
             .get(&node_pubkey)
@@ -254,10 +247,7 @@ impl StakePool for LegacyStakePool {
         let mut transactions = vec![];
 
         if baseline {
-            if !self
-                .stake_activated_in_current_epoch
-                .contains(&baseline_stake_address)
-            {
+            if *baseline_stake_activation_state == StakeActivationState::Inactive {
                 transactions.push(Transaction::new_unsigned(Message::new(
                     &[stake_instruction::delegate_stake(
                         &baseline_stake_address,
@@ -267,8 +257,10 @@ impl StakePool for LegacyStakePool {
                     Some(&authorized_staker),
                 )));
             }
-        } else {
-            // Deactivate baseline stake
+        } else if matches!(
+            baseline_stake_activation_state,
+            StakeActivationState::Activating | StakeActivationState::Active
+        ) {
             transactions.push(Transaction::new_unsigned(Message::new(
                 &[stake_instruction::deactivate_stake(
                     &baseline_stake_address,
@@ -279,11 +271,7 @@ impl StakePool for LegacyStakePool {
         }
 
         if bonus {
-            // Activate bonus stake
-            if !self
-                .stake_activated_in_current_epoch
-                .contains(&bonus_stake_address)
-            {
+            if *bonus_stake_activation_state == StakeActivationState::Inactive {
                 transactions.push(Transaction::new_unsigned(Message::new(
                     &[stake_instruction::delegate_stake(
                         &bonus_stake_address,
@@ -293,8 +281,10 @@ impl StakePool for LegacyStakePool {
                     Some(&authorized_staker),
                 )));
             }
-        } else {
-            // Deactivate bonus stake
+        } else if matches!(
+            bonus_stake_activation_state,
+            StakeActivationState::Activating | StakeActivationState::Active
+        ) {
             transactions.push(Transaction::new_unsigned(Message::new(
                 &[stake_instruction::deactivate_stake(
                     &bonus_stake_address,
@@ -305,35 +295,4 @@ impl StakePool for LegacyStakePool {
         }
         Ok(transactions)
     }
-}
-
-fn get_stake_account(
-    rpc_client: &RpcClient,
-    address: &Pubkey,
-) -> Result<(u64, StakeState), String> {
-    let account = rpc_client.get_account(address).map_err(|e| {
-        format!(
-            "Failed to fetch stake account {}: {}",
-            address,
-            e.to_string()
-        )
-    })?;
-
-    if account.owner != solana_stake_program::id() {
-        return Err(format!(
-            "not a stake account (owned by {}): {}",
-            account.owner, address
-        ));
-    }
-
-    account
-        .state()
-        .map_err(|e| {
-            format!(
-                "Failed to decode stake account at {}: {}",
-                address,
-                e.to_string()
-            )
-        })
-        .map(|stake_state| (account.lamports, stake_state))
 }
