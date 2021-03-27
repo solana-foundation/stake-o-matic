@@ -1025,11 +1025,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             continue;
         }
 
-        debug!(
-            "\nidentity: {}\n - vote address: {}\n - root slot: {}",
-            node_pubkey, vote_pubkey, root_slot
-        );
-
         let infrastructure_concentration_destake_memo = infrastructure_concentration
             .get(&node_pubkey)
             .map(|concentration| {
@@ -1101,6 +1096,11 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 format!("🥩 `{}` is current", node_pubkey),
             ))
         };
+
+        debug!(
+            "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - operation: {:?}",
+            node_pubkey, vote_pubkey, root_slot, operation
+        );
 
         if let Some((stake_state, memo)) = operation {
             transactions.extend(
