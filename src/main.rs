@@ -625,7 +625,7 @@ fn classify_producers(
         } else {
             0
         };
-        if skip_rate.saturating_sub(config.quality_block_producer_percentage) >= skip_rate_floor {
+        if skip_rate.saturating_sub(config.quality_block_producer_percentage) > skip_rate_floor {
             poor_block_producers.insert(validator_identity);
         } else {
             quality_block_producers.insert(validator_identity);
@@ -1204,5 +1204,33 @@ mod test {
         assert!(quality.is_empty());
         assert_eq!(poor.len(), 5);
         assert!(too_many_poor_block_producers);
+    }
+
+    #[test]
+    fn test_quality_producer_when_all_good() {
+        solana_logger::setup();
+        let config = Config {
+            quality_block_producer_percentage: 10,
+            use_cluster_average_skip_rate: false,
+            ..Config::default_for_test()
+        };
+
+        let confirmed_blocks: HashSet<Slot> = (0..50).collect();
+        let mut leader_schedule = HashMap::new();
+        let l1 = Pubkey::new_unique();
+        let l2 = Pubkey::new_unique();
+        let l3 = Pubkey::new_unique();
+        let l4 = Pubkey::new_unique();
+        let l5 = Pubkey::new_unique();
+        leader_schedule.insert(l1.to_string(), (0..10).collect());
+        leader_schedule.insert(l2.to_string(), (10..20).collect());
+        leader_schedule.insert(l3.to_string(), (20..30).collect());
+        leader_schedule.insert(l4.to_string(), (30..40).collect());
+        leader_schedule.insert(l5.to_string(), (40..50).collect());
+        let (quality, poor, _cluster_average, too_many_poor_block_producers) =
+            classify_producers(0, dbg!(confirmed_blocks), leader_schedule, &config).unwrap();
+        assert!(poor.is_empty());
+        assert_eq!(quality.len(), 5);
+        assert!(!too_many_poor_block_producers);
     }
 }
