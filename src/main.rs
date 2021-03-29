@@ -1072,7 +1072,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             ))
 
         // Validator is delinquent but less than the grace period.  Take no action
-        } else if *root_slot < epoch_info.absolute_slot - 256 {
+        } else if *root_slot < epoch_info.absolute_slot.saturating_sub(256) {
             None
         } else if quality_block_producers.contains(&node_pubkey) {
             Some((
@@ -1082,14 +1082,18 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                     node_pubkey, last_epoch,
                 ),
             ))
-        } else if !too_many_poor_block_producers && poor_block_producers.contains(&node_pubkey) {
-            Some((
-                ValidatorStakeState::Baseline,
-                format!(
-                    "💔 `{}` was a poor block producer during epoch {}",
-                    node_pubkey, last_epoch,
-                ),
-            ))
+        } else if poor_block_producers.contains(&node_pubkey) {
+            if too_many_poor_block_producers {
+                None
+            } else {
+                Some((
+                    ValidatorStakeState::Baseline,
+                    format!(
+                        "💔 `{}` was a poor block producer during epoch {}",
+                        node_pubkey, last_epoch,
+                    ),
+                ))
+            }
         } else {
             Some((
                 ValidatorStakeState::Baseline,
