@@ -7,7 +7,10 @@ mod validators_app;
 
 use {
     crate::stake_pool::*,
-    clap::{crate_description, crate_name, value_t, value_t_or_exit, App, Arg, ArgMatches},
+    clap::{
+        crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, ArgMatches,
+        SubCommand,
+    },
     confirmed_block_cache::ConfirmedBlockCache,
     log::*,
     reqwest::StatusCode,
@@ -260,6 +263,9 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(app_version)
+        .setting(AppSettings::SubcommandRequiredElseHelp)
+        .setting(AppSettings::VersionlessSubcommands)
+        .setting(AppSettings::InferSubcommands)
         .arg({
             let arg = Arg::with_name("config_file")
                 .short("C")
@@ -291,37 +297,10 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
                 .help("Name of the cluster to operate on")
         )
         .arg(
-            Arg::with_name("validator_list_file")
-                .long("validator-list")
-                .value_name("FILE")
-                .required(true)
-                .takes_value(true)
-                .conflicts_with("cluster")
-                .help("File containing an YAML array of validator pubkeys eligible for staking")
-        )
-        .arg(
             Arg::with_name("confirm")
                 .long("confirm")
                 .takes_value(false)
                 .help("Confirm that the stake adjustments should actually be made")
-        )
-        .arg(
-            Arg::with_name("source_stake_address")
-                .index(1)
-                .value_name("ADDRESS")
-                .takes_value(true)
-                .required(true)
-                .validator(is_pubkey_or_keypair)
-                .help("The source stake account for splitting individual validator stake accounts from")
-        )
-        .arg(
-            Arg::with_name("authorized_staker")
-                .index(2)
-                .value_name("KEYPAIR")
-                .validator(is_keypair)
-                .required(true)
-                .takes_value(true)
-                .help("Keypair of the authorized staker for the source stake account.")
         )
         .arg(
             Arg::with_name("quality_block_producer_percentage")
@@ -352,22 +331,6 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
                 .help("Do not add or remove bonus stake from any
                        non-delinquent validators if at least this percentage of \
                        all validators are poor block producers")
-        )
-        .arg(
-            Arg::with_name("baseline_stake_amount")
-                .long("baseline-stake-amount")
-                .value_name("SOL")
-                .takes_value(true)
-                .default_value("5000")
-                .validator(is_amount)
-        )
-        .arg(
-            Arg::with_name("bonus_stake_amount")
-                .long("bonus-stake-amount")
-                .value_name("SOL")
-                .takes_value(true)
-                .default_value("50000")
-                .validator(is_amount)
         )
         .arg(
             Arg::with_name("max_commission")
@@ -442,6 +405,53 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
                 .long("use-cluster-average-skip-rate")
                 .help("Use a cluster-average skip rate floor for block-production quality calculations")
         )
+
+
+        .arg(
+            Arg::with_name("authorized_staker")
+                .index(1)
+                .value_name("KEYPAIR")
+                .validator(is_keypair)
+                .required(true)
+                .takes_value(true)
+                .help("Keypair of the authorized staker")
+        )
+        .subcommand(
+            SubCommand::with_name("legacy").about("Use the legacy staking solution")
+            .arg(
+                Arg::with_name("source_stake_address")
+                    .index(1)
+                    .value_name("SOURCE_STAKE_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .validator(is_pubkey_or_keypair)
+                    .help("The source stake account for splitting individual validator stake accounts from")
+            )
+            .arg(
+                Arg::with_name("baseline_stake_amount")
+                    .long("baseline-stake-amount")
+                    .value_name("SOL")
+                    .takes_value(true)
+                    .default_value("5000")
+                    .validator(is_amount)
+            )
+            .arg(
+                Arg::with_name("bonus_stake_amount")
+                    .long("bonus-stake-amount")
+                    .value_name("SOL")
+                    .takes_value(true)
+                    .default_value("50000")
+                    .validator(is_amount)
+            )
+            .arg(
+                Arg::with_name("--validator-list")
+                    .long("validator-list")
+                    .value_name("FILE")
+                    .takes_value(true)
+                    .conflicts_with("cluster")
+                    .help("File containing an YAML array of validator pubkeys eligible for staking")
+            )
+        )
         .get_matches();
 
     let config = if let Some(config_file) = matches.value_of("config_file") {
@@ -450,8 +460,6 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
         solana_cli_config::Config::default()
     };
 
-    let source_stake_address = pubkey_of(&matches, "source_stake_address").unwrap();
-    let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
     let dry_run = !matches.is_present("confirm");
     let cluster = value_t!(matches, "cluster", String).unwrap_or_else(|_| "unknown".into());
     let quality_block_producer_percentage =
@@ -461,52 +469,18 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
         value_t_or_exit!(matches, "max_poor_block_producer_percentage", usize);
     let max_old_release_version_percentage =
         value_t_or_exit!(matches, "max_old_release_version_percentage", usize);
-    let baseline_stake_amount =
-        sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-    let bonus_stake_amount = sol_to_lamports(value_t_or_exit!(matches, "bonus_stake_amount", f64));
     let min_release_version = release_version_of(&matches, "min_release_version");
 
-    let (json_rpc_url, validator_list) = match cluster.as_str() {
-        "mainnet-beta" => (
-            value_t!(matches, "json_rpc_url", String)
-                .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
-            validator_list::mainnet_beta_validators(),
-        ),
-        "testnet" => (
-            value_t!(matches, "json_rpc_url", String)
-                .unwrap_or_else(|_| "http://testnet.solana.com".into()),
-            validator_list::testnet_validators(),
-        ),
-        "unknown" => {
-            let validator_list_file =
-                File::open(value_t_or_exit!(matches, "validator_list_file", PathBuf))
-                    .unwrap_or_else(|err| {
-                        error!("Unable to open validator_list: {}", err);
-                        process::exit(1);
-                    });
-
-            let validator_list = serde_yaml::from_reader::<_, Vec<String>>(validator_list_file)
-                .unwrap_or_else(|err| {
-                    error!("Unable to read validator_list: {}", err);
-                    process::exit(1);
-                })
-                .into_iter()
-                .map(|p| {
-                    Pubkey::from_str(&p).unwrap_or_else(|err| {
-                        error!("Invalid validator_list pubkey '{}': {}", p, err);
-                        process::exit(1);
-                    })
-                })
-                .collect();
-            (
-                value_t!(matches, "json_rpc_url", String)
-                    .unwrap_or_else(|_| config.json_rpc_url.clone()),
-                validator_list,
-            )
-        }
+    let json_rpc_url = match cluster.as_str() {
+        "mainnet-beta" => value_t!(matches, "json_rpc_url", String)
+            .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
+        "testnet" => value_t!(matches, "json_rpc_url", String)
+            .unwrap_or_else(|_| "http://testnet.solana.com".into()),
+        "unknown" => value_t!(matches, "json_rpc_url", String)
+            .unwrap_or_else(|_| config.json_rpc_url.clone()),
         _ => unreachable!(),
     };
-    let validator_list = validator_list.into_iter().collect::<HashSet<_>>();
+
     let confirmed_block_cache_path = matches
         .value_of("confirmed_block_cache_path")
         .map(PathBuf::from)
@@ -523,6 +497,8 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
     )
     .unwrap();
     let use_cluster_average_skip_rate = matches.is_present("use_cluster_average_skip_rate");
+
+    let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
 
     let config = Config {
         json_rpc_url,
@@ -544,12 +520,51 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
 
     info!("RPC URL: {}", config.json_rpc_url);
 
-    let stake_pool = Box::new(legacy_stake_pool::LegacyStakePool::new(
-        baseline_stake_amount,
-        bonus_stake_amount,
-        source_stake_address,
-        validator_list,
-    ));
+    let stake_pool = match matches.subcommand() {
+        ("legacy", Some(matches)) => {
+            let source_stake_address = pubkey_of(&matches, "source_stake_address").unwrap();
+            let baseline_stake_amount =
+                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+            let bonus_stake_amount =
+                sol_to_lamports(value_t_or_exit!(matches, "bonus_stake_amount", f64));
+            let validator_list = match config.cluster.as_str() {
+                "mainnet-beta" => validator_list::mainnet_beta_validators(),
+                "testnet" => validator_list::testnet_validators(),
+                "unknown" => {
+                    let validator_list_file =
+                        File::open(value_t_or_exit!(matches, "--validator-list", PathBuf))
+                            .unwrap_or_else(|err| {
+                                error!("Unable to open validator_list: {}", err);
+                                process::exit(1);
+                            });
+
+                    serde_yaml::from_reader::<_, Vec<String>>(validator_list_file)
+                        .unwrap_or_else(|err| {
+                            error!("Unable to read validator_list: {}", err);
+                            process::exit(1);
+                        })
+                        .into_iter()
+                        .map(|p| {
+                            Pubkey::from_str(&p).unwrap_or_else(|err| {
+                                error!("Invalid validator_list pubkey '{}': {}", p, err);
+                                process::exit(1);
+                            })
+                        })
+                        .collect()
+                }
+                _ => unreachable!(),
+            }
+            .into_iter()
+            .collect::<HashSet<_>>();
+            Box::new(legacy_stake_pool::LegacyStakePool::new(
+                baseline_stake_amount,
+                bonus_stake_amount,
+                source_stake_address,
+                validator_list,
+            ))
+        }
+        _ => unreachable!(),
+    };
 
     (config, stake_pool)
 }
