@@ -1,5 +1,5 @@
 use {
-    crate::stake_pool::*,
+    crate::generic_stake_pool::*,
     log::*,
     solana_client::{
         rpc_client::RpcClient,
@@ -33,24 +33,22 @@ pub struct LegacyStakePool {
     validator_info: HashMap<Pubkey, ValidatorInfo>,
 }
 
-impl LegacyStakePool {
-    pub fn new(
-        baseline_stake_amount: u64,
-        bonus_stake_amount: u64,
-        source_stake_address: Pubkey,
-        validator_list: HashSet<Pubkey>,
-    ) -> Self {
-        Self {
-            baseline_stake_amount,
-            bonus_stake_amount,
-            source_stake_address,
-            validator_list,
-            validator_info: HashMap::new(),
-        }
+pub fn new(
+    baseline_stake_amount: u64,
+    bonus_stake_amount: u64,
+    source_stake_address: Pubkey,
+    validator_list: HashSet<Pubkey>,
+) -> LegacyStakePool {
+    LegacyStakePool {
+        baseline_stake_amount,
+        bonus_stake_amount,
+        source_stake_address,
+        validator_list,
+        validator_info: HashMap::new(),
     }
 }
 
-impl StakePool for LegacyStakePool {
+impl GenericStakePool for LegacyStakePool {
     fn init(
         &mut self,
         rpc_client: &RpcClient,

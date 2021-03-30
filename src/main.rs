@@ -1,12 +1,13 @@
 mod confirmed_block_cache;
 mod data_center_info;
+mod generic_stake_pool;
 mod legacy_stake_pool;
 mod stake_pool;
 mod validator_list;
 mod validators_app;
 
 use {
-    crate::stake_pool::*,
+    crate::generic_stake_pool::*,
     clap::{
         crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, ArgMatches,
         SubCommand,
@@ -254,7 +255,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> (Config, Box<dyn StakePool>) {
+fn get_config() -> (Config, Box<dyn GenericStakePool>) {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -452,6 +453,26 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
                     .help("File containing an YAML array of validator pubkeys eligible for staking")
             )
         )
+        .subcommand(
+            SubCommand::with_name("stake-pool").about("Use a stake pool")
+            .arg(
+                Arg::with_name("pool_address")
+                    .index(1)
+                    .value_name("POOL_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .validator(is_pubkey_or_keypair)
+                    .help("The stake pool address")
+            )
+            .arg(
+                Arg::with_name("baseline_stake_amount")
+                    .long("baseline-stake-amount")
+                    .value_name("SOL")
+                    .takes_value(true)
+                    .default_value("5000")
+                    .validator(is_amount)
+            )
+        )
         .get_matches();
 
     let config = if let Some(config_file) = matches.value_of("config_file") {
@@ -520,7 +541,7 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
 
     info!("RPC URL: {}", config.json_rpc_url);
 
-    let stake_pool = match matches.subcommand() {
+    let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("legacy", Some(matches)) => {
             let source_stake_address = pubkey_of(&matches, "source_stake_address").unwrap();
             let baseline_stake_amount =
@@ -556,12 +577,18 @@ fn get_config() -> (Config, Box<dyn StakePool>) {
             }
             .into_iter()
             .collect::<HashSet<_>>();
-            Box::new(legacy_stake_pool::LegacyStakePool::new(
+            Box::new(legacy_stake_pool::new(
                 baseline_stake_amount,
                 bonus_stake_amount,
                 source_stake_address,
                 validator_list,
             ))
+        }
+        ("stake-pool", Some(matches)) => {
+            let pool_address = pubkey_of(&matches, "pool_address").unwrap();
+            let baseline_stake_amount =
+                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+            Box::new(stake_pool::new(pool_address, baseline_stake_amount))
         }
         _ => unreachable!(),
     };
