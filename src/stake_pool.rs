@@ -1,31 +1,59 @@
 use {
-    solana_client::{rpc_client::RpcClient, rpc_response::RpcVoteAccountInfo},
+    crate::generic_stake_pool::*,
+    log::*,
+    solana_client::{
+        rpc_client::RpcClient,
+        rpc_response::{RpcVoteAccountInfo, StakeActivationState},
+    },
     solana_sdk::{epoch_info::EpochInfo, pubkey::Pubkey, transaction::Transaction},
-    std::error,
+    std::{collections::HashMap, error},
 };
 
-/// The staking states that a validator can be in
 #[derive(Debug)]
-pub enum ValidatorStakeState {
-    None,     // Validator should receive no stake
-    Baseline, // Validator has been awarded a baseline stake
-    Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
+struct ValidatorInfo {
+    vote_pubkey: Pubkey,
+    baseline_stake_address: Pubkey,
+    baseline_stake_activation_state: StakeActivationState,
 }
 
-pub trait StakePool {
+#[derive(Debug)]
+pub struct SplStakePool {
+    baseline_stake_amount: u64,
+    pool_address: Pubkey,
+    validator_info: HashMap<Pubkey, ValidatorInfo>,
+}
+
+pub fn new(pool_address: Pubkey, baseline_stake_amount: u64) -> SplStakePool {
+    SplStakePool {
+        baseline_stake_amount,
+        pool_address,
+        validator_info: HashMap::new(),
+    }
+}
+
+impl GenericStakePool for SplStakePool {
     fn init(
         &mut self,
-        rpc_client: &RpcClient,
-        authorized_staker: Pubkey,
-        vote_account_info: &[RpcVoteAccountInfo],
-        epoch_info: &EpochInfo,
-    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>>;
-    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool;
+        _rpc_client: &RpcClient,
+        _authorized_staker: Pubkey,
+        _vote_account_info: &[RpcVoteAccountInfo],
+        _epoch_info: &EpochInfo,
+    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
+        info!("{:?}", self);
+        todo!();
+    }
+
+    fn is_enrolled(&self, _validator_identity: &Pubkey) -> bool {
+        todo!();
+    }
+
     fn apply_validator_stake_state(
         &mut self,
         _rpc_client: &RpcClient,
-        authorized_staker: Pubkey,
-        node_pubkey: Pubkey,
-        stake_state: ValidatorStakeState,
-    ) -> Result<Vec<Transaction>, Box<dyn error::Error>>;
+        _authorized_staker: Pubkey,
+        _node_pubkey: Pubkey,
+        _stake_state: ValidatorStakeState,
+    ) -> Result<Vec<Transaction>, Box<dyn error::Error>> {
+        todo!();
+    }
 }
