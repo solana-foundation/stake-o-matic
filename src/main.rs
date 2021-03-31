@@ -948,9 +948,23 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             delinquent,
         } = rpc_client.get_vote_accounts()?;
 
-        current
-            .into_iter()
-            .chain(delinquent.into_iter())
+        let mut latest_vote_account_info = HashMap::<String, _>::new();
+
+        for vote_account_info in current.into_iter().chain(delinquent.into_iter()) {
+            let entry = latest_vote_account_info
+                .entry(vote_account_info.node_pubkey.clone())
+                .or_insert_with(|| vote_account_info.clone());
+
+            // If the validator has multiple staked vote accounts then select the vote account that
+            // voted most recently
+            if entry.last_vote < vote_account_info.last_vote {
+                *entry = vote_account_info.clone();
+            }
+        }
+
+        latest_vote_account_info
+            .values()
+            .cloned()
             .collect::<Vec<_>>()
     };
 
