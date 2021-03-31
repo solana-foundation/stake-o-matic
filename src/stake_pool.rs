@@ -53,7 +53,7 @@ impl GenericStakePool for SplStakePool {
         _authorized_staker: Pubkey,
         _node_pubkey: Pubkey,
         _stake_state: ValidatorStakeState,
-    ) -> Result<Vec<Transaction>, Box<dyn error::Error>> {
+    ) -> Result<Option<Transaction>, Box<dyn error::Error>> {
         todo!();
     }
 }

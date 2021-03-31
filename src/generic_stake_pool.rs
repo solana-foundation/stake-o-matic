@@ -27,5 +27,5 @@ pub trait GenericStakePool {
         authorized_staker: Pubkey,
         node_pubkey: Pubkey,
         stake_state: ValidatorStakeState,
-    ) -> Result<Vec<Transaction>, Box<dyn error::Error>>;
+    ) -> Result<Option<Transaction>, Box<dyn error::Error>>;
 }

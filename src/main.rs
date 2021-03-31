@@ -1149,17 +1149,14 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         );
 
         if let Some((stake_state, memo)) = operation {
-            transactions.extend(
-                stake_pool
-                    .apply_validator_stake_state(
-                        &rpc_client,
-                        config.authorized_staker.pubkey(),
-                        node_pubkey,
-                        stake_state,
-                    )?
-                    .into_iter()
-                    .map(|transaction| (transaction, memo.clone())),
-            );
+            if let Some(transaction) = stake_pool.apply_validator_stake_state(
+                &rpc_client,
+                config.authorized_staker.pubkey(),
+                node_pubkey,
+                stake_state,
+            )? {
+                transactions.push((transaction, memo.clone()));
+            }
         }
     }
 

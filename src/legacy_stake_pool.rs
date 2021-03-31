@@ -224,7 +224,7 @@ impl GenericStakePool for LegacyStakePool {
         authorized_staker: Pubkey,
         node_pubkey: Pubkey,
         stake_state: ValidatorStakeState,
-    ) -> Result<Vec<Transaction>, Box<dyn error::Error>> {
+    ) -> Result<Option<Transaction>, Box<dyn error::Error>> {
         let ValidatorInfo {
             vote_pubkey,
             baseline_stake_address,
@@ -242,55 +242,50 @@ impl GenericStakePool for LegacyStakePool {
             ValidatorStakeState::Bonus => (true, true),
         };
 
-        let mut transactions = vec![];
-
+        let mut instructions = vec![];
         if baseline {
             if *baseline_stake_activation_state == StakeActivationState::Inactive {
-                transactions.push(Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::delegate_stake(
-                        &baseline_stake_address,
-                        &authorized_staker,
-                        &vote_pubkey,
-                    )],
-                    Some(&authorized_staker),
-                )));
+                instructions.push(stake_instruction::delegate_stake(
+                    &baseline_stake_address,
+                    &authorized_staker,
+                    &vote_pubkey,
+                ));
             }
         } else if matches!(
             baseline_stake_activation_state,
             StakeActivationState::Activating | StakeActivationState::Active
         ) {
-            transactions.push(Transaction::new_unsigned(Message::new(
-                &[stake_instruction::deactivate_stake(
-                    &baseline_stake_address,
-                    &authorized_staker,
-                )],
-                Some(&authorized_staker),
-            )));
+            instructions.push(stake_instruction::deactivate_stake(
+                &baseline_stake_address,
+                &authorized_staker,
+            ));
         }
 
         if bonus {
             if *bonus_stake_activation_state == StakeActivationState::Inactive {
-                transactions.push(Transaction::new_unsigned(Message::new(
-                    &[stake_instruction::delegate_stake(
-                        &bonus_stake_address,
-                        &authorized_staker,
-                        &vote_pubkey,
-                    )],
-                    Some(&authorized_staker),
-                )));
+                instructions.push(stake_instruction::delegate_stake(
+                    &bonus_stake_address,
+                    &authorized_staker,
+                    &vote_pubkey,
+                ));
             }
         } else if matches!(
             bonus_stake_activation_state,
             StakeActivationState::Activating | StakeActivationState::Active
         ) {
-            transactions.push(Transaction::new_unsigned(Message::new(
-                &[stake_instruction::deactivate_stake(
-                    &bonus_stake_address,
-                    &authorized_staker,
-                )],
-                Some(&authorized_staker),
-            )));
+            instructions.push(stake_instruction::deactivate_stake(
+                &bonus_stake_address,
+                &authorized_staker,
+            ));
         }
-        Ok(transactions)
+
+        Ok(if !instructions.is_empty() {
+            Some(Transaction::new_unsigned(Message::new(
+                &instructions,
+                Some(&authorized_staker),
+            )))
+        } else {
+            None
+        })
     }
 }
