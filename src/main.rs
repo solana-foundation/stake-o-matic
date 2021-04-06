@@ -1066,8 +1066,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let mut transactions = vec![];
-
+    let mut desired_validator_stake = vec![];
     for RpcVoteAccountInfo {
         commission,
         node_pubkey: node_pubkey_str,
@@ -1161,18 +1160,20 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - operation: {:?}",
             node_pubkey, vote_pubkey, root_slot, operation
         );
-
         if let Some((stake_state, memo)) = operation {
-            if let Some(transaction) = stake_pool.apply_validator_stake_state(
-                &rpc_client,
-                config.authorized_staker.pubkey(),
+            desired_validator_stake.push(ValidatorStake {
                 node_pubkey,
                 stake_state,
-            )? {
-                transactions.push((transaction, memo.clone()));
-            }
+                memo,
+            });
         }
     }
+
+    let transactions = stake_pool.apply(
+        &rpc_client,
+        config.authorized_staker.pubkey(),
+        desired_validator_stake,
+    )?;
 
     let ok = send_and_confirm_transactions(
         &rpc_client,

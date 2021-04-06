@@ -218,13 +218,35 @@ impl GenericStakePool for LegacyStakePool {
         self.validator_list.contains(validator_identity)
     }
 
-    fn apply_validator_stake_state(
+    fn apply(
         &mut self,
         _rpc_client: &RpcClient,
         authorized_staker: Pubkey,
+        desired_validator_stake: Vec<ValidatorStake>,
+    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
+        Ok(desired_validator_stake
+            .into_iter()
+            .filter_map(
+                |ValidatorStake {
+                     node_pubkey,
+                     stake_state,
+                     memo,
+                 }| {
+                    self.apply_validator_stake_state(authorized_staker, node_pubkey, stake_state)
+                        .map(|transaction| (transaction, memo))
+                },
+            )
+            .collect())
+    }
+}
+
+impl LegacyStakePool {
+    fn apply_validator_stake_state(
+        &mut self,
+        authorized_staker: Pubkey,
         node_pubkey: Pubkey,
         stake_state: ValidatorStakeState,
-    ) -> Result<Option<Transaction>, Box<dyn error::Error>> {
+    ) -> Option<Transaction> {
         let ValidatorInfo {
             vote_pubkey,
             baseline_stake_address,
@@ -234,7 +256,7 @@ impl GenericStakePool for LegacyStakePool {
         } = self
             .validator_info
             .get(&node_pubkey)
-            .ok_or_else(|| format!("Unknown validator identity: {}", node_pubkey))?;
+            .unwrap_or_else(|| panic!("Unknown validator identity: {}", node_pubkey));
 
         let (baseline, bonus) = match stake_state {
             ValidatorStakeState::None => (false, false),
@@ -279,13 +301,13 @@ impl GenericStakePool for LegacyStakePool {
             ));
         }
 
-        Ok(if !instructions.is_empty() {
+        if !instructions.is_empty() {
             Some(Transaction::new_unsigned(Message::new(
                 &instructions,
                 Some(&authorized_staker),
             )))
         } else {
             None
-        })
+        }
     }
 }
