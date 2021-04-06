@@ -12,6 +12,12 @@ pub enum ValidatorStakeState {
     Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
 }
 
+pub struct ValidatorStake {
+    pub node_pubkey: Pubkey,
+    pub stake_state: ValidatorStakeState,
+    pub memo: String,
+}
+
 pub trait GenericStakePool {
     fn init(
         &mut self,
@@ -20,12 +26,13 @@ pub trait GenericStakePool {
         vote_account_info: &[RpcVoteAccountInfo],
         epoch_info: &EpochInfo,
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>>;
+
     fn is_enrolled(&self, validator_identity: &Pubkey) -> bool;
-    fn apply_validator_stake_state(
+
+    fn apply(
         &mut self,
-        _rpc_client: &RpcClient,
+        rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        node_pubkey: Pubkey,
-        stake_state: ValidatorStakeState,
-    ) -> Result<Option<Transaction>, Box<dyn error::Error>>;
+        desired_validator_stake: Vec<ValidatorStake>,
+    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>>;
 }
