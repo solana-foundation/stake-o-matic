@@ -1,18 +1,20 @@
-use crate::retry_rpc_operation;
-use log::*;
-use serde::{Deserialize, Serialize};
-use solana_client::rpc_client::RpcClient;
-use solana_sdk::{
-    clock::{Slot, DEFAULT_SLOTS_PER_EPOCH},
-    commitment_config::CommitmentConfig,
-    epoch_info::EpochInfo,
-};
-use std::{
-    cell::RefCell,
-    fs::{self, File, OpenOptions},
-    io,
-    ops::Range,
-    path::{Path, PathBuf},
+use {
+    crate::rpc_client_utils::retry_rpc_operation,
+    log::*,
+    serde::{Deserialize, Serialize},
+    solana_client::rpc_client::RpcClient,
+    solana_sdk::{
+        clock::{Slot, DEFAULT_SLOTS_PER_EPOCH},
+        commitment_config::CommitmentConfig,
+        epoch_info::EpochInfo,
+    },
+    std::{
+        cell::RefCell,
+        fs::{self, File, OpenOptions},
+        io,
+        ops::Range,
+        path::{Path, PathBuf},
+    },
 };
 
 #[derive(Clone, Debug, Default)]
