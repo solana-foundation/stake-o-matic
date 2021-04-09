@@ -25,6 +25,7 @@ struct ValidatorInfo {
     bonus_stake_activation_state: StakeActivationState,
 }
 
+#[derive(Default)]
 pub struct LegacyStakePool {
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
@@ -44,7 +45,7 @@ pub fn new(
         bonus_stake_amount,
         source_stake_address,
         validator_list,
-        validator_info: HashMap::new(),
+        ..LegacyStakePool::default()
     }
 }
 
@@ -121,7 +122,7 @@ impl GenericStakePool for LegacyStakePool {
                     .map_err(|err| {
                         format!(
                             "Unable to get activation information for baseline stake account: {}: {}",
-                            self.source_stake_address, err
+                            baseline_stake_address, err
                         )
                     })?.state
             } else {
@@ -156,7 +157,7 @@ impl GenericStakePool for LegacyStakePool {
                     .map_err(|err| {
                         format!(
                             "Unable to get activation information for bonus stake account: {}: {}",
-                            self.source_stake_address, err
+                            bonus_stake_address, err
                         )
                     })?
                     .state
