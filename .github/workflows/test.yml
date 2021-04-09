@@ -16,7 +16,9 @@ jobs:
     - uses: ludeeus/action-shellcheck@master
 
     - if: runner.os == 'Linux'
-      run: sudo apt-get install -y libudev-dev
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libudev-dev
 
     - uses: actions-rs/toolchain@v1
       with:
