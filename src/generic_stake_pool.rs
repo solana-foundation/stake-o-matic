@@ -4,13 +4,14 @@ use {
     std::error,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ValidatorStakeState {
     None,     // Validator should receive no stake
     Baseline, // Validator has been awarded a baseline stake
     Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
 }
 
+#[derive(Debug, Clone)]
 pub struct ValidatorStake {
     pub identity: Pubkey,
     pub vote_address: Pubkey,

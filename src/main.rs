@@ -4,6 +4,7 @@ mod generic_stake_pool;
 mod legacy_stake_pool;
 mod rpc_client_utils;
 mod stake_pool;
+mod stake_pool_v0;
 mod validator_list;
 mod validators_app;
 
@@ -21,10 +22,7 @@ use {
             is_amount, is_keypair, is_pubkey_or_keypair, is_url, is_valid_percentage,
         },
     },
-    solana_client::{
-        rpc_client::RpcClient,
-        rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
-    },
+    solana_client::{rpc_client::RpcClient, rpc_response::RpcVoteAccountInfo},
     solana_notifier::Notifier,
     solana_sdk::{
         clock::{Epoch, Slot},
@@ -250,6 +248,39 @@ fn app_version() -> String {
     })
 }
 
+fn validator_list_of(matches: &ArgMatches, cluster: &str) -> HashSet<Pubkey> {
+    match cluster {
+        "mainnet-beta" => validator_list::mainnet_beta_validators(),
+        "testnet" => validator_list::testnet_validators(),
+        "unknown" => {
+            let validator_list_file =
+                File::open(value_t_or_exit!(matches, "--validator-list", PathBuf)).unwrap_or_else(
+                    |err| {
+                        error!("Unable to open validator_list: {}", err);
+                        process::exit(1);
+                    },
+                );
+
+            serde_yaml::from_reader::<_, Vec<String>>(validator_list_file)
+                .unwrap_or_else(|err| {
+                    error!("Unable to read validator_list: {}", err);
+                    process::exit(1);
+                })
+                .into_iter()
+                .map(|p| {
+                    Pubkey::from_str(&p).unwrap_or_else(|err| {
+                        error!("Invalid validator_list pubkey '{}': {}", p, err);
+                        process::exit(1);
+                    })
+                })
+                .collect()
+        }
+        _ => unreachable!(),
+    }
+    .into_iter()
+    .collect()
+}
+
 fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
@@ -449,6 +480,34 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             )
         )
         .subcommand(
+            SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
+            .arg(
+                Arg::with_name("reserve_stake_address")
+                    .index(1)
+                    .value_name("RESERVE_STAKE_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .validator(is_pubkey_or_keypair)
+                    .help("The reserve stake account used to fund the stake pool")
+            )
+            .arg(
+                Arg::with_name("baseline_stake_amount")
+                    .long("baseline-stake-amount")
+                    .value_name("SOL")
+                    .takes_value(true)
+                    .default_value("5000")
+                    .validator(is_amount)
+            )
+            .arg(
+                Arg::with_name("--validator-list")
+                    .long("validator-list")
+                    .value_name("FILE")
+                    .takes_value(true)
+                    .conflicts_with("cluster")
+                    .help("File containing an YAML array of validator pubkeys eligible for staking")
+            )
+        )
+        .subcommand(
             SubCommand::with_name("stake-pool").about("Use a stake pool")
             .arg(
                 Arg::with_name("pool_address")
@@ -549,40 +608,25 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
             let bonus_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "bonus_stake_amount", f64));
-            let validator_list = match config.cluster.as_str() {
-                "mainnet-beta" => validator_list::mainnet_beta_validators(),
-                "testnet" => validator_list::testnet_validators(),
-                "unknown" => {
-                    let validator_list_file =
-                        File::open(value_t_or_exit!(matches, "--validator-list", PathBuf))
-                            .unwrap_or_else(|err| {
-                                error!("Unable to open validator_list: {}", err);
-                                process::exit(1);
-                            });
+            let validator_list = validator_list_of(matches, config.cluster.as_str());
 
-                    serde_yaml::from_reader::<_, Vec<String>>(validator_list_file)
-                        .unwrap_or_else(|err| {
-                            error!("Unable to read validator_list: {}", err);
-                            process::exit(1);
-                        })
-                        .into_iter()
-                        .map(|p| {
-                            Pubkey::from_str(&p).unwrap_or_else(|err| {
-                                error!("Invalid validator_list pubkey '{}': {}", p, err);
-                                process::exit(1);
-                            })
-                        })
-                        .collect()
-                }
-                _ => unreachable!(),
-            }
-            .into_iter()
-            .collect::<HashSet<_>>();
             Box::new(legacy_stake_pool::new(
                 &rpc_client,
                 baseline_stake_amount,
                 bonus_stake_amount,
                 source_stake_address,
+                validator_list,
+            )?)
+        }
+        ("stake-pool-v0", Some(matches)) => {
+            let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
+            let baseline_stake_amount =
+                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+            let validator_list = validator_list_of(matches, config.cluster.as_str());
+            Box::new(stake_pool_v0::new(
+                &rpc_client,
+                baseline_stake_amount,
+                reserve_stake_address,
                 validator_list,
             )?)
         }
@@ -736,31 +780,7 @@ fn main() -> BoxResult<()> {
     let epoch_info = rpc_client.get_epoch_info()?;
     info!("Epoch info: {:?}", epoch_info);
 
-    let vote_account_info = {
-        let RpcVoteAccountStatus {
-            current,
-            delinquent,
-        } = rpc_client.get_vote_accounts()?;
-
-        let mut latest_vote_account_info = HashMap::<String, _>::new();
-
-        for vote_account_info in current.into_iter().chain(delinquent.into_iter()) {
-            let entry = latest_vote_account_info
-                .entry(vote_account_info.node_pubkey.clone())
-                .or_insert_with(|| vote_account_info.clone());
-
-            // If the validator has multiple staked vote accounts then select the vote account that
-            // voted most recently
-            if entry.last_vote < vote_account_info.last_vote {
-                *entry = vote_account_info.clone();
-            }
-        }
-
-        latest_vote_account_info
-            .values()
-            .cloned()
-            .collect::<Vec<_>>()
-    };
+    let vote_account_info = rpc_client_utils::get_vote_account_info(&rpc_client)?;
 
     let cluster_nodes_with_old_version: HashSet<String> = match config.min_release_version {
         Some(ref min_release_version) => rpc_client
