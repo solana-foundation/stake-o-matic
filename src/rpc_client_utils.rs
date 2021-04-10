@@ -2,8 +2,11 @@ use {
     log::*,
     reqwest::StatusCode,
     solana_client::{
-        client_error, rpc_client::RpcClient, rpc_config::RpcSimulateTransactionConfig,
+        client_error,
+        rpc_client::RpcClient,
+        rpc_config::RpcSimulateTransactionConfig,
         rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
+        rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
     },
     solana_sdk::{
         native_token::*,
@@ -184,7 +187,7 @@ pub fn send_and_confirm_transactions(
                 });
             }
         }
-        sleep(Duration::from_secs(5));
+        sleep(Duration::from_millis(250));
     }
 
     confirmed_transactions.sort_by(|a, b| a.memo.cmp(&b.memo));
@@ -206,4 +209,163 @@ pub fn send_and_confirm_transactions(
         }
     }
     Ok(ok)
+}
+
+pub fn get_vote_account_info(
+    rpc_client: &RpcClient,
+) -> Result<Vec<RpcVoteAccountInfo>, Box<dyn error::Error>> {
+    let RpcVoteAccountStatus {
+        current,
+        delinquent,
+    } = rpc_client.get_vote_accounts()?;
+
+    let mut latest_vote_account_info = HashMap::<String, _>::new();
+
+    for vote_account_info in current.into_iter().chain(delinquent.into_iter()) {
+        let entry = latest_vote_account_info
+            .entry(vote_account_info.node_pubkey.clone())
+            .or_insert_with(|| vote_account_info.clone());
+
+        // If the validator has multiple staked vote accounts then select the vote account that
+        // voted most recently
+        if entry.last_vote < vote_account_info.last_vote {
+            *entry = vote_account_info.clone();
+        }
+    }
+
+    Ok(latest_vote_account_info
+        .values()
+        .cloned()
+        .collect::<Vec<_>>())
+}
+
+#[cfg(test)]
+pub mod test {
+    use {
+        super::*,
+        indicatif::{ProgressBar, ProgressStyle},
+        solana_sdk::{clock::Epoch, pubkey::Pubkey},
+        solana_stake_program::{
+            stake_instruction,
+            stake_state::{Authorized, Lockup},
+        },
+        solana_vote_program::{vote_instruction, vote_state::VoteInit},
+    };
+
+    fn new_spinner_progress_bar() -> ProgressBar {
+        let progress_bar = ProgressBar::new(42);
+        progress_bar
+            .set_style(ProgressStyle::default_spinner().template("{spinner:.green} {wide_msg}"));
+        progress_bar.enable_steady_tick(100);
+        progress_bar
+    }
+
+    pub fn wait_for_next_epoch(rpc_client: &RpcClient) -> client_error::Result<Epoch> {
+        let current_epoch = rpc_client.get_epoch_info()?.epoch;
+
+        let progress_bar = new_spinner_progress_bar();
+        loop {
+            let epoch_info = rpc_client.get_epoch_info()?;
+            if epoch_info.epoch > current_epoch {
+                return Ok(epoch_info.epoch);
+            }
+            progress_bar.set_message(&format!(
+                "Waiting for epoch {} ({} slots remaining)",
+                current_epoch + 1,
+                epoch_info
+                    .slots_in_epoch
+                    .saturating_sub(epoch_info.slot_index),
+            ));
+
+            sleep(Duration::from_millis(200));
+        }
+    }
+
+    pub fn create_vote_account(
+        rpc_client: &RpcClient,
+        payer: &Keypair,
+        identity_keypair: &Keypair,
+        vote_keypair: &Keypair,
+    ) -> client_error::Result<()> {
+        let mut transaction = Transaction::new_with_payer(
+            &vote_instruction::create_account(
+                &payer.pubkey(),
+                &vote_keypair.pubkey(),
+                &VoteInit {
+                    node_pubkey: identity_keypair.pubkey(),
+                    authorized_voter: identity_keypair.pubkey(),
+                    authorized_withdrawer: identity_keypair.pubkey(),
+                    commission: 10,
+                },
+                sol_to_lamports(1.),
+            ),
+            Some(&payer.pubkey()),
+        );
+
+        transaction.sign(
+            &[payer, identity_keypair, vote_keypair],
+            rpc_client.get_recent_blockhash()?.0,
+        );
+        rpc_client
+            .send_and_confirm_transaction_with_spinner(&transaction)
+            .map(|_| ())
+    }
+
+    pub fn create_stake_account(
+        rpc_client: &RpcClient,
+        payer: &Keypair,
+        amount: u64,
+    ) -> client_error::Result<Keypair> {
+        let stake_keypair = Keypair::new();
+        let mut transaction = Transaction::new_with_payer(
+            &stake_instruction::create_account(
+                &payer.pubkey(),
+                &stake_keypair.pubkey(),
+                &Authorized::auto(&payer.pubkey()),
+                &Lockup::default(),
+                amount,
+            ),
+            Some(&payer.pubkey()),
+        );
+
+        transaction.sign(
+            &[payer, &stake_keypair],
+            rpc_client.get_recent_blockhash()?.0,
+        );
+        rpc_client
+            .send_and_confirm_transaction_with_spinner(&transaction)
+            .map(|_| stake_keypair)
+    }
+
+    pub struct ValidatorAddressPair {
+        pub identity: Pubkey,
+        pub vote_address: Pubkey,
+    }
+
+    pub fn create_validators(
+        rpc_client: &RpcClient,
+        authorized_staker: &Keypair,
+        num_validators: usize,
+    ) -> client_error::Result<Vec<ValidatorAddressPair>> {
+        let mut validators = vec![];
+
+        for _ in 0..num_validators {
+            let identity_keypair = Keypair::new();
+            let vote_keypair = Keypair::new();
+
+            create_vote_account(
+                &rpc_client,
+                &authorized_staker,
+                &identity_keypair,
+                &vote_keypair,
+            )?;
+
+            validators.push(ValidatorAddressPair {
+                identity: identity_keypair.pubkey(),
+                vote_address: vote_keypair.pubkey(),
+            });
+        }
+
+        Ok(validators)
+    }
 }
