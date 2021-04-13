@@ -35,6 +35,8 @@ crates=(
   solana-sdk
   solana-stake-program
   solana-transaction-status
+  solana-validator
+  solana-vote-program
 )
 
 set -x
