@@ -1,10 +1,7 @@
 use {
     crate::generic_stake_pool::*,
     log::*,
-    solana_client::{
-        rpc_client::RpcClient,
-        rpc_response::{RpcVoteAccountInfo, StakeActivationState},
-    },
+    solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
         epoch_info::EpochInfo, message::Message, native_token::*, pubkey::Pubkey,
         transaction::Transaction,
@@ -13,12 +10,11 @@ use {
     std::{
         collections::{HashMap, HashSet},
         error,
-        str::FromStr,
     },
 };
 
 struct ValidatorInfo {
-    vote_pubkey: Pubkey,
+    vote_address: Pubkey,
     baseline_stake_address: Pubkey,
     bonus_stake_address: Pubkey,
     baseline_stake_activation_state: StakeActivationState,
@@ -54,7 +50,7 @@ impl GenericStakePool for LegacyStakePool {
         &mut self,
         rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        vote_account_info: &[RpcVoteAccountInfo],
+        validators: Vec<ValidatorAddressPair>,
         epoch_info: &EpochInfo,
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
         let mut transactions = vec![];
@@ -79,20 +75,17 @@ impl GenericStakePool for LegacyStakePool {
             Sol(source_stake_balance)
         );
 
-        for RpcVoteAccountInfo {
-            node_pubkey: node_pubkey_str,
-            vote_pubkey,
-            ..
-        } in vote_account_info
+        for ValidatorAddressPair {
+            identity,
+            vote_address,
+        } in validators
         {
-            let node_pubkey = Pubkey::from_str(&node_pubkey_str).unwrap();
-            if !self.is_enrolled(&node_pubkey) {
+            if !self.is_enrolled(&identity) {
                 continue;
             }
 
-            let baseline_seed = &vote_pubkey.to_string()[..32];
-            let bonus_seed = &format!("A{{{}", vote_pubkey)[..32];
-            let vote_pubkey = Pubkey::from_str(&vote_pubkey).unwrap();
+            let baseline_seed = &vote_address.to_string()[..32];
+            let bonus_seed = &format!("A{{{}", vote_address.to_string())[..32];
 
             let baseline_stake_address = Pubkey::create_with_seed(
                 &authorized_staker,
@@ -109,7 +102,7 @@ impl GenericStakePool for LegacyStakePool {
 
             debug!(
                 "identity: {} - baseline stake: {}\n - bonus stake: {}",
-                node_pubkey, baseline_stake_address, bonus_stake_address
+                identity, baseline_stake_address, bonus_stake_address
             );
 
             let baseline_stake_activation_state = if rpc_client
@@ -141,7 +134,7 @@ impl GenericStakePool for LegacyStakePool {
                     )),
                     format!(
                         "Creating baseline stake account for validator {} ({})",
-                        node_pubkey, baseline_stake_address
+                        identity, baseline_stake_address
                     ),
                 ));
                 StakeActivationState::Inactive
@@ -177,16 +170,16 @@ impl GenericStakePool for LegacyStakePool {
                     )),
                     format!(
                         "Creating bonus stake account for validator {} ({})",
-                        node_pubkey, bonus_stake_address
+                        identity, bonus_stake_address
                     ),
                 ));
                 StakeActivationState::Inactive
             };
 
             self.validator_info.insert(
-                node_pubkey,
+                identity,
                 ValidatorInfo {
-                    vote_pubkey,
+                    vote_address,
                     baseline_stake_address,
                     bonus_stake_address,
                     baseline_stake_activation_state,
@@ -229,11 +222,11 @@ impl GenericStakePool for LegacyStakePool {
             .into_iter()
             .filter_map(
                 |ValidatorStake {
-                     node_pubkey,
+                     identity,
                      stake_state,
                      memo,
                  }| {
-                    self.apply_validator_stake_state(authorized_staker, node_pubkey, stake_state)
+                    self.apply_validator_stake_state(authorized_staker, identity, stake_state)
                         .map(|transaction| (transaction, memo))
                 },
             )
@@ -245,19 +238,19 @@ impl LegacyStakePool {
     fn apply_validator_stake_state(
         &mut self,
         authorized_staker: Pubkey,
-        node_pubkey: Pubkey,
+        identity: Pubkey,
         stake_state: ValidatorStakeState,
     ) -> Option<Transaction> {
         let ValidatorInfo {
-            vote_pubkey,
+            vote_address,
             baseline_stake_address,
             bonus_stake_address,
             baseline_stake_activation_state,
             bonus_stake_activation_state,
         } = self
             .validator_info
-            .get(&node_pubkey)
-            .unwrap_or_else(|| panic!("Unknown validator identity: {}", node_pubkey));
+            .get(&identity)
+            .unwrap_or_else(|| panic!("Unknown validator identity: {}", identity));
 
         let (baseline, bonus) = match stake_state {
             ValidatorStakeState::None => (false, false),
@@ -271,7 +264,7 @@ impl LegacyStakePool {
                 instructions.push(stake_instruction::delegate_stake(
                     &baseline_stake_address,
                     &authorized_staker,
-                    &vote_pubkey,
+                    &vote_address,
                 ));
             }
         } else if matches!(
@@ -289,7 +282,7 @@ impl LegacyStakePool {
                 instructions.push(stake_instruction::delegate_stake(
                     &bonus_stake_address,
                     &authorized_staker,
-                    &vote_pubkey,
+                    &vote_address,
                 ));
             }
         } else if matches!(

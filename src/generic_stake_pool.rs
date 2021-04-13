@@ -1,5 +1,5 @@
 use {
-    solana_client::{rpc_client::RpcClient, rpc_response::RpcVoteAccountInfo},
+    solana_client::rpc_client::RpcClient,
     solana_sdk::{epoch_info::EpochInfo, pubkey::Pubkey, transaction::Transaction},
     std::error,
 };
@@ -12,8 +12,13 @@ pub enum ValidatorStakeState {
     Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
 }
 
+pub struct ValidatorAddressPair {
+    pub identity: Pubkey,
+    pub vote_address: Pubkey,
+}
+
 pub struct ValidatorStake {
-    pub node_pubkey: Pubkey,
+    pub identity: Pubkey,
     pub stake_state: ValidatorStakeState,
     pub memo: String,
 }
@@ -23,7 +28,7 @@ pub trait GenericStakePool {
         &mut self,
         rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        vote_account_info: &[RpcVoteAccountInfo],
+        validators: Vec<ValidatorAddressPair>,
         epoch_info: &EpochInfo,
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>>;
 

@@ -1,10 +1,7 @@
 use {
     crate::generic_stake_pool::*,
     log::*,
-    solana_client::{
-        rpc_client::RpcClient,
-        rpc_response::{RpcVoteAccountInfo, StakeActivationState},
-    },
+    solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{epoch_info::EpochInfo, pubkey::Pubkey, transaction::Transaction},
     std::{collections::HashMap, error},
 };
@@ -36,7 +33,7 @@ impl GenericStakePool for SplStakePool {
         &mut self,
         _rpc_client: &RpcClient,
         _authorized_staker: Pubkey,
-        _vote_account_info: &[RpcVoteAccountInfo],
+        _validators: Vec<ValidatorAddressPair>,
         _epoch_info: &EpochInfo,
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
         info!("{:?}", self);
