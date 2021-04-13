@@ -6,7 +6,6 @@ use {
         rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
     },
     solana_sdk::{
-        commitment_config::CommitmentConfig,
         native_token::*,
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
@@ -90,9 +89,7 @@ pub fn send_and_confirm_transactions(
         lamports_to_sol(authorized_staker_balance)
     );
 
-    let (blockhash, fee_calculator, last_valid_slot) = rpc_client
-        .get_recent_blockhash_with_commitment(rpc_client.commitment())?
-        .value;
+    let (blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
     info!("{} transactions to send", transactions.len());
 
     let required_fee = transactions.iter().fold(0, |fee, (transaction, _)| {
@@ -125,15 +122,10 @@ pub fn send_and_confirm_transactions(
             break;
         }
 
-        let slot = rpc_client.get_slot_with_commitment(CommitmentConfig::finalized())?;
-        info!(
-            "Current slot={}, last_valid_slot={} (slots remaining: {}) ",
-            slot,
-            last_valid_slot,
-            last_valid_slot.saturating_sub(slot)
-        );
-
-        if slot > last_valid_slot {
+        let blockhash_expired = rpc_client
+            .get_fee_calculator_for_blockhash(&blockhash)?
+            .is_none();
+        if blockhash_expired {
             error!(
                 "Blockhash {} expired with {} pending transactions",
                 blockhash,
@@ -173,7 +165,7 @@ pub fn send_and_confirm_transactions(
             let completed = if dry_run {
                 Some(true)
             } else if let Some(status) = &status {
-                if status.confirmations.is_none() || status.err.is_some() {
+                if status.satisfies_commitment(rpc_client.commitment()) {
                     Some(status.err.is_none())
                 } else {
                     None
