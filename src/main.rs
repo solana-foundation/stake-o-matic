@@ -761,7 +761,13 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let init_transactions = stake_pool.init(
         &rpc_client,
         config.authorized_staker.pubkey(),
-        &vote_account_info,
+        vote_account_info
+            .iter()
+            .map(|vai| ValidatorAddressPair {
+                identity: Pubkey::from_str(&vai.node_pubkey).unwrap(),
+                vote_address: Pubkey::from_str(&vai.vote_pubkey).unwrap(),
+            })
+            .collect::<Vec<_>>(),
         &epoch_info,
     )?;
     if !rpc_client_utils::send_and_confirm_transactions(
@@ -952,7 +958,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         );
         if let Some((stake_state, memo)) = operation {
             desired_validator_stake.push(ValidatorStake {
-                node_pubkey,
+                identity: node_pubkey,
                 stake_state,
                 memo,
             });
