@@ -761,7 +761,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let init_transactions = stake_pool.init(
         &rpc_client,
         config.authorized_staker.pubkey(),
-        vote_account_info
+        &vote_account_info
             .iter()
             .map(|vai| ValidatorAddressPair {
                 identity: Pubkey::from_str(&vai.node_pubkey).unwrap(),

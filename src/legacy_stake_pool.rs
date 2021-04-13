@@ -50,7 +50,7 @@ impl GenericStakePool for LegacyStakePool {
         &mut self,
         rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        validators: Vec<ValidatorAddressPair>,
+        validators: &[ValidatorAddressPair],
         epoch_info: &EpochInfo,
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
         let mut transactions = vec![];
@@ -80,7 +80,7 @@ impl GenericStakePool for LegacyStakePool {
             vote_address,
         } in validators
         {
-            if !self.is_enrolled(&identity) {
+            if !self.is_enrolled(identity) {
                 continue;
             }
 
@@ -177,9 +177,9 @@ impl GenericStakePool for LegacyStakePool {
             };
 
             self.validator_info.insert(
-                identity,
+                *identity,
                 ValidatorInfo {
-                    vote_address,
+                    vote_address: *vote_address,
                     baseline_stake_address,
                     bonus_stake_address,
                     baseline_stake_activation_state,
