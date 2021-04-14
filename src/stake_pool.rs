@@ -48,7 +48,7 @@ impl GenericStakePool for SplStakePool {
         &mut self,
         _rpc_client: &RpcClient,
         _authorized_staker: Pubkey,
-        _desired_validator_stake: Vec<ValidatorStake>,
+        _desired_validator_stake: &[ValidatorStake],
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
         todo!();
     }

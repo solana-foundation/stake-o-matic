@@ -216,10 +216,10 @@ impl GenericStakePool for LegacyStakePool {
         &mut self,
         _rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        desired_validator_stake: Vec<ValidatorStake>,
+        desired_validator_stake: &[ValidatorStake],
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
         Ok(desired_validator_stake
-            .into_iter()
+            .iter()
             .filter_map(
                 |ValidatorStake {
                      identity,
@@ -227,7 +227,7 @@ impl GenericStakePool for LegacyStakePool {
                      memo,
                  }| {
                     self.apply_validator_stake_state(authorized_staker, identity, stake_state)
-                        .map(|transaction| (transaction, memo))
+                        .map(|transaction| (transaction, memo.clone()))
                 },
             )
             .collect())
@@ -238,8 +238,8 @@ impl LegacyStakePool {
     fn apply_validator_stake_state(
         &mut self,
         authorized_staker: Pubkey,
-        identity: Pubkey,
-        stake_state: ValidatorStakeState,
+        identity: &Pubkey,
+        stake_state: &ValidatorStakeState,
     ) -> Option<Transaction> {
         let ValidatorInfo {
             vote_address,
@@ -249,7 +249,7 @@ impl LegacyStakePool {
             bonus_stake_activation_state,
         } = self
             .validator_info
-            .get(&identity)
+            .get(identity)
             .unwrap_or_else(|| panic!("Unknown validator identity: {}", identity));
 
         let (baseline, bonus) = match stake_state {

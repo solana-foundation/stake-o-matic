@@ -38,6 +38,6 @@ pub trait GenericStakePool {
         &mut self,
         rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        desired_validator_stake: Vec<ValidatorStake>,
+        desired_validator_stake: &[ValidatorStake],
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>>;
 }

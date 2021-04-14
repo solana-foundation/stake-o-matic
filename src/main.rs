@@ -968,7 +968,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let transactions = stake_pool.apply(
         &rpc_client,
         config.authorized_staker.pubkey(),
-        desired_validator_stake,
+        &desired_validator_stake,
     )?;
 
     let ok = rpc_client_utils::send_and_confirm_transactions(
