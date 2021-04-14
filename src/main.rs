@@ -979,6 +979,12 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         &mut notifications,
     )?;
 
+    notifier.send(&format!(
+        "Baseline stake: {}, bonus stake: {}",
+        Sol(stake_pool.baseline_stake_amount()),
+        Sol(stake_pool.bonus_stake_amount())
+    ));
+
     for notification in notifications {
         warn!("{}", notification);
         notifier.send(&notification);

@@ -212,6 +212,14 @@ impl GenericStakePool for LegacyStakePool {
         self.validator_list.contains(validator_identity)
     }
 
+    fn baseline_stake_amount(&self) -> u64 {
+        self.baseline_stake_amount
+    }
+
+    fn bonus_stake_amount(&self) -> u64 {
+        self.bonus_stake_amount
+    }
+
     fn apply(
         &mut self,
         _rpc_client: &RpcClient,

@@ -33,6 +33,8 @@ pub trait GenericStakePool {
     ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>>;
 
     fn is_enrolled(&self, validator_identity: &Pubkey) -> bool;
+    fn baseline_stake_amount(&self) -> u64;
+    fn bonus_stake_amount(&self) -> u64;
 
     fn apply(
         &mut self,

@@ -44,6 +44,14 @@ impl GenericStakePool for SplStakePool {
         todo!();
     }
 
+    fn baseline_stake_amount(&self) -> u64 {
+        todo!();
+    }
+
+    fn bonus_stake_amount(&self) -> u64 {
+        todo!();
+    }
+
     fn apply(
         &mut self,
         _rpc_client: &RpcClient,
