@@ -1,25 +1,17 @@
 use {
-    crate::generic_stake_pool::*,
+    crate::{generic_stake_pool::*, rpc_client_utils::send_and_confirm_transactions},
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
-        epoch_info::EpochInfo, message::Message, native_token::*, pubkey::Pubkey,
+        message::Message,
+        native_token::*,
+        pubkey::Pubkey,
+        signature::{Keypair, Signer},
         transaction::Transaction,
     },
     solana_stake_program::stake_instruction,
-    std::{
-        collections::{HashMap, HashSet},
-        error,
-    },
+    std::{collections::HashSet, error},
 };
-
-struct ValidatorInfo {
-    vote_address: Pubkey,
-    baseline_stake_address: Pubkey,
-    bonus_stake_address: Pubkey,
-    baseline_stake_activation_state: StakeActivationState,
-    bonus_stake_activation_state: StakeActivationState,
-}
 
 #[derive(Default)]
 pub struct LegacyStakePool {
@@ -27,34 +19,78 @@ pub struct LegacyStakePool {
     bonus_stake_amount: u64,
     source_stake_address: Pubkey,
     validator_list: HashSet<Pubkey>,
-    validator_info: HashMap<Pubkey, ValidatorInfo>,
 }
 
 pub fn new(
+    _rpc_client: &RpcClient,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
     source_stake_address: Pubkey,
     validator_list: HashSet<Pubkey>,
-) -> LegacyStakePool {
-    LegacyStakePool {
+) -> Result<LegacyStakePool, Box<dyn error::Error>> {
+    Ok(LegacyStakePool {
         baseline_stake_amount,
         bonus_stake_amount,
         source_stake_address,
         validator_list,
-        ..LegacyStakePool::default()
-    }
+    })
 }
 
 impl GenericStakePool for LegacyStakePool {
-    fn init(
+    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool {
+        self.validator_list.contains(validator_identity)
+    }
+
+    fn apply(
+        &mut self,
+        rpc_client: &RpcClient,
+        dry_run: bool,
+        authorized_staker: &Keypair,
+        validator_stake: &[ValidatorStake],
+    ) -> Result<Vec<String>, Box<dyn error::Error>> {
+        let (init_transactions, update_transactions) =
+            self.build_transactions(rpc_client, authorized_staker.pubkey(), &validator_stake)?;
+
+        if !send_and_confirm_transactions(
+            rpc_client,
+            dry_run,
+            init_transactions,
+            authorized_staker,
+            &mut vec![],
+        )? {
+            return Err("Failed to initialize stake pool. Unable to continue".into());
+        }
+
+        let mut notifications = vec![];
+        let ok = send_and_confirm_transactions(
+            rpc_client,
+            dry_run,
+            update_transactions,
+            authorized_staker,
+            &mut notifications,
+        )?;
+
+        if !ok {
+            error!("One or more transactions failed to execute")
+        }
+        Ok(notifications)
+    }
+}
+
+type TransactionWithMemo = (Transaction, String);
+
+impl LegacyStakePool {
+    fn build_transactions(
         &mut self,
         rpc_client: &RpcClient,
         authorized_staker: Pubkey,
-        validators: &[ValidatorAddressPair],
-        epoch_info: &EpochInfo,
-    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
-        let mut transactions = vec![];
+        validator_stake: &[ValidatorStake],
+    ) -> Result<(Vec<TransactionWithMemo>, Vec<TransactionWithMemo>), Box<dyn error::Error>> {
+        let mut init_transactions = vec![];
+        let mut update_transactions = vec![];
         let mut source_stake_lamports_required = 0;
+
+        let epoch_info = rpc_client.get_epoch_info()?;
 
         let source_stake_balance = {
             let source_stake_activation = rpc_client
@@ -75,10 +111,12 @@ impl GenericStakePool for LegacyStakePool {
             Sol(source_stake_balance)
         );
 
-        for ValidatorAddressPair {
+        for ValidatorStake {
             identity,
             vote_address,
-        } in validators
+            memo,
+            stake_state,
+        } in validator_stake
         {
             if !self.is_enrolled(identity) {
                 continue;
@@ -120,7 +158,7 @@ impl GenericStakePool for LegacyStakePool {
                     })?.state
             } else {
                 source_stake_lamports_required += self.baseline_stake_amount;
-                transactions.push((
+                init_transactions.push((
                     Transaction::new_unsigned(Message::new(
                         &stake_instruction::split_with_seed(
                             &self.source_stake_address,
@@ -156,7 +194,7 @@ impl GenericStakePool for LegacyStakePool {
                     .state
             } else {
                 source_stake_lamports_required += self.bonus_stake_amount;
-                transactions.push((
+                init_transactions.push((
                     Transaction::new_unsigned(Message::new(
                         &stake_instruction::split_with_seed(
                             &self.source_stake_address,
@@ -176,23 +214,24 @@ impl GenericStakePool for LegacyStakePool {
                 StakeActivationState::Inactive
             };
 
-            self.validator_info.insert(
-                *identity,
-                ValidatorInfo {
-                    vote_address: *vote_address,
-                    baseline_stake_address,
-                    bonus_stake_address,
-                    baseline_stake_activation_state,
-                    bonus_stake_activation_state,
-                },
-            );
+            if let Some(transaction) = Self::build_validator_stake_state_transaction(
+                authorized_staker,
+                *vote_address,
+                baseline_stake_address,
+                bonus_stake_address,
+                baseline_stake_activation_state,
+                bonus_stake_activation_state,
+                stake_state,
+            ) {
+                update_transactions.push((transaction, memo.clone()))
+            }
         }
 
-        if !transactions.is_empty() {
+        if !init_transactions.is_empty() {
             info!(
                 "{} is required to create {} stake accounts",
                 Sol(source_stake_lamports_required),
-                transactions.len()
+                init_transactions.len()
             );
 
             if source_stake_balance < source_stake_lamports_required {
@@ -205,61 +244,18 @@ impl GenericStakePool for LegacyStakePool {
             }
         }
 
-        Ok(transactions)
+        Ok((init_transactions, update_transactions))
     }
 
-    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool {
-        self.validator_list.contains(validator_identity)
-    }
-
-    fn baseline_stake_amount(&self) -> u64 {
-        self.baseline_stake_amount
-    }
-
-    fn bonus_stake_amount(&self) -> u64 {
-        self.bonus_stake_amount
-    }
-
-    fn apply(
-        &mut self,
-        _rpc_client: &RpcClient,
+    fn build_validator_stake_state_transaction(
         authorized_staker: Pubkey,
-        desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
-        Ok(desired_validator_stake
-            .iter()
-            .filter_map(
-                |ValidatorStake {
-                     identity,
-                     stake_state,
-                     memo,
-                 }| {
-                    self.apply_validator_stake_state(authorized_staker, identity, stake_state)
-                        .map(|transaction| (transaction, memo.clone()))
-                },
-            )
-            .collect())
-    }
-}
-
-impl LegacyStakePool {
-    fn apply_validator_stake_state(
-        &mut self,
-        authorized_staker: Pubkey,
-        identity: &Pubkey,
+        vote_address: Pubkey,
+        baseline_stake_address: Pubkey,
+        bonus_stake_address: Pubkey,
+        baseline_stake_activation_state: StakeActivationState,
+        bonus_stake_activation_state: StakeActivationState,
         stake_state: &ValidatorStakeState,
     ) -> Option<Transaction> {
-        let ValidatorInfo {
-            vote_address,
-            baseline_stake_address,
-            bonus_stake_address,
-            baseline_stake_activation_state,
-            bonus_stake_activation_state,
-        } = self
-            .validator_info
-            .get(identity)
-            .unwrap_or_else(|| panic!("Unknown validator identity: {}", identity));
-
         let (baseline, bonus) = match stake_state {
             ValidatorStakeState::None => (false, false),
             ValidatorStakeState::Baseline => (true, false),
@@ -268,7 +264,7 @@ impl LegacyStakePool {
 
         let mut instructions = vec![];
         if baseline {
-            if *baseline_stake_activation_state == StakeActivationState::Inactive {
+            if baseline_stake_activation_state == StakeActivationState::Inactive {
                 instructions.push(stake_instruction::delegate_stake(
                     &baseline_stake_address,
                     &authorized_staker,
@@ -286,7 +282,7 @@ impl LegacyStakePool {
         }
 
         if bonus {
-            if *bonus_stake_activation_state == StakeActivationState::Inactive {
+            if bonus_stake_activation_state == StakeActivationState::Inactive {
                 instructions.push(stake_instruction::delegate_stake(
                     &bonus_stake_address,
                     &authorized_staker,

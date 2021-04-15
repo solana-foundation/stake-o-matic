@@ -2,7 +2,7 @@ use {
     crate::generic_stake_pool::*,
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
-    solana_sdk::{epoch_info::EpochInfo, pubkey::Pubkey, transaction::Transaction},
+    solana_sdk::{pubkey::Pubkey, signature::Keypair},
     std::{collections::HashMap, error},
 };
 
@@ -20,44 +20,30 @@ pub struct SplStakePool {
     validator_info: HashMap<Pubkey, ValidatorInfo>,
 }
 
-pub fn new(pool_address: Pubkey, baseline_stake_amount: u64) -> SplStakePool {
-    SplStakePool {
+pub fn new(
+    _rpc_client: &RpcClient,
+    pool_address: Pubkey,
+    baseline_stake_amount: u64,
+) -> Result<SplStakePool, Box<dyn error::Error>> {
+    Ok(SplStakePool {
         baseline_stake_amount,
         pool_address,
         validator_info: HashMap::new(),
-    }
+    })
 }
 
 impl GenericStakePool for SplStakePool {
-    fn init(
-        &mut self,
-        _rpc_client: &RpcClient,
-        _authorized_staker: Pubkey,
-        _validators: &[ValidatorAddressPair],
-        _epoch_info: &EpochInfo,
-    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
-        info!("{:?}", self);
+    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool {
+        info!("validator: {}", validator_identity);
         todo!();
     }
-
-    fn is_enrolled(&self, _validator_identity: &Pubkey) -> bool {
-        todo!();
-    }
-
-    fn baseline_stake_amount(&self) -> u64 {
-        todo!();
-    }
-
-    fn bonus_stake_amount(&self) -> u64 {
-        todo!();
-    }
-
     fn apply(
         &mut self,
         _rpc_client: &RpcClient,
-        _authorized_staker: Pubkey,
+        _dry_run: bool,
+        _authorized_staker: &Keypair,
         _desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<(Transaction, String)>, Box<dyn error::Error>> {
+    ) -> Result<Vec<String>, Box<dyn error::Error>> {
         todo!();
     }
 }

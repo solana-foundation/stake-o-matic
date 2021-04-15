@@ -30,7 +30,7 @@ use {
         clock::{Epoch, Slot},
         native_token::*,
         pubkey::Pubkey,
-        signature::{Keypair, Signer},
+        signature::Keypair,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -42,6 +42,8 @@ use {
     },
     thiserror::Error,
 };
+
+type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 
 enum InfrastructureConcentrationAffectKind {
     Destake(String),
@@ -248,7 +250,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> (Config, Box<dyn GenericStakePool>) {
+fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -533,6 +535,12 @@ fn get_config() -> (Config, Box<dyn GenericStakePool>) {
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
+    let rpc_client = RpcClient::new(config.json_rpc_url.clone());
+
+    // Sanity check that the RPC endpoint is healthy before performing too much work
+    rpc_client
+        .get_health()
+        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("legacy", Some(matches)) => {
@@ -571,25 +579,28 @@ fn get_config() -> (Config, Box<dyn GenericStakePool>) {
             .into_iter()
             .collect::<HashSet<_>>();
             Box::new(legacy_stake_pool::new(
+                &rpc_client,
                 baseline_stake_amount,
                 bonus_stake_amount,
                 source_stake_address,
                 validator_list,
-            ))
+            )?)
         }
         ("stake-pool", Some(matches)) => {
             let pool_address = pubkey_of(&matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool::new(pool_address, baseline_stake_amount))
+            Box::new(stake_pool::new(
+                &rpc_client,
+                pool_address,
+                baseline_stake_amount,
+            )?)
         }
         _ => unreachable!(),
     };
 
-    (config, stake_pool)
+    Ok((config, rpc_client, stake_pool))
 }
-
-type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 
 ///                    quality          poor             cluster_skip_rate, too_many_poor_block_producers
 type ClassifyResult = (HashSet<Pubkey>, HashSet<Pubkey>, usize, bool);
@@ -708,9 +719,9 @@ fn classify_block_producers(
     )
 }
 
-fn main() -> Result<(), Box<dyn error::Error>> {
+fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
-    let (config, mut stake_pool) = get_config();
+    let (config, rpc_client, mut stake_pool) = get_config()?;
 
     let notifier = if config.dry_run {
         Notifier::new("DRYRUN")
@@ -721,13 +732,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     if !config.dry_run && notifier.is_empty() {
         return Err("A notifier must be active with --confirm".into());
     }
-
-    let rpc_client = RpcClient::new(config.json_rpc_url.clone());
-
-    // Sanity check that the RPC endpoint is healthy before performing too much work
-    rpc_client
-        .get_health()
-        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
     let epoch_info = rpc_client.get_epoch_info()?;
     info!("Epoch info: {:?}", epoch_info);
@@ -757,28 +761,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             .cloned()
             .collect::<Vec<_>>()
     };
-
-    let init_transactions = stake_pool.init(
-        &rpc_client,
-        config.authorized_staker.pubkey(),
-        &vote_account_info
-            .iter()
-            .map(|vai| ValidatorAddressPair {
-                identity: Pubkey::from_str(&vai.node_pubkey).unwrap(),
-                vote_address: Pubkey::from_str(&vai.vote_pubkey).unwrap(),
-            })
-            .collect::<Vec<_>>(),
-        &epoch_info,
-    )?;
-    if !rpc_client_utils::send_and_confirm_transactions(
-        &rpc_client,
-        config.dry_run,
-        init_transactions,
-        &config.authorized_staker,
-        &mut vec![],
-    )? {
-        return Err("Failed to initialize stake pool. Unable to continue".into());
-    }
 
     let cluster_nodes_with_old_version: HashSet<String> = match config.min_release_version {
         Some(ref min_release_version) => rpc_client
@@ -865,25 +847,24 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let mut desired_validator_stake = vec![];
     for RpcVoteAccountInfo {
         commission,
-        node_pubkey: node_pubkey_str,
+        node_pubkey: identity_str,
         root_slot,
-        vote_pubkey,
+        vote_pubkey: vote_address_str,
         ..
     } in &vote_account_info
     {
-        let node_pubkey = Pubkey::from_str(&node_pubkey_str).unwrap();
-        if !stake_pool.is_enrolled(&node_pubkey) {
+        let identity = Pubkey::from_str(&identity_str).unwrap();
+        if !stake_pool.is_enrolled(&identity) {
             continue;
         }
+        let vote_address = Pubkey::from_str(&vote_address_str).unwrap();
 
         let infrastructure_concentration_destake_memo = infrastructure_concentration
-            .get(&node_pubkey)
+            .get(&identity)
             .map(|concentration| {
-                config.infrastructure_concentration_affects.memo(
-                    &node_pubkey,
-                    *concentration,
-                    &config,
-                )
+                config
+                    .infrastructure_concentration_affects
+                    .memo(&identity, *concentration, &config)
             })
             .and_then(|affect| match affect {
                 InfrastructureConcentrationAffectKind::Destake(memo) => Some(memo),
@@ -898,17 +879,13 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         } else if *commission > config.max_commission {
             Some((
                 ValidatorStakeState::None,
-                format!(
-                    "⛔ `{}` {}% commission is too high",
-                    node_pubkey, commission,
-                ),
+                format!("⛔ `{}` {}% commission is too high", identity, commission,),
             ))
-        } else if !too_many_old_validators
-            && cluster_nodes_with_old_version.contains(node_pubkey_str)
+        } else if !too_many_old_validators && cluster_nodes_with_old_version.contains(identity_str)
         {
             Some((
                 ValidatorStakeState::None,
-                format!("🧮 `{}` is running an old software release", node_pubkey),
+                format!("🧮 `{}` is running an old software release", identity),
             ))
 
         // Destake the validator if it has been delinquent for longer than the grace period
@@ -919,21 +896,21 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         {
             Some((
                 ValidatorStakeState::None,
-                format!("🏖️ `{}` is delinquent", node_pubkey),
+                format!("🏖️ `{}` is delinquent", identity),
             ))
 
         // Validator is delinquent but less than the grace period.  Take no action
         } else if *root_slot < epoch_info.absolute_slot.saturating_sub(256) {
             None
-        } else if quality_block_producers.contains(&node_pubkey) {
+        } else if quality_block_producers.contains(&identity) {
             Some((
                 ValidatorStakeState::Bonus,
                 format!(
                     "🏅 `{}` was a quality block producer during epoch {}",
-                    node_pubkey, last_epoch,
+                    identity, last_epoch,
                 ),
             ))
-        } else if poor_block_producers.contains(&node_pubkey) {
+        } else if poor_block_producers.contains(&identity) {
             if too_many_poor_block_producers {
                 None
             } else {
@@ -941,60 +918,44 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                     ValidatorStakeState::Baseline,
                     format!(
                         "💔 `{}` was a poor block producer during epoch {}",
-                        node_pubkey, last_epoch,
+                        identity, last_epoch,
                     ),
                 ))
             }
         } else {
             Some((
                 ValidatorStakeState::Baseline,
-                format!("🥩 `{}` is current", node_pubkey),
+                format!("🥩 `{}` is current", identity),
             ))
         };
 
         debug!(
             "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - operation: {:?}",
-            node_pubkey, vote_pubkey, root_slot, operation
+            identity, vote_address, root_slot, operation
         );
         if let Some((stake_state, memo)) = operation {
             desired_validator_stake.push(ValidatorStake {
-                identity: node_pubkey,
+                identity,
+                vote_address,
                 stake_state,
                 memo,
             });
         }
     }
 
-    let transactions = stake_pool.apply(
-        &rpc_client,
-        config.authorized_staker.pubkey(),
-        &desired_validator_stake,
-    )?;
-
-    let ok = rpc_client_utils::send_and_confirm_transactions(
+    notifications.extend(stake_pool.apply(
         &rpc_client,
         config.dry_run,
-        transactions,
         &config.authorized_staker,
-        &mut notifications,
-    )?;
-
-    notifier.send(&format!(
-        "Baseline stake: {}, bonus stake: {}",
-        Sol(stake_pool.baseline_stake_amount()),
-        Sol(stake_pool.bonus_stake_amount())
-    ));
+        &desired_validator_stake,
+    )?);
 
     for notification in notifications {
-        warn!("{}", notification);
+        info!("notification: {}", notification);
         notifier.send(&notification);
     }
 
-    if !ok {
-        Err("One or more transactions failed to execute".into())
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]
