@@ -40,3 +40,6 @@ solana-vote-program = "1.6.5"
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
+
+[profile.dev]
+split-debuginfo = "unpacked"
