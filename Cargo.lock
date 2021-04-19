@@ -422,6 +422,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "476e9cd489f9e121e02ffa6014a8ef220ecb15c05ed23fc34cca13925dc283fb"
 
 [[package]]
+name = "bs58"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "771fe0050b883fcc3ea2359b1a96bcfbc090b7116eae7c3c512c7a083fdf23d3"
+
+[[package]]
 name = "bstr"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3623,7 +3629,7 @@ dependencies = [
  "Inflector",
  "base64 0.12.3",
  "bincode",
- "bs58",
+ "bs58 0.3.1",
  "bv",
  "lazy_static",
  "serde",
@@ -3764,7 +3770,7 @@ checksum = "9f40622f4f4a2aa485739be661f3eed7c3c8cc2d0e9aa7a2b2d83e8e8ed4275e"
 dependencies = [
  "base64 0.13.0",
  "bincode",
- "bs58",
+ "bs58 0.3.1",
  "clap",
  "indicatif",
  "jsonrpc-core",
@@ -3815,7 +3821,7 @@ dependencies = [
  "base64 0.12.3",
  "bincode",
  "blake3",
- "bs58",
+ "bs58 0.3.1",
  "bv",
  "byteorder",
  "chrono",
@@ -3954,7 +3960,7 @@ version = "1.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c59a0527921b3e66e9c8abda26f03e28c05e1ac462bfca6e7b84a4076fadc041"
 dependencies = [
- "bs58",
+ "bs58 0.3.1",
  "bv",
  "generic-array 0.14.4",
  "log 0.4.14",
@@ -4150,7 +4156,7 @@ dependencies = [
  "blake3",
  "borsh 0.8.2",
  "borsh-derive 0.8.2",
- "bs58",
+ "bs58 0.3.1",
  "bv",
  "curve25519-dalek 2.1.2",
  "hex",
@@ -4288,7 +4294,7 @@ checksum = "a998485451eaab80cdc4596a9391ff00a22512e5107b57152fb41999e87d8b61"
 dependencies = [
  "assert_matches",
  "bincode",
- "bs58",
+ "bs58 0.3.1",
  "bv",
  "byteorder",
  "chrono",
@@ -4331,7 +4337,7 @@ version = "1.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5649e54928a244aad80ee3ab817b6ac37bf7b3b1559fd72989d5978e308b616a"
 dependencies = [
- "bs58",
+ "bs58 0.3.1",
  "proc-macro2 1.0.24",
  "quote 1.0.9",
  "rustversion",
@@ -4358,7 +4364,7 @@ name = "solana-stake-o-matic"
 version = "0.0.0"
 dependencies = [
  "bincode",
- "bs58",
+ "bs58 0.4.0",
  "clap",
  "indicatif",
  "log 0.4.14",
@@ -4440,7 +4446,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec64e697c862ee91326eb359be40962e545e5ea7a52a1a35765d0ea60c26d30b"
 dependencies = [
  "bincode",
- "bs58",
+ "bs58 0.3.1",
  "prost",
  "serde",
  "serde_derive",
@@ -4493,7 +4499,7 @@ dependencies = [
  "Inflector",
  "base64 0.12.3",
  "bincode",
- "bs58",
+ "bs58 0.3.1",
  "lazy_static",
  "serde",
  "serde_derive",
