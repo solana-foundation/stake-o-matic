@@ -9,11 +9,13 @@ use {
         rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
     },
     solana_sdk::{
+        clock::{Epoch, Slot},
         native_token::*,
+        pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
     },
-    std::{collections::HashMap, error, thread::sleep, time::Duration},
+    std::{collections::HashMap, error, str::FromStr, thread::sleep, time::Duration},
 };
 
 pub fn retry_rpc_operation<T, F>(mut retries: usize, op: F) -> client_error::Result<T>
@@ -211,9 +213,22 @@ pub fn send_and_confirm_transactions(
     Ok(ok)
 }
 
+pub struct VoteAccountInfo {
+    pub identity: Pubkey,
+    pub vote_address: Pubkey,
+    pub commission: u8,
+
+    /// Current root slot for this vote account (0 if not root slot exists)
+    pub root_slot: Slot,
+
+    /// Credits earned in the epoch
+    pub epoch_credits: u64,
+}
+
 pub fn get_vote_account_info(
     rpc_client: &RpcClient,
-) -> Result<Vec<RpcVoteAccountInfo>, Box<dyn error::Error>> {
+    epoch: Epoch,
+) -> Result<Vec<VoteAccountInfo>, Box<dyn error::Error>> {
     let RpcVoteAccountStatus {
         current,
         delinquent,
@@ -235,8 +250,35 @@ pub fn get_vote_account_info(
 
     Ok(latest_vote_account_info
         .values()
-        .cloned()
-        .collect::<Vec<_>>())
+        .map(
+            |RpcVoteAccountInfo {
+                 commission,
+                 node_pubkey,
+                 root_slot,
+                 vote_pubkey,
+                 epoch_credits,
+                 ..
+             }| {
+                let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
+                    epoch_credits.iter().find(|ec| ec.0 == epoch)
+                {
+                    credits.saturating_sub(*prev_credits)
+                } else {
+                    0
+                };
+                let identity = Pubkey::from_str(&node_pubkey).unwrap();
+                let vote_address = Pubkey::from_str(&vote_pubkey).unwrap();
+
+                VoteAccountInfo {
+                    identity,
+                    vote_address,
+                    commission: *commission,
+                    root_slot: *root_slot,
+                    epoch_credits,
+                }
+            },
+        )
+        .collect())
 }
 
 #[cfg(test)]

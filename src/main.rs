@@ -22,7 +22,7 @@ use {
             is_amount, is_keypair, is_pubkey_or_keypair, is_url, is_valid_percentage,
         },
     },
-    solana_client::{rpc_client::RpcClient, rpc_response::RpcVoteAccountInfo},
+    solana_client::rpc_client::RpcClient,
     solana_notifier::Notifier,
     solana_sdk::{
         clock::{Epoch, Slot},
@@ -58,18 +58,16 @@ enum InfrastructureConcentrationAffects {
 impl InfrastructureConcentrationAffects {
     fn destake_memo(validator_id: &Pubkey, concentration: f64, config: &Config) -> String {
         format!(
-            "🏟️ `{}` infrastructure concentration {:.1}% is too high. Max concentration is {:.0}%. Removed stake",
-            validator_id,
-            concentration,
-            config.max_infrastructure_concentration,
+            "🏟️ `{}` infrastructure concentration {:.1}% is too high. \
+            Max concentration is {:.0}%. Removed stake",
+            validator_id, concentration, config.max_infrastructure_concentration,
         )
     }
     fn warning_memo(validator_id: &Pubkey, concentration: f64, config: &Config) -> String {
         format!(
-            "🗺  `{}` infrastructure concentration {:.1}% is too high. Max concentration is {:.0}%. No stake removed. Consider finding a new data center",
-            validator_id,
-            concentration,
-            config.max_infrastructure_concentration,
+            "🗺  `{}` infrastructure concentration {:.1}% is too high. \
+            Max concentration is {:.0}%. No stake removed. Consider finding a new data center",
+            validator_id, concentration, config.max_infrastructure_concentration,
         )
     }
     pub fn memo(
@@ -779,8 +777,9 @@ fn main() -> BoxResult<()> {
 
     let epoch_info = rpc_client.get_epoch_info()?;
     info!("Epoch info: {:?}", epoch_info);
+    let last_epoch = epoch_info.epoch - 1;
 
-    let vote_account_info = rpc_client_utils::get_vote_account_info(&rpc_client)?;
+    let vote_account_info = rpc_client_utils::get_vote_account_info(&rpc_client, last_epoch)?;
 
     let cluster_nodes_with_old_version: HashSet<String> = match config.min_release_version {
         Some(ref min_release_version) => rpc_client
@@ -811,7 +810,6 @@ fn main() -> BoxResult<()> {
         );
     }
 
-    let last_epoch = epoch_info.epoch - 1;
     let mut notifications = vec![];
 
     let (
@@ -865,19 +863,17 @@ fn main() -> BoxResult<()> {
         .collect::<HashMap<_, _>>();
 
     let mut desired_validator_stake = vec![];
-    for RpcVoteAccountInfo {
+    for rpc_client_utils::VoteAccountInfo {
+        identity,
+        vote_address,
         commission,
-        node_pubkey: identity_str,
         root_slot,
-        vote_pubkey: vote_address_str,
-        ..
-    } in &vote_account_info
+        epoch_credits,
+    } in vote_account_info
     {
-        let identity = Pubkey::from_str(&identity_str).unwrap();
         if !stake_pool.is_enrolled(&identity) {
             continue;
         }
-        let vote_address = Pubkey::from_str(&vote_address_str).unwrap();
 
         let infrastructure_concentration_destake_memo = infrastructure_concentration
             .get(&identity)
@@ -896,12 +892,13 @@ fn main() -> BoxResult<()> {
 
         let operation = if let Some(memo) = infrastructure_concentration_destake_memo {
             Some((ValidatorStakeState::None, memo))
-        } else if *commission > config.max_commission {
+        } else if commission > config.max_commission {
             Some((
                 ValidatorStakeState::None,
                 format!("⛔ `{}` {}% commission is too high", identity, commission,),
             ))
-        } else if !too_many_old_validators && cluster_nodes_with_old_version.contains(identity_str)
+        } else if !too_many_old_validators
+            && cluster_nodes_with_old_version.contains(&identity.to_string())
         {
             Some((
                 ValidatorStakeState::None,
@@ -909,7 +906,7 @@ fn main() -> BoxResult<()> {
             ))
 
         // Destake the validator if it has been delinquent for longer than the grace period
-        } else if *root_slot
+        } else if root_slot
             < epoch_info
                 .absolute_slot
                 .saturating_sub(config.delinquent_grace_slot_distance)
@@ -920,7 +917,7 @@ fn main() -> BoxResult<()> {
             ))
 
         // Validator is delinquent but less than the grace period.  Take no action
-        } else if *root_slot < epoch_info.absolute_slot.saturating_sub(256) {
+        } else if root_slot < epoch_info.absolute_slot.saturating_sub(256) {
             None
         } else if quality_block_producers.contains(&identity) {
             Some((
@@ -950,8 +947,8 @@ fn main() -> BoxResult<()> {
         };
 
         debug!(
-            "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - operation: {:?}",
-            identity, vote_address, root_slot, operation
+            "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - epoch credits: {}\n - operation: {:?}",
+            identity, vote_address, root_slot, epoch_credits, operation
         );
         if let Some((stake_state, memo)) = operation {
             desired_validator_stake.push(ValidatorStake {
