@@ -157,6 +157,12 @@ impl LegacyStakePool {
                         )
                     })?.state
             } else {
+                let memo = format!(
+                    "Creating baseline stake account for validator {} ({})",
+                    identity, baseline_stake_address
+                );
+                debug!("Adding transaction: {}", memo);
+
                 source_stake_lamports_required += self.baseline_stake_amount;
                 init_transactions.push((
                     Transaction::new_unsigned(Message::new(
@@ -170,10 +176,7 @@ impl LegacyStakePool {
                         ),
                         Some(&authorized_staker),
                     )),
-                    format!(
-                        "Creating baseline stake account for validator {} ({})",
-                        identity, baseline_stake_address
-                    ),
+                    memo,
                 ));
                 StakeActivationState::Inactive
             };
@@ -193,6 +196,11 @@ impl LegacyStakePool {
                     })?
                     .state
             } else {
+                let memo = format!(
+                    "Creating bonus stake account for validator {} ({})",
+                    identity, bonus_stake_address
+                );
+                debug!("Adding transaction: {}", memo);
                 source_stake_lamports_required += self.bonus_stake_amount;
                 init_transactions.push((
                     Transaction::new_unsigned(Message::new(
@@ -206,10 +214,7 @@ impl LegacyStakePool {
                         ),
                         Some(&authorized_staker),
                     )),
-                    format!(
-                        "Creating bonus stake account for validator {} ({})",
-                        identity, bonus_stake_address
-                    ),
+                    memo,
                 ));
                 StakeActivationState::Inactive
             };
