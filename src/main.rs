@@ -799,27 +799,31 @@ fn main() -> BoxResult<()> {
 
     let vote_account_info = rpc_client_utils::get_vote_account_info(&rpc_client, last_epoch)?;
 
-    let cluster_nodes_with_old_version: HashSet<String> = match config.min_release_version {
-        Some(ref min_release_version) => rpc_client
-            .get_cluster_nodes()?
-            .into_iter()
-            .filter_map(|rpc_contact_info| {
-                if let Ok(pubkey) = Pubkey::from_str(&rpc_contact_info.pubkey) {
-                    if stake_pool.is_enrolled(&pubkey) {
-                        if let Some(ref version) = rpc_contact_info.version {
-                            if let Ok(semver) = semver::Version::parse(version) {
-                                if semver < *min_release_version {
-                                    return Some(rpc_contact_info.pubkey);
+    let (cluster_nodes_with_old_version, min_release_version): (HashMap<String, _>, _) =
+        match config.min_release_version {
+            Some(ref min_release_version) => (
+                rpc_client
+                    .get_cluster_nodes()?
+                    .into_iter()
+                    .filter_map(|rpc_contact_info| {
+                        if let Ok(pubkey) = Pubkey::from_str(&rpc_contact_info.pubkey) {
+                            if stake_pool.is_enrolled(&pubkey) {
+                                if let Some(ref version) = rpc_contact_info.version {
+                                    if let Ok(semver) = semver::Version::parse(version) {
+                                        if semver < *min_release_version {
+                                            return Some((rpc_contact_info.pubkey, semver));
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
-                None
-            })
-            .collect(),
-        None => HashSet::default(),
-    };
+                        None
+                    })
+                    .collect(),
+                min_release_version.to_string(),
+            ),
+            None => (HashMap::default(), "".to_string()),
+        };
 
     if let Some(ref min_release_version) = config.min_release_version {
         info!(
@@ -924,22 +928,31 @@ fn main() -> BoxResult<()> {
         } else if commission > config.max_commission {
             Some((
                 ValidatorStakeState::None,
-                format!("⛔ `{}` {}% commission is too high", identity, commission,),
+                format!(
+                    "⛔ `{}` {}% commission is too high (max: {}%)",
+                    identity, commission, config.max_commission
+                ),
             ))
         } else if epoch_credits < min_epoch_credits {
             Some((
                 ValidatorStakeState::None,
                 format!(
-                    "💔 `{}` was a poor voter during epoch {}",
-                    identity, last_epoch,
+                    "💔 `{}` was a poor voter during epoch {} ({} credits earned; {} required)",
+                    identity, last_epoch, epoch_credits, min_epoch_credits
                 ),
             ))
         } else if !too_many_old_validators
-            && cluster_nodes_with_old_version.contains(&identity.to_string())
+            && cluster_nodes_with_old_version.contains_key(&identity.to_string())
         {
+            let node_version = cluster_nodes_with_old_version
+                .get(&identity.to_string())
+                .unwrap();
             Some((
                 ValidatorStakeState::None,
-                format!("🧮 `{}` is running an old software release", identity),
+                format!(
+                    "🧮 `{}` is running an old software release {} (minimum: {})",
+                    identity, node_version, min_release_version
+                ),
             ))
 
         // Destake the validator if it has been delinquent for longer than the grace period
@@ -950,7 +963,10 @@ fn main() -> BoxResult<()> {
         {
             Some((
                 ValidatorStakeState::None,
-                format!("🏖️ `{}` is delinquent", identity),
+                format!(
+                    "🏖️ `{}` has been delinquent for more than {} slots",
+                    identity, config.delinquent_grace_slot_distance
+                ),
             ))
 
         // Validator is delinquent but less than the grace period.  Take no action
