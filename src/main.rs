@@ -205,6 +205,10 @@ struct Config {
     use_cluster_average_skip_rate: bool,
 
     bad_cluster_average_skip_rate: usize,
+
+    /// Destake if the validator's vote credits for the latest full epoch are less than this percentage
+    /// of the cluster average
+    min_epoch_credit_percentage_of_average: usize,
 }
 
 impl Config {
@@ -226,6 +230,7 @@ impl Config {
             infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
             use_cluster_average_skip_rate: false,
             bad_cluster_average_skip_rate: 50,
+            min_epoch_credit_percentage_of_average: 50,
         }
     }
 }
@@ -356,6 +361,16 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 .help("Do not add or remove bonus stake from any
                        non-delinquent validators if at least this percentage of \
                        all validators are poor block producers")
+        )
+        .arg(
+            Arg::with_name("min_epoch_credit_percentage_of_average")
+                .long("min-epoch-credit-percentage-of-average")
+                .value_name("PERCENTAGE")
+                .takes_value(true)
+                .default_value("50")
+                .validator(is_valid_percentage)
+                .help("Validator vote credits for the latest full epoch must \
+                       be at least this percentage of the cluster average vote credits")
         )
         .arg(
             Arg::with_name("max_commission")
@@ -537,6 +552,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let cluster = value_t!(matches, "cluster", String).unwrap_or_else(|_| "unknown".into());
     let quality_block_producer_percentage =
         value_t_or_exit!(matches, "quality_block_producer_percentage", usize);
+    let min_epoch_credit_percentage_of_average =
+        value_t_or_exit!(matches, "min_epoch_credit_percentage_of_average", usize);
     let max_commission = value_t_or_exit!(matches, "max_commission", u8);
     let max_poor_block_producer_percentage =
         value_t_or_exit!(matches, "max_poor_block_producer_percentage", usize);
@@ -589,6 +606,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         infrastructure_concentration_affects,
         use_cluster_average_skip_rate,
         bad_cluster_average_skip_rate,
+        min_epoch_credit_percentage_of_average,
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
@@ -862,6 +880,17 @@ fn main() -> BoxResult<()> {
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
+    let avg_epoch_credits = vote_account_info
+        .iter()
+        .map(|vai| vai.epoch_credits)
+        .sum::<u64>()
+        / vote_account_info.len() as u64;
+    let min_epoch_credits =
+        avg_epoch_credits * (config.min_epoch_credit_percentage_of_average as u64) / 100;
+
+    info!("Cluster average epoch credits: {}", avg_epoch_credits);
+    info!("Minimum required epoch credits: {}", min_epoch_credits);
+
     let mut desired_validator_stake = vec![];
     for rpc_client_utils::VoteAccountInfo {
         identity,
@@ -896,6 +925,14 @@ fn main() -> BoxResult<()> {
             Some((
                 ValidatorStakeState::None,
                 format!("⛔ `{}` {}% commission is too high", identity, commission,),
+            ))
+        } else if epoch_credits < min_epoch_credits {
+            Some((
+                ValidatorStakeState::None,
+                format!(
+                    "💔 `{}` was a poor voter during epoch {}",
+                    identity, last_epoch,
+                ),
             ))
         } else if !too_many_old_validators
             && cluster_nodes_with_old_version.contains(&identity.to_string())
