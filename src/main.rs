@@ -9,7 +9,7 @@ mod validator_list;
 mod validators_app;
 
 use {
-    crate::generic_stake_pool::*,
+    crate::{generic_stake_pool::*, rpc_client_utils::*},
     clap::{
         crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, ArgMatches,
         SubCommand,
@@ -183,9 +183,13 @@ struct Config {
     /// `max_old_release_version_percentage` limit
     min_release_version: Option<semver::Version>,
 
-    /// Don't ever unstake more than this percentage of the cluster at one time for running an
+    /// Do not unstake more than this percentage of the cluster at one time for running an
     /// older software version
     max_old_release_version_percentage: usize,
+
+    /// Do not unstake more than this percentage of the cluster at one time for being poor
+    /// voters
+    max_poor_voter_percentage: usize,
 
     /// Base path of confirmed block cache
     confirmed_block_cache_path: PathBuf,
@@ -225,6 +229,7 @@ impl Config {
             max_commission: 100,
             min_release_version: None,
             max_old_release_version_percentage: 10,
+            max_poor_voter_percentage: 10,
             confirmed_block_cache_path: default_confirmed_block_cache_path(),
             max_infrastructure_concentration: 100.0,
             infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
@@ -391,8 +396,19 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                        a release version older than this one")
         )
         .arg(
-            Arg::with_name("max_old_release_version_percentage")
-                .long("max-old-release-version-percentage")
+            Arg::with_name("max_poor_voter_percentage")
+                .long("max-poor-voter-percentage")
+                .value_name("PERCENTAGE")
+                .takes_value(true)
+                .default_value("10")
+                .validator(is_valid_percentage)
+                .help("Do not remove stake from validators poor voting history \
+                       if more than this percentage of all validators have a \
+                       poor voting history")
+        )
+        .arg(
+            Arg::with_name("max_poor_block_producer_percentage")
+                .long("max-poor-block-producer-percentage")
                 .value_name("PERCENTAGE")
                 .takes_value(true)
                 .default_value("10")
@@ -555,6 +571,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let min_epoch_credit_percentage_of_average =
         value_t_or_exit!(matches, "min_epoch_credit_percentage_of_average", usize);
     let max_commission = value_t_or_exit!(matches, "max_commission", u8);
+    let max_poor_voter_percentage = value_t_or_exit!(matches, "max_poor_voter_percentage", usize);
     let max_poor_block_producer_percentage =
         value_t_or_exit!(matches, "max_poor_block_producer_percentage", usize);
     let max_old_release_version_percentage =
@@ -601,6 +618,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         max_poor_block_producer_percentage,
         min_release_version,
         max_old_release_version_percentage,
+        max_poor_voter_percentage,
         confirmed_block_cache_path,
         max_infrastructure_concentration,
         infrastructure_concentration_affects,
@@ -741,6 +759,45 @@ fn classify_producers(
     ))
 }
 
+fn classify_poor_voters(
+    config: &Config,
+    vote_account_info: &[VoteAccountInfo],
+) -> (HashSet<Pubkey>, u64, bool) {
+    let avg_epoch_credits = vote_account_info
+        .iter()
+        .map(|vai| vai.epoch_credits)
+        .sum::<u64>()
+        / vote_account_info.len() as u64;
+
+    let min_epoch_credits =
+        avg_epoch_credits * (config.min_epoch_credit_percentage_of_average as u64) / 100;
+
+    let poor_voters = vote_account_info
+        .iter()
+        .filter_map(|vai| {
+            if vai.epoch_credits < min_epoch_credits {
+                Some(vai.identity)
+            } else {
+                None
+            }
+        })
+        .collect::<HashSet<_>>();
+
+    let max_poor_voters = vote_account_info.len() * config.max_poor_voter_percentage / 100;
+    let too_many_poor_voters = poor_voters.len() > max_poor_voters;
+
+    info!("Cluster average epoch credits: {}", avg_epoch_credits);
+    info!("Minimum required epoch credits: {}", min_epoch_credits);
+    debug!(
+        "poor_voters: {}, max poor_voters: {}",
+        poor_voters.len(),
+        max_poor_voters
+    );
+    trace!("poor_voters: {:?}", poor_voters);
+
+    (poor_voters, min_epoch_credits, too_many_poor_voters)
+}
+
 /// Split validators into quality/poor lists based on their block production over the given `epoch`
 fn classify_block_producers(
     rpc_client: &RpcClient,
@@ -797,7 +854,7 @@ fn main() -> BoxResult<()> {
     info!("Epoch info: {:?}", epoch_info);
     let last_epoch = epoch_info.epoch - 1;
 
-    let vote_account_info = rpc_client_utils::get_vote_account_info(&rpc_client, last_epoch)?;
+    let vote_account_info = get_vote_account_info(&rpc_client, last_epoch)?;
 
     let (cluster_nodes_with_old_version, min_release_version): (HashMap<String, _>, _) =
         match config.min_release_version {
@@ -884,19 +941,18 @@ fn main() -> BoxResult<()> {
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let avg_epoch_credits = vote_account_info
-        .iter()
-        .map(|vai| vai.epoch_credits)
-        .sum::<u64>()
-        / vote_account_info.len() as u64;
-    let min_epoch_credits =
-        avg_epoch_credits * (config.min_epoch_credit_percentage_of_average as u64) / 100;
+    let (poor_voters, min_epoch_credits, too_many_poor_voters) =
+        classify_poor_voters(&config, &vote_account_info);
 
-    info!("Cluster average epoch credits: {}", avg_epoch_credits);
-    info!("Minimum required epoch credits: {}", min_epoch_credits);
+    if too_many_poor_voters {
+        notifications.push(format!(
+            "Over {}% of validators classified as poor voters",
+            config.max_poor_voter_percentage
+        ));
+    }
 
     let mut desired_validator_stake = vec![];
-    for rpc_client_utils::VoteAccountInfo {
+    for VoteAccountInfo {
         identity,
         vote_address,
         commission,
@@ -933,7 +989,7 @@ fn main() -> BoxResult<()> {
                     identity, commission, config.max_commission
                 ),
             ))
-        } else if epoch_credits < min_epoch_credits {
+        } else if !too_many_poor_voters && poor_voters.contains(&identity) {
             Some((
                 ValidatorStakeState::None,
                 format!(
