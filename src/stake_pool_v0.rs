@@ -359,8 +359,10 @@ fn merge_transient_stake_accounts(
             match transient_stake_activation.state {
                 StakeActivationState::Activating | StakeActivationState::Deactivating => {
                     warn!(
-                        "{} busy due to transient stake activation/deactivation",
-                        identity
+                        "Validator {} busy due to transient stake activation/deactivation of {}: {:?}",
+                        identity,
+                        transient_stake_address,
+                        transient_stake_activation,
                     );
                     busy_validators.insert(*identity);
                 }
@@ -499,7 +501,10 @@ fn create_validator_stake_accounts(
                 })?;
 
             if stake_activation.state != StakeActivationState::Active {
-                warn!("{} busy due to {:?}", identity, stake_activation);
+                warn!(
+                    "Validator {} busy due to stake activation of {}: {:?}",
+                    identity, stake_address, stake_activation
+                );
                 busy_validators.insert(*identity);
             }
         } else {
@@ -535,7 +540,7 @@ fn create_validator_stake_accounts(
                     ),
                 ));
             }
-            warn!("{} busy due to no stake account", identity);
+            warn!("Validator {} busy due to no stake account", identity);
             busy_validators.insert(*identity);
         }
     }
