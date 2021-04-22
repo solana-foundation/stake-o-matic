@@ -25,7 +25,7 @@ use {
     solana_client::rpc_client::RpcClient,
     solana_notifier::Notifier,
     solana_sdk::{
-        clock::{Epoch, Slot},
+        clock::{Epoch, Slot, DEFAULT_SLOTS_PER_EPOCH},
         native_token::*,
         pubkey::Pubkey,
         signature::Keypair,
@@ -224,7 +224,7 @@ impl Config {
             authorized_staker: Keypair::new(),
             dry_run: true,
             quality_block_producer_percentage: 15,
-            delinquent_grace_slot_distance: 21_600,
+            delinquent_grace_slot_distance: DEFAULT_SLOTS_PER_EPOCH / 2,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
             min_release_version: None,
@@ -612,7 +612,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         cluster,
         authorized_staker,
         dry_run,
-        delinquent_grace_slot_distance: 21600, // ~24 hours worth of slots at 2.5 slots per second
+        delinquent_grace_slot_distance: DEFAULT_SLOTS_PER_EPOCH / 2,
         quality_block_producer_percentage,
         max_commission,
         max_poor_block_producer_percentage,
