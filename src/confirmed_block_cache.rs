@@ -123,7 +123,7 @@ impl ConfirmedBlockCache {
         })
     }
 
-    pub fn open<P: AsRef<Path>, U: AsRef<str>>(path: P, rpc_url: U) -> io::Result<Self> {
+    pub fn new<P: AsRef<Path>, U: AsRef<str>>(path: P, rpc_url: U) -> io::Result<Self> {
         let path = path.as_ref();
         let config_path = path.join(CONFIG_FILENAME);
         let rpc_url = rpc_url.as_ref();

@@ -798,6 +798,27 @@ fn classify_poor_voters(
     (poor_voters, min_epoch_credits, too_many_poor_voters)
 }
 
+fn get_confirmed_blocks(
+    rpc_client: &RpcClient,
+    config: &Config,
+    start_slot: Slot,
+    end_slot: Slot,
+) -> BoxResult<HashSet<Slot>> {
+    let first_available_block = rpc_client.get_first_available_block()?;
+    if first_available_block >= start_slot {
+        return Err(format!(
+            "First available block is newer than the start slot: {} > {}",
+            first_available_block, start_slot,
+        )
+        .into());
+    }
+
+    let cache_path = config.confirmed_block_cache_path.join(&config.cluster);
+    let cbc = ConfirmedBlockCache::new(cache_path, &config.json_rpc_url).unwrap();
+
+    Ok(cbc.query(start_slot, end_slot)?.into_iter().collect())
+}
+
 /// Split validators into quality/poor lists based on their block production over the given `epoch`
 fn classify_block_producers(
     rpc_client: &RpcClient,
@@ -808,25 +829,12 @@ fn classify_block_producers(
     let first_slot_in_epoch = epoch_schedule.get_first_slot_in_epoch(epoch);
     let last_slot_in_epoch = epoch_schedule.get_last_slot_in_epoch(epoch);
 
-    let first_available_block = rpc_client.get_first_available_block()?;
-    if first_available_block >= first_slot_in_epoch {
-        return Err(format!(
-            "First available block is newer than the start of epoch {}: {} > {}",
-            epoch, first_available_block, first_slot_in_epoch,
-        )
-        .into());
-    }
+    let confirmed_blocks =
+        get_confirmed_blocks(rpc_client, config, first_slot_in_epoch, last_slot_in_epoch)?;
 
     let leader_schedule = rpc_client
         .get_leader_schedule(Some(first_slot_in_epoch))?
         .unwrap();
-
-    let cache_path = config.confirmed_block_cache_path.join(&config.cluster);
-    let cbc = ConfirmedBlockCache::open(cache_path, &config.json_rpc_url).unwrap();
-    let confirmed_blocks = cbc
-        .query(first_slot_in_epoch, last_slot_in_epoch)?
-        .into_iter()
-        .collect::<HashSet<_>>();
 
     classify_producers(
         first_slot_in_epoch,
