@@ -124,7 +124,7 @@ impl GenericStakePool for StakePool {
         let (all_stake_addresses, all_stake_total_amount) =
             get_all_stake(rpc_client, authorized_staker.pubkey())?;
 
-        // Merge orphaned stake into the reserve
+        info!("Merge orphaned stake into the reserve");
         merge_orphaned_stake_accounts(
             rpc_client,
             authorized_staker,
@@ -132,7 +132,7 @@ impl GenericStakePool for StakePool {
             self.reserve_stake_address,
         )?;
 
-        // Merge transient stake back into either the reserve or validator stake
+        info!("Merge transient stake back into either the reserve or validator stake");
         let mut busy_validators = HashSet::new();
         merge_transient_stake_accounts(
             rpc_client,
@@ -142,7 +142,7 @@ impl GenericStakePool for StakePool {
             &mut busy_validators,
         )?;
 
-        // Create validator stake accounts if needed
+        info!("Create validator stake accounts if needed");
         create_validator_stake_accounts(
             rpc_client,
             authorized_staker,
