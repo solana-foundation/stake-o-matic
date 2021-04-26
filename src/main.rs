@@ -25,10 +25,14 @@ use {
     solana_client::rpc_client::RpcClient,
     solana_notifier::Notifier,
     solana_sdk::{
+        account::from_account,
         clock::{Epoch, Slot, DEFAULT_SLOTS_PER_EPOCH},
+        commitment_config::CommitmentConfig,
         native_token::*,
         pubkey::Pubkey,
         signature::Keypair,
+        slot_history::{self, SlotHistory},
+        sysvar,
     },
     std::{
         collections::{HashMap, HashSet},
@@ -813,10 +817,30 @@ fn get_confirmed_blocks(
         .into());
     }
 
-    let cache_path = config.confirmed_block_cache_path.join(&config.cluster);
-    let cbc = ConfirmedBlockCache::new(cache_path, &config.json_rpc_url).unwrap();
+    info!(
+        "loading slot history. slot range is [{},{}]",
+        start_slot, end_slot
+    );
+    let slot_history_account = rpc_client
+        .get_account_with_commitment(&sysvar::slot_history::id(), CommitmentConfig::finalized())?
+        .value
+        .unwrap();
 
-    Ok(cbc.query(start_slot, end_slot)?.into_iter().collect())
+    let slot_history: SlotHistory =
+        from_account(&slot_history_account).ok_or("Failed to deserialize slot history")?;
+
+    if start_slot >= slot_history.oldest() && end_slot <= slot_history.newest() {
+        info!("slot range within the SlotHistory sysvar");
+        Ok((start_slot..=end_slot)
+            .filter(|slot| slot_history.check(*slot) == slot_history::Check::Found)
+            .collect())
+    } else {
+        info!("slot range is not within the SlotHistory sysvar, using slower path");
+        let cache_path = config.confirmed_block_cache_path.join(&config.cluster);
+        let cbc = ConfirmedBlockCache::new(cache_path, &config.json_rpc_url).unwrap();
+
+        Ok(cbc.query(start_slot, end_slot)?.into_iter().collect())
+    }
 }
 
 /// Split validators into quality/poor lists based on their block production over the given `epoch`
@@ -833,7 +857,10 @@ fn classify_block_producers(
         get_confirmed_blocks(rpc_client, config, first_slot_in_epoch, last_slot_in_epoch)?;
 
     let leader_schedule = rpc_client
-        .get_leader_schedule(Some(first_slot_in_epoch))?
+        .get_leader_schedule_with_commitment(
+            Some(first_slot_in_epoch),
+            CommitmentConfig::finalized(),
+        )?
         .unwrap();
 
     classify_producers(
