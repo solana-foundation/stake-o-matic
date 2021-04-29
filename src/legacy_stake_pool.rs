@@ -61,7 +61,10 @@ impl GenericStakePool for LegacyStakePool {
             return Err("Failed to initialize stake pool. Unable to continue".into());
         }
 
-        let mut notifications = vec![];
+        let mut notifications = vec![
+            format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
+            format!("Bonus stake amount: {}", Sol(self.bonus_stake_amount)),
+        ];
         let ok = send_and_confirm_transactions(
             rpc_client,
             dry_run,

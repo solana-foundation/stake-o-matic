@@ -188,7 +188,11 @@ impl GenericStakePool for StakePool {
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
-        let notifications = distribute_validator_stake(
+        let mut notifications = vec![
+            format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
+            format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
+        ];
+        notifications.extend(distribute_validator_stake(
             rpc_client,
             authorized_staker,
             desired_validator_stake
@@ -198,7 +202,7 @@ impl GenericStakePool for StakePool {
             self.reserve_stake_address,
             self.baseline_stake_amount,
             bonus_stake_amount,
-        )?;
+        )?);
         Ok(notifications)
     }
 }
