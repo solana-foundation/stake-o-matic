@@ -676,8 +676,18 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     Ok((config, rpc_client, stake_pool))
 }
 
-///                    quality          poor             cluster_skip_rate, too_many_poor_block_producers
-type ClassifyResult = (HashSet<Pubkey>, HashSet<Pubkey>, usize, bool);
+type ClassifyResult = (
+    // quality
+    HashSet<Pubkey>,
+    // poor
+    HashSet<Pubkey>,
+    // classification reason
+    HashMap<Pubkey, String>,
+    // cluster_skip_rate
+    usize,
+    // too_many_poor_block_producers
+    bool,
+);
 
 fn classify_producers(
     first_slot_in_epoch: Slot,
@@ -688,6 +698,7 @@ fn classify_producers(
     let mut poor_block_producers = HashSet::new();
     let mut quality_block_producers = HashSet::new();
     let mut blocks_and_slots = HashMap::new();
+    let mut reason_msg = HashMap::new();
 
     let mut total_blocks = 0;
     let mut total_slots = 0;
@@ -718,18 +729,19 @@ fn classify_producers(
         } else {
             0
         };
+
+        let msg = format!(
+            "{} blocks in {} slots, {:.2}% skip rate",
+            blocks, slots, skip_rate
+        );
+        trace!("Validator {} produced {}", validator_identity, msg);
+        reason_msg.insert(validator_identity, msg);
+
         if skip_rate.saturating_sub(config.quality_block_producer_percentage) > skip_rate_floor {
             poor_block_producers.insert(validator_identity);
         } else {
             quality_block_producers.insert(validator_identity);
         }
-        trace!(
-            "Validator {} produced {} blocks in {} slots skip_rate: {}",
-            validator_identity,
-            blocks,
-            slots,
-            skip_rate,
-        );
     }
 
     let poor_block_producer_percentage = poor_block_producers.len() * 100
@@ -750,6 +762,7 @@ fn classify_producers(
     Ok((
         quality_block_producers,
         poor_block_producers,
+        reason_msg,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
     ))
@@ -921,6 +934,7 @@ fn main() -> BoxResult<()> {
     let (
         quality_block_producers,
         poor_block_producers,
+        block_producer_classification_reason,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
     ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
@@ -991,6 +1005,11 @@ fn main() -> BoxResult<()> {
             continue;
         }
 
+        let block_producer_classification_reason_msg = block_producer_classification_reason
+            .get(&identity)
+            .cloned()
+            .unwrap_or_default();
+
         let infrastructure_concentration_destake_memo = infrastructure_concentration
             .get(&identity)
             .map(|concentration| {
@@ -1041,8 +1060,8 @@ fn main() -> BoxResult<()> {
             Some((
                 ValidatorStakeState::Bonus,
                 format!(
-                    "🏅 `{}` was a quality block producer during epoch {}",
-                    identity, last_epoch,
+                    "🏅 `{}` was a quality block producer during epoch {} ({})",
+                    identity, last_epoch, block_producer_classification_reason_msg
                 ),
             ))
         } else if poor_block_producers.contains(&identity) {
@@ -1052,8 +1071,8 @@ fn main() -> BoxResult<()> {
                 Some((
                     ValidatorStakeState::Baseline,
                     format!(
-                        "💔 `{}` was a poor block producer during epoch {}",
-                        identity, last_epoch,
+                        "💔 `{}` was a poor block producer during epoch {} ({})",
+                        identity, last_epoch, block_producer_classification_reason_msg
                     ),
                 ))
             }
@@ -1124,7 +1143,7 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _cluster_average, too_many_poor_block_producers) =
+        let (quality, poor, _reason_msg, _cluster_average, too_many_poor_block_producers) =
             classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
         assert!(quality.contains(&l1));
         assert!(quality.contains(&l5));
@@ -1155,7 +1174,7 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _cluster_average, too_many_poor_block_producers) =
+        let (quality, poor, _reason_msg, _cluster_average, too_many_poor_block_producers) =
             classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
         assert!(quality.is_empty());
         assert_eq!(poor.len(), 5);
@@ -1183,7 +1202,7 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _cluster_average, too_many_poor_block_producers) =
+        let (quality, poor, _reason_msg, _cluster_average, too_many_poor_block_producers) =
             classify_producers(0, dbg!(confirmed_blocks), leader_schedule, &config).unwrap();
         assert!(poor.is_empty());
         assert_eq!(quality.len(), 5);
