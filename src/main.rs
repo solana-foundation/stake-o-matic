@@ -749,7 +749,7 @@ fn classify_producers(
 fn classify_poor_voters(
     config: &Config,
     vote_account_info: &[VoteAccountInfo],
-) -> (HashSet<Pubkey>, u64, bool) {
+) -> (HashSet<Pubkey>, u64, u64, bool) {
     let avg_epoch_credits = vote_account_info
         .iter()
         .map(|vai| vai.epoch_credits)
@@ -782,7 +782,12 @@ fn classify_poor_voters(
     );
     trace!("poor_voters: {:?}", poor_voters);
 
-    (poor_voters, min_epoch_credits, too_many_poor_voters)
+    (
+        poor_voters,
+        min_epoch_credits,
+        avg_epoch_credits,
+        too_many_poor_voters,
+    )
 }
 
 fn get_confirmed_blocks(
@@ -940,19 +945,23 @@ fn main() -> BoxResult<()> {
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let (poor_voters, min_epoch_credits, too_many_poor_voters) =
+    let (poor_voters, min_epoch_credits, avg_epoch_credits, too_many_poor_voters) =
         classify_poor_voters(&config, &vote_account_info);
 
     let mut notifications = vec![
         format!(
-            "Minimum vote credits required for epoch {}: {}",
-            last_epoch, min_epoch_credits,
+            "Minimum vote credits required for epoch {}: {} (cluster average: {}, grace: {}%)",
+            last_epoch,
+            min_epoch_credits,
+            avg_epoch_credits,
+            config.min_epoch_credit_percentage_of_average,
         ),
         format!(
-            "Maximum allowed skip rate for epoch {}: {:.2}% (cluster average is {:.2}%)",
+            "Maximum allowed skip rate for epoch {}: {:.2}% (cluster average: {:.2}%, grace: {}%)",
             last_epoch,
             cluster_average_skip_rate + config.quality_block_producer_percentage,
             cluster_average_skip_rate,
+            config.quality_block_producer_percentage,
         ),
         format!("Solana release {} or greater required", min_release_version),
         format!("Maximum commission: {}%", config.max_commission),
@@ -985,6 +994,7 @@ fn main() -> BoxResult<()> {
     }
 
     let mut desired_validator_stake = vec![];
+    let mut validators_processed = 0;
     for VoteAccountInfo {
         identity,
         vote_address,
@@ -995,6 +1005,7 @@ fn main() -> BoxResult<()> {
         if !stake_pool.is_enrolled(&identity) {
             continue;
         }
+        validators_processed += 1;
 
         let block_producer_classification_reason_msg = block_producer_classification_reason
             .get(&identity)
@@ -1097,6 +1108,7 @@ fn main() -> BoxResult<()> {
         &config.authorized_staker,
         &desired_validator_stake,
     )?);
+    notifications.push(format!("{} validators processed", validators_processed));
 
     for notification in notifications {
         info!("notification: {}", notification);
