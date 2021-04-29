@@ -27,6 +27,7 @@ const MIN_STAKE_CHANGE_AMOUNT: u64 = MIN_STAKE_ACCOUNT_BALANCE;
 
 #[derive(Debug)]
 pub struct StakePool {
+    authorized_staker: Keypair,
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
@@ -35,6 +36,7 @@ pub struct StakePool {
 
 pub fn new(
     _rpc_client: &RpcClient,
+    authorized_staker: Keypair,
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
@@ -57,6 +59,7 @@ pub fn new(
     }
 
     Ok(StakePool {
+        authorized_staker,
         baseline_stake_amount,
         reserve_stake_address,
         min_reserve_stake_balance,
@@ -99,7 +102,6 @@ impl GenericStakePool for StakePool {
         &mut self,
         rpc_client: &RpcClient,
         dry_run: bool,
-        authorized_staker: &Keypair,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<Vec<String>, Box<dyn error::Error>> {
         if dry_run {
@@ -119,9 +121,10 @@ impl GenericStakePool for StakePool {
             ..
         } in desired_validator_stake
         {
-            let stake_address = validator_stake_address(authorized_staker.pubkey(), *vote_address);
+            let stake_address =
+                validator_stake_address(self.authorized_staker.pubkey(), *vote_address);
             let transient_stake_address =
-                validator_transient_stake_address(authorized_staker.pubkey(), *vote_address);
+                validator_transient_stake_address(self.authorized_staker.pubkey(), *vote_address);
 
             inuse_stake_addresses.insert(stake_address);
             inuse_stake_addresses.insert(transient_stake_address);
@@ -134,12 +137,12 @@ impl GenericStakePool for StakePool {
         }
 
         let (all_stake_addresses, all_stake_total_amount) =
-            get_all_stake(rpc_client, authorized_staker.pubkey())?;
+            get_all_stake(rpc_client, self.authorized_staker.pubkey())?;
 
         info!("Merge orphaned stake into the reserve");
         merge_orphaned_stake_accounts(
             rpc_client,
-            authorized_staker,
+            &self.authorized_staker,
             &all_stake_addresses - &inuse_stake_addresses,
             self.reserve_stake_address,
         )?;
@@ -148,7 +151,7 @@ impl GenericStakePool for StakePool {
         let mut busy_validators = HashSet::new();
         merge_transient_stake_accounts(
             rpc_client,
-            authorized_staker,
+            &self.authorized_staker,
             desired_validator_stake,
             self.reserve_stake_address,
             &mut busy_validators,
@@ -157,7 +160,7 @@ impl GenericStakePool for StakePool {
         info!("Create validator stake accounts if needed");
         create_validator_stake_accounts(
             rpc_client,
-            authorized_staker,
+            &self.authorized_staker,
             desired_validator_stake,
             self.reserve_stake_address,
             self.min_reserve_stake_balance,
@@ -207,7 +210,7 @@ impl GenericStakePool for StakePool {
         ];
         notifications.extend(distribute_validator_stake(
             rpc_client,
-            authorized_staker,
+            &self.authorized_staker,
             desired_validator_stake
                 .iter()
                 .filter(|vs| !busy_validators.contains(&vs.identity))
@@ -751,18 +754,16 @@ mod test {
 
     fn validator_stake_balance(
         rpc_client: &RpcClient,
-        authorized_staker: &Keypair,
+        authorized_staker: Pubkey,
         validator: &ValidatorAddressPair,
     ) -> u64 {
-        let stake_address =
-            validator_stake_address(authorized_staker.pubkey(), validator.vote_address);
+        let stake_address = validator_stake_address(authorized_staker, validator.vote_address);
         rpc_client.get_balance(&stake_address).unwrap()
     }
 
     fn uniform_stake_pool_apply(
         stake_pool: &mut StakePool,
         rpc_client: &RpcClient,
-        authorized_staker: &Keypair,
         validators: &[ValidatorAddressPair],
         stake_state: ValidatorStakeState,
         expected_validator_stake_balance: u64,
@@ -779,30 +780,20 @@ mod test {
             .collect::<Vec<_>>();
 
         stake_pool
-            .apply(
-                rpc_client,
-                false,
-                authorized_staker,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
-            num_stake_accounts(rpc_client, authorized_staker),
+            num_stake_accounts(rpc_client, &stake_pool.authorized_staker),
             1 + 2 * validators.len()
         );
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_pool
-            .apply(
-                rpc_client,
-                false,
-                authorized_staker,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
-            num_stake_accounts(rpc_client, authorized_staker),
+            num_stake_accounts(rpc_client, &stake_pool.authorized_staker),
             1 + validators.len()
         );
         assert_eq!(
@@ -813,7 +804,11 @@ mod test {
         );
         for validator in validators {
             assert_eq!(
-                validator_stake_balance(rpc_client, authorized_staker, validator),
+                validator_stake_balance(
+                    rpc_client,
+                    stake_pool.authorized_staker.pubkey(),
+                    validator
+                ),
                 expected_validator_stake_balance
             );
         }
@@ -833,10 +828,12 @@ mod test {
 
         let (rpc_client, _recent_blockhash, _fee_calculator) = test_validator.rpc_client();
 
+        let authorized_staker_address = authorized_staker.pubkey();
+
         let assert_validator_stake_activation =
             |vap: &ValidatorAddressPair, epoch: Epoch, state: StakeActivationState| {
                 let stake_address =
-                    validator_stake_address(authorized_staker.pubkey(), vap.vote_address);
+                    validator_stake_address(authorized_staker_address, vap.vote_address);
                 assert_eq!(
                     rpc_client
                         .get_stake_activation(stake_address, Some(epoch))
@@ -878,7 +875,7 @@ mod test {
                 );
 
                 let (all_stake, all_stake_total_amount) =
-                    get_all_stake(&rpc_client, authorized_staker.pubkey()).unwrap();
+                    get_all_stake(&rpc_client, authorized_staker_address).unwrap();
                 assert_eq!(all_stake_total_amount, total_stake_amount_plus_min);
                 assert_eq!(all_stake.len(), 1);
                 assert!(all_stake.contains(&reserve_stake_address));
@@ -888,6 +885,7 @@ mod test {
 
         let mut stake_pool = new(
             &rpc_client,
+            authorized_staker,
             baseline_stake_amount,
             reserve_stake_address,
             min_reserve_stake_balance,
@@ -902,7 +900,6 @@ mod test {
             .apply(
                 &rpc_client,
                 false,
-                &authorized_staker,
                 &validators
                     .iter()
                     .map(|vap| ValidatorStake {
@@ -926,12 +923,16 @@ mod test {
         for validator in &validators {
             assert_validator_stake_activation(validator, epoch, StakeActivationState::Activating);
             assert_eq!(
-                validator_stake_balance(&rpc_client, &authorized_staker, validator),
+                validator_stake_balance(
+                    &rpc_client,
+                    stake_pool.authorized_staker.pubkey(),
+                    validator
+                ),
                 MIN_STAKE_ACCOUNT_BALANCE
             );
         }
         assert_eq!(
-            num_stake_accounts(&rpc_client, &authorized_staker),
+            num_stake_accounts(&rpc_client, &stake_pool.authorized_staker),
             1 + validators.len()
         );
         let epoch = wait_for_next_epoch(&rpc_client).unwrap();
@@ -944,7 +945,6 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_pool,
             &rpc_client,
-            &authorized_staker,
             &validators,
             ValidatorStakeState::Baseline,
             baseline_stake_amount,
@@ -956,7 +956,6 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_pool,
             &rpc_client,
-            &authorized_staker,
             &validators,
             ValidatorStakeState::Bonus,
             total_stake_amount / validators.len() as u64,
@@ -987,21 +986,11 @@ mod test {
         ];
 
         stake_pool
-            .apply(
-                &rpc_client,
-                false,
-                &authorized_staker,
-                &desired_validator_stake,
-            )
+            .apply(&rpc_client, false, &desired_validator_stake)
             .unwrap();
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_pool
-            .apply(
-                &rpc_client,
-                false,
-                &authorized_staker,
-                &desired_validator_stake,
-            )
+            .apply(&rpc_client, false, &desired_validator_stake)
             .unwrap();
 
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
@@ -1009,7 +998,11 @@ mod test {
         for (validator, expected_sol_balance) in validators.iter().zip(&[1., 10., 110.]) {
             assert_eq!(
                 sol_to_lamports(*expected_sol_balance),
-                validator_stake_balance(&rpc_client, &authorized_staker, validator),
+                validator_stake_balance(
+                    &rpc_client,
+                    stake_pool.authorized_staker.pubkey(),
+                    validator
+                ),
                 "stake balance mismatch for validator {}, expected {}",
                 validator.identity,
                 expected_sol_balance
@@ -1025,12 +1018,7 @@ mod test {
 
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_pool
-            .apply(
-                &rpc_client,
-                false,
-                &authorized_staker,
-                &desired_validator_stake,
-            )
+            .apply(&rpc_client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -1044,7 +1032,11 @@ mod test {
         for (validator, expected_sol_balance) in validators.iter().zip(&[1., 10., 319.]) {
             assert_eq!(
                 sol_to_lamports(*expected_sol_balance),
-                validator_stake_balance(&rpc_client, &authorized_staker, validator),
+                validator_stake_balance(
+                    &rpc_client,
+                    stake_pool.authorized_staker.pubkey(),
+                    validator
+                ),
                 "stake balance mismatch for validator {}",
                 validator.identity
             );
@@ -1054,14 +1046,10 @@ mod test {
         info!("remove all validators");
 
         // deactivate all validator stake
-        stake_pool
-            .apply(&rpc_client, false, &authorized_staker, &[])
-            .unwrap();
+        stake_pool.apply(&rpc_client, false, &[]).unwrap();
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         // merge deactivated validator stake back into the reserve
-        stake_pool
-            .apply(&rpc_client, false, &authorized_staker, &[])
-            .unwrap();
+        stake_pool.apply(&rpc_client, false, &[]).unwrap();
         // all stake has returned to the reserve account
         assert_reserve_account_only();
     }

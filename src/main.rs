@@ -30,7 +30,6 @@ use {
         commitment_config::CommitmentConfig,
         native_token::*,
         pubkey::Pubkey,
-        signature::Keypair,
         slot_history::{self, SlotHistory},
         sysvar,
     },
@@ -157,7 +156,6 @@ fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Ve
 struct Config {
     json_rpc_url: String,
     cluster: String,
-    authorized_staker: Keypair,
 
     dry_run: bool,
 
@@ -211,7 +209,6 @@ impl Config {
         Self {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: "mainnet-beta".to_string(),
-            authorized_staker: Keypair::new(),
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -443,15 +440,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                                          destaking those in the list and warning \
                                          any others")
         )
-        .arg(
-            Arg::with_name("authorized_staker")
-                .index(1)
-                .value_name("KEYPAIR")
-                .validator(is_keypair)
-                .required(true)
-                .takes_value(true)
-                .help("Keypair of the authorized staker")
-        )
         .subcommand(
             SubCommand::with_name("legacy").about("Use the legacy staking solution")
             .arg(
@@ -462,6 +450,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .required(true)
                     .validator(is_pubkey_or_keypair)
                     .help("The source stake account for splitting individual validator stake accounts from")
+            )
+            .arg(
+                Arg::with_name("authorized_staker")
+                    .index(2)
+                    .value_name("KEYPAIR")
+                    .validator(is_keypair)
+                    .required(true)
+                    .takes_value(true)
+                    .help("Keypair of the authorized staker")
             )
             .arg(
                 Arg::with_name("baseline_stake_amount")
@@ -500,6 +497,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .help("The reserve stake account used to fund the stake pool")
             )
             .arg(
+                Arg::with_name("authorized_staker")
+                    .index(2)
+                    .value_name("KEYPAIR")
+                    .validator(is_keypair)
+                    .required(true)
+                    .takes_value(true)
+                    .help("Keypair of the authorized staker")
+            )
+            .arg(
                 Arg::with_name("min_reserve_stake_balance")
                     .long("min-reserve-stake-balance")
                     .value_name("SOL")
@@ -535,6 +541,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .required(true)
                     .validator(is_pubkey_or_keypair)
                     .help("The stake pool address")
+            )
+            .arg(
+                Arg::with_name("authorized_staker")
+                    .index(2)
+                    .value_name("KEYPAIR")
+                    .validator(is_keypair)
+                    .required(true)
+                    .takes_value(true)
+                    .help("Keypair of the authorized staker")
             )
             .arg(
                 Arg::with_name("baseline_stake_amount")
@@ -593,12 +608,9 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     )
     .unwrap();
 
-    let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-
     let config = Config {
         json_rpc_url,
         cluster,
-        authorized_staker,
         dry_run,
         quality_block_producer_percentage,
         max_commission,
@@ -623,6 +635,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("legacy", Some(matches)) => {
+            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let source_stake_address = pubkey_of(&matches, "source_stake_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
@@ -632,6 +645,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
 
             Box::new(legacy_stake_pool::new(
                 &rpc_client,
+                authorized_staker,
                 baseline_stake_amount,
                 bonus_stake_amount,
                 source_stake_address,
@@ -639,6 +653,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             )?)
         }
         ("stake-pool-v0", Some(matches)) => {
+            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
             let min_reserve_stake_balance =
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
@@ -647,6 +662,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             let validator_list = validator_list_of(matches, config.cluster.as_str());
             Box::new(stake_pool_v0::new(
                 &rpc_client,
+                authorized_staker,
                 baseline_stake_amount,
                 reserve_stake_address,
                 min_reserve_stake_balance,
@@ -654,11 +670,13 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             )?)
         }
         ("stake-pool", Some(matches)) => {
+            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(&matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
             Box::new(stake_pool::new(
                 &rpc_client,
+                authorized_staker,
                 pool_address,
                 baseline_stake_amount,
             )?)
@@ -1117,7 +1135,6 @@ fn main() -> BoxResult<()> {
     notifications.extend(stake_pool.apply(
         &rpc_client,
         config.dry_run,
-        &config.authorized_staker,
         &desired_validator_stake,
     )?);
     notifications.push(format!("{} validators processed", validators_processed));

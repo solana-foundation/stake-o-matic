@@ -1,8 +1,4 @@
-use {
-    solana_client::rpc_client::RpcClient,
-    solana_sdk::{pubkey::Pubkey, signature::Keypair},
-    std::error,
-};
+use {solana_client::rpc_client::RpcClient, solana_sdk::pubkey::Pubkey, std::error};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ValidatorStakeState {
@@ -25,7 +21,6 @@ pub trait GenericStakePool {
         &mut self,
         rpc_client: &RpcClient,
         dry_run: bool,
-        authorized_staker: &Keypair,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<Vec<String>, Box<dyn error::Error>>;
 }
