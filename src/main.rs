@@ -500,6 +500,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .help("The reserve stake account used to fund the stake pool")
             )
             .arg(
+                Arg::with_name("min_reserve_stake_balance")
+                    .long("min-reserve-stake-balance")
+                    .value_name("SOL")
+                    .takes_value(true)
+                    .default_value("1")
+                    .validator(is_amount)
+                    .help("The minimum balance to keep in the reserve stake account")
+            )
+            .arg(
                 Arg::with_name("baseline_stake_amount")
                     .long("baseline-stake-amount")
                     .value_name("SOL")
@@ -631,6 +640,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         }
         ("stake-pool-v0", Some(matches)) => {
             let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
+            let min_reserve_stake_balance =
+                sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
             let validator_list = validator_list_of(matches, config.cluster.as_str());
@@ -638,6 +649,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 &rpc_client,
                 baseline_stake_amount,
                 reserve_stake_address,
+                min_reserve_stake_balance,
                 validator_list,
             )?)
         }

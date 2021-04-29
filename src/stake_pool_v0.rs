@@ -19,16 +19,17 @@ use {
 };
 
 // Minimum amount of lamports in a stake pool account
-const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL;
+pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL;
 
 // Don't bother adjusting stake if less than this amount of lamports will be affected
 // (must be >= MIN_STAKE_ACCOUNT_BALANCE)
 const MIN_STAKE_CHANGE_AMOUNT: u64 = MIN_STAKE_ACCOUNT_BALANCE;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StakePool {
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
+    min_reserve_stake_balance: u64,
     validator_list: HashSet<Pubkey>,
 }
 
@@ -36,6 +37,7 @@ pub fn new(
     _rpc_client: &RpcClient,
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
+    min_reserve_stake_balance: u64,
     validator_list: HashSet<Pubkey>,
 ) -> Result<StakePool, Box<dyn error::Error>> {
     if baseline_stake_amount < MIN_STAKE_CHANGE_AMOUNT {
@@ -45,9 +47,19 @@ pub fn new(
         )
         .into());
     }
+
+    if min_reserve_stake_balance < MIN_STAKE_ACCOUNT_BALANCE {
+        return Err(format!(
+            "minimum reserve stake balance is too small: {}",
+            Sol(min_reserve_stake_balance)
+        )
+        .into());
+    }
+
     Ok(StakePool {
         baseline_stake_amount,
         reserve_stake_address,
+        min_reserve_stake_balance,
         validator_list,
     })
 }
@@ -148,11 +160,12 @@ impl GenericStakePool for StakePool {
             authorized_staker,
             desired_validator_stake,
             self.reserve_stake_address,
+            self.min_reserve_stake_balance,
             &mut busy_validators,
         )?;
 
-        // `total_stake_amount` excludes the `MIN_STAKE_ACCOUNT_BALANCE` that always remains in the reserve account
-        let total_stake_amount = all_stake_total_amount - MIN_STAKE_ACCOUNT_BALANCE;
+        // `total_stake_amount` excludes the amount that always remains in the reserve account
+        let total_stake_amount = all_stake_total_amount - self.min_reserve_stake_balance;
 
         info!("Total stake pool balance: {}", Sol(total_stake_amount));
 
@@ -200,6 +213,7 @@ impl GenericStakePool for StakePool {
                 .filter(|vs| !busy_validators.contains(&vs.identity))
                 .cloned(),
             self.reserve_stake_address,
+            self.min_reserve_stake_balance,
             self.baseline_stake_amount,
             bonus_stake_amount,
         )?);
@@ -207,10 +221,11 @@ impl GenericStakePool for StakePool {
     }
 }
 
-// Get the balance of a stake account excluding `MIN_STAKE_ACCOUNT_BALANCE`
+// Get the balance of a stake account excluding the reserve
 fn get_available_stake_balance(
     rpc_client: &RpcClient,
     stake_address: Pubkey,
+    reserve_stake_balance: u64,
 ) -> Result<u64, Box<dyn error::Error>> {
     let balance = rpc_client.get_balance(&stake_address).map_err(|err| {
         format!(
@@ -218,16 +233,16 @@ fn get_available_stake_balance(
             stake_address, err
         )
     })?;
-    if balance < MIN_STAKE_ACCOUNT_BALANCE {
+    if balance < reserve_stake_balance {
         Err(format!(
             "Stake account {} balance too low, {}. Minimum is {}",
             stake_address,
             Sol(balance),
-            Sol(MIN_STAKE_ACCOUNT_BALANCE)
+            Sol(reserve_stake_balance)
         )
         .into())
     } else {
-        Ok(balance - MIN_STAKE_ACCOUNT_BALANCE)
+        Ok(balance.saturating_sub(reserve_stake_balance))
     }
 }
 
@@ -467,10 +482,12 @@ fn create_validator_stake_accounts(
     authorized_staker: &Keypair,
     desired_validator_stake: &[ValidatorStake],
     reserve_stake_address: Pubkey,
+    min_reserve_stake_balance: u64,
     busy_validators: &mut HashSet<Pubkey>,
 ) -> Result<(), Box<dyn error::Error>> {
-    let mut reserve_stake_balance = get_available_stake_balance(rpc_client, reserve_stake_address)
-        .map_err(|err| {
+    let mut reserve_stake_balance =
+        get_available_stake_balance(rpc_client, reserve_stake_address, min_reserve_stake_balance)
+            .map_err(|err| {
             format!(
                 "Unable to get reserve stake account balance: {}: {}",
                 reserve_stake_address, err
@@ -567,14 +584,16 @@ fn distribute_validator_stake<V>(
     authorized_staker: &Keypair,
     desired_validator_stake: V,
     reserve_stake_address: Pubkey,
+    min_reserve_stake_balance: u64,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
 ) -> Result<Vec<String>, Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
 {
-    let mut reserve_stake_balance = get_available_stake_balance(rpc_client, reserve_stake_address)
-        .map_err(|err| {
+    let mut reserve_stake_balance =
+        get_available_stake_balance(rpc_client, reserve_stake_address, min_reserve_stake_balance)
+            .map_err(|err| {
             format!(
                 "Unable to get reserve stake account balance: {}: {}",
                 reserve_stake_address, err
@@ -832,9 +851,10 @@ mod test {
         let validators = create_validators(&rpc_client, &authorized_staker, 3).unwrap();
 
         let baseline_stake_amount = sol_to_lamports(10.);
+        let min_reserve_stake_balance = MIN_STAKE_ACCOUNT_BALANCE;
         let total_stake_amount =
             (baseline_stake_amount + sol_to_lamports(100.)) * validators.len() as u64;
-        let total_stake_amount_plus_min = total_stake_amount + MIN_STAKE_ACCOUNT_BALANCE;
+        let total_stake_amount_plus_min = total_stake_amount + min_reserve_stake_balance;
 
         let reserve_stake_address =
             create_stake_account(&rpc_client, &authorized_staker, total_stake_amount_plus_min)
@@ -848,7 +868,12 @@ mod test {
             );
             {
                 assert_eq!(
-                    get_available_stake_balance(&rpc_client, reserve_stake_address).unwrap(),
+                    get_available_stake_balance(
+                        &rpc_client,
+                        reserve_stake_address,
+                        min_reserve_stake_balance
+                    )
+                    .unwrap(),
                     total_stake_amount
                 );
 
@@ -865,6 +890,7 @@ mod test {
             &rpc_client,
             baseline_stake_amount,
             reserve_stake_address,
+            min_reserve_stake_balance,
             validators.iter().map(|vap| vap.identity).collect(),
         )
         .unwrap();
