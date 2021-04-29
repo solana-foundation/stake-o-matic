@@ -26,7 +26,7 @@ use {
     solana_notifier::Notifier,
     solana_sdk::{
         account::from_account,
-        clock::{Epoch, Slot, DEFAULT_SLOTS_PER_EPOCH},
+        clock::{Epoch, Slot},
         commitment_config::CommitmentConfig,
         native_token::*,
         pubkey::Pubkey,
@@ -171,11 +171,6 @@ struct Config {
     /// the previous epoch
     quality_block_producer_percentage: usize,
 
-    /// A delinquent validator gets this number of slots of grace (from the current slot) before it
-    /// will be fully destaked.  The grace period is intended to account for unexpected bugs that
-    /// cause a validator to go down
-    delinquent_grace_slot_distance: u64,
-
     /// Don't ever unstake more than this percentage of the cluster at one time for poor block
     /// production
     max_poor_block_producer_percentage: usize,
@@ -228,7 +223,6 @@ impl Config {
             authorized_staker: Keypair::new(),
             dry_run: true,
             quality_block_producer_percentage: 15,
-            delinquent_grace_slot_distance: DEFAULT_SLOTS_PER_EPOCH / 2,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
             min_release_version: None,
@@ -367,9 +361,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 .takes_value(true)
                 .default_value("20")
                 .validator(is_valid_percentage)
-                .help("Do not add or remove bonus stake from any
-                       non-delinquent validators if at least this percentage of \
-                       all validators are poor block producers")
+                .help("Do not add or remove bonus stake if at least this \
+                       percentage of all validators are poor block producers")
         )
         .arg(
             Arg::with_name("min_epoch_credit_percentage_of_average")
@@ -616,7 +609,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         cluster,
         authorized_staker,
         dry_run,
-        delinquent_grace_slot_distance: DEFAULT_SLOTS_PER_EPOCH / 2,
         quality_block_producer_percentage,
         max_commission,
         max_poor_block_producer_percentage,
@@ -1045,24 +1037,6 @@ fn main() -> BoxResult<()> {
                     identity, node_version, min_release_version
                 ),
             ))
-
-        // Destake the validator if it has been delinquent for longer than the grace period
-        } else if root_slot
-            < epoch_info
-                .absolute_slot
-                .saturating_sub(config.delinquent_grace_slot_distance)
-        {
-            Some((
-                ValidatorStakeState::None,
-                format!(
-                    "🏖️ `{}` has been delinquent for more than {} slots",
-                    identity, config.delinquent_grace_slot_distance
-                ),
-            ))
-
-        // Validator is delinquent but less than the grace period.  Take no action
-        } else if root_slot < epoch_info.absolute_slot.saturating_sub(256) {
-            None
         } else if quality_block_producers.contains(&identity) {
             Some((
                 ValidatorStakeState::Bonus,
