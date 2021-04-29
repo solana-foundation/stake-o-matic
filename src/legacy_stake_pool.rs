@@ -13,8 +13,8 @@ use {
     std::{collections::HashSet, error},
 };
 
-#[derive(Default)]
 pub struct LegacyStakePool {
+    authorized_staker: Keypair,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
     source_stake_address: Pubkey,
@@ -23,12 +23,14 @@ pub struct LegacyStakePool {
 
 pub fn new(
     _rpc_client: &RpcClient,
+    authorized_staker: Keypair,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
     source_stake_address: Pubkey,
     validator_list: HashSet<Pubkey>,
 ) -> Result<LegacyStakePool, Box<dyn error::Error>> {
     Ok(LegacyStakePool {
+        authorized_staker,
         baseline_stake_amount,
         bonus_stake_amount,
         source_stake_address,
@@ -45,17 +47,19 @@ impl GenericStakePool for LegacyStakePool {
         &mut self,
         rpc_client: &RpcClient,
         dry_run: bool,
-        authorized_staker: &Keypair,
         validator_stake: &[ValidatorStake],
     ) -> Result<Vec<String>, Box<dyn error::Error>> {
-        let (init_transactions, update_transactions) =
-            self.build_transactions(rpc_client, authorized_staker.pubkey(), &validator_stake)?;
+        let (init_transactions, update_transactions) = self.build_transactions(
+            rpc_client,
+            self.authorized_staker.pubkey(),
+            &validator_stake,
+        )?;
 
         if !send_and_confirm_transactions(
             rpc_client,
             dry_run,
             init_transactions,
-            authorized_staker,
+            &self.authorized_staker,
             &mut vec![],
         )? {
             return Err("Failed to initialize stake pool. Unable to continue".into());
@@ -69,7 +73,7 @@ impl GenericStakePool for LegacyStakePool {
             rpc_client,
             dry_run,
             update_transactions,
-            authorized_staker,
+            &self.authorized_staker,
             &mut notifications,
         )?;
 

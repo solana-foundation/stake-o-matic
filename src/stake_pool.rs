@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use {
     crate::generic_stake_pool::*,
     log::*,
@@ -13,8 +14,8 @@ struct ValidatorInfo {
     baseline_stake_activation_state: StakeActivationState,
 }
 
-#[derive(Debug)]
 pub struct SplStakePool {
+    authorized_staker: Keypair,
     baseline_stake_amount: u64,
     pool_address: Pubkey,
     validator_info: HashMap<Pubkey, ValidatorInfo>,
@@ -22,10 +23,12 @@ pub struct SplStakePool {
 
 pub fn new(
     _rpc_client: &RpcClient,
+    authorized_staker: Keypair,
     pool_address: Pubkey,
     baseline_stake_amount: u64,
 ) -> Result<SplStakePool, Box<dyn error::Error>> {
     Ok(SplStakePool {
+        authorized_staker,
         baseline_stake_amount,
         pool_address,
         validator_info: HashMap::new(),
@@ -41,7 +44,6 @@ impl GenericStakePool for SplStakePool {
         &mut self,
         _rpc_client: &RpcClient,
         _dry_run: bool,
-        _authorized_staker: &Keypair,
         _desired_validator_stake: &[ValidatorStake],
     ) -> Result<Vec<String>, Box<dyn error::Error>> {
         todo!();
