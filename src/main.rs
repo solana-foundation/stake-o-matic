@@ -60,49 +60,43 @@ enum InfrastructureConcentrationAffects {
 }
 
 impl InfrastructureConcentrationAffects {
-    fn destake_memo(validator_id: &Pubkey, concentration: f64, config: &Config) -> String {
+    fn destake_memo(validator_id: &Pubkey, concentration: f64) -> String {
         format!(
-            "🏟️ `{}` infrastructure concentration {:.1}% is too high. \
-            Max concentration is {:.0}%. Removed stake",
-            validator_id, concentration, config.max_infrastructure_concentration,
+            "🏟️ `{}` infrastructure concentration {:.1}% is too high",
+            validator_id, concentration,
         )
     }
-    fn warning_memo(validator_id: &Pubkey, concentration: f64, config: &Config) -> String {
+    fn warning_memo(validator_id: &Pubkey, concentration: f64) -> String {
         format!(
             "🗺  `{}` infrastructure concentration {:.1}% is too high. \
-            Max concentration is {:.0}%. No stake removed. Consider finding a new data center",
-            validator_id, concentration, config.max_infrastructure_concentration,
+            No stake removed yet, consider finding a new data center",
+            validator_id, concentration,
         )
     }
     pub fn memo(
         &self,
         validator_id: &Pubkey,
         concentration: f64,
-        config: &Config,
     ) -> InfrastructureConcentrationAffectKind {
         match self {
             Self::DestakeAll => InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
                 validator_id,
                 concentration,
-                config,
             )),
             Self::WarnAll => InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(
                 validator_id,
                 concentration,
-                config,
             )),
             Self::DestakeListed(ref list) => {
                 if list.contains(validator_id) {
                     InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
                         validator_id,
                         concentration,
-                        config,
                     ))
                 } else {
                     InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(
                         validator_id,
                         concentration,
-                        config,
                     ))
                 }
             }
@@ -204,9 +198,6 @@ struct Config {
     ///                   destaking those in the list and warning any others
     infrastructure_concentration_affects: InfrastructureConcentrationAffects,
 
-    /// Use a cluster-average skip rate floor for block-production quality calculations
-    use_cluster_average_skip_rate: bool,
-
     bad_cluster_average_skip_rate: usize,
 
     /// Destake if the validator's vote credits for the latest full epoch are less than this percentage
@@ -231,7 +222,6 @@ impl Config {
             confirmed_block_cache_path: default_confirmed_block_cache_path(),
             max_infrastructure_concentration: 100.0,
             infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
-            use_cluster_average_skip_rate: false,
             bad_cluster_average_skip_rate: 50,
             min_epoch_credit_percentage_of_average: 50,
         }
@@ -454,13 +444,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                                          any others")
         )
         .arg(
-            Arg::with_name("use_cluster_average_skip_rate")
-                .long("use-cluster-average-skip-rate")
-                .help("Use a cluster-average skip rate floor for block-production quality calculations")
-        )
-
-
-        .arg(
             Arg::with_name("authorized_staker")
                 .index(1)
                 .value_name("KEYPAIR")
@@ -600,7 +583,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         InfrastructureConcentrationAffects
     )
     .unwrap();
-    let use_cluster_average_skip_rate = matches.is_present("use_cluster_average_skip_rate");
 
     let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
 
@@ -618,7 +600,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         confirmed_block_cache_path,
         max_infrastructure_concentration,
         infrastructure_concentration_affects,
-        use_cluster_average_skip_rate,
         bad_cluster_average_skip_rate,
         min_epoch_credit_percentage_of_average,
     };
@@ -724,11 +705,6 @@ fn classify_producers(
     let cluster_average_skip_rate = 100 - total_blocks * 100 / total_slots;
     for (validator_identity, (blocks, slots)) in blocks_and_slots {
         let skip_rate: usize = 100 - (blocks * 100 / slots);
-        let skip_rate_floor = if config.use_cluster_average_skip_rate {
-            cluster_average_skip_rate
-        } else {
-            0
-        };
 
         let msg = format!(
             "{} blocks in {} slots, {:.2}% skip rate",
@@ -737,7 +713,9 @@ fn classify_producers(
         trace!("Validator {} produced {}", validator_identity, msg);
         reason_msg.insert(validator_identity, msg);
 
-        if skip_rate.saturating_sub(config.quality_block_producer_percentage) > skip_rate_floor {
+        if skip_rate.saturating_sub(config.quality_block_producer_percentage)
+            > cluster_average_skip_rate
+        {
             poor_block_producers.insert(validator_identity);
         } else {
             quality_block_producers.insert(validator_identity);
@@ -892,6 +870,9 @@ fn main() -> BoxResult<()> {
 
     let epoch_info = rpc_client.get_epoch_info()?;
     info!("Epoch info: {:?}", epoch_info);
+    if epoch_info.epoch == 0 {
+        return Ok(());
+    }
     let last_epoch = epoch_info.epoch - 1;
 
     let vote_account_info = get_vote_account_info(&rpc_client, last_epoch)?;
@@ -929,8 +910,6 @@ fn main() -> BoxResult<()> {
         );
     }
 
-    let mut notifications = vec![];
-
     let (
         quality_block_producers,
         poor_block_producers,
@@ -939,31 +918,10 @@ fn main() -> BoxResult<()> {
         too_many_poor_block_producers,
     ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
 
-    if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
-        notifications.push(format!(
-            "Cluster average skip rate: {} is above threshold: {}",
-            cluster_average_skip_rate, config.bad_cluster_average_skip_rate
-        ));
-    }
-
-    if too_many_poor_block_producers {
-        notifications.push(format!(
-            "Over {}% of validators classified as poor block producers in epoch {}",
-            config.max_poor_block_producer_percentage, last_epoch,
-        ));
-    }
-
     let too_many_old_validators = cluster_nodes_with_old_version.len()
         > (poor_block_producers.len() + quality_block_producers.len())
             * config.max_old_release_version_percentage
             / 100;
-
-    if too_many_old_validators {
-        notifications.push(format!(
-            "Over {}% of validators classified as running an older release",
-            config.max_old_release_version_percentage
-        ));
-    }
 
     let infrastructure_concentration = data_center_info::get()
         .map_err(|e| {
@@ -985,10 +943,44 @@ fn main() -> BoxResult<()> {
     let (poor_voters, min_epoch_credits, too_many_poor_voters) =
         classify_poor_voters(&config, &vote_account_info);
 
+    let mut notifications = vec![
+        format!(
+            "Minimum vote credits required for epoch {}: {}",
+            last_epoch, min_epoch_credits,
+        ),
+        format!(
+            "Maximum allowed skip rate for epoch {}: {:.2}% (cluster average is {:.2}%)",
+            last_epoch,
+            cluster_average_skip_rate + config.quality_block_producer_percentage,
+            cluster_average_skip_rate,
+        ),
+        format!("Solana release {} or greater required", min_release_version),
+        format!("Maximum commission: {}%", config.max_commission),
+        format!(
+            "Maximum infrastructure concentration: {:0}%",
+            config.max_infrastructure_concentration
+        ),
+    ];
+
+    if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
+        notifications.push("Cluster average skip rate is poor".to_string());
+    }
     if too_many_poor_voters {
         notifications.push(format!(
             "Over {}% of validators classified as poor voters",
             config.max_poor_voter_percentage
+        ));
+    }
+    if too_many_old_validators {
+        notifications.push(format!(
+            "Over {}% of validators classified as running an older release",
+            config.max_old_release_version_percentage
+        ));
+    }
+    if too_many_poor_block_producers {
+        notifications.push(format!(
+            "Over {}% of validators classified as poor block producers in epoch {}",
+            config.max_poor_block_producer_percentage, last_epoch,
         ));
     }
 
@@ -997,7 +989,6 @@ fn main() -> BoxResult<()> {
         identity,
         vote_address,
         commission,
-        root_slot,
         epoch_credits,
     } in vote_account_info
     {
@@ -1010,17 +1001,15 @@ fn main() -> BoxResult<()> {
             .cloned()
             .unwrap_or_default();
 
-        let vote_credits_msg = format!(
-            "{} credits earned in epoch {}; {} required)",
-            epoch_credits, last_epoch, min_epoch_credits
-        );
+        let vote_credits_msg = format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
+        let commission_msg = format!("{}% commission", commission);
 
         let infrastructure_concentration_destake_memo = infrastructure_concentration
             .get(&identity)
             .map(|concentration| {
                 config
                     .infrastructure_concentration_affects
-                    .memo(&identity, *concentration, &config)
+                    .memo(&identity, *concentration)
             })
             .and_then(|affect| match affect {
                 InfrastructureConcentrationAffectKind::Destake(memo) => Some(memo),
@@ -1036,14 +1025,14 @@ fn main() -> BoxResult<()> {
             Some((
                 ValidatorStakeState::None,
                 format!(
-                    "⛔ `{}` {}% commission is too high (max: {}%)",
-                    identity, commission, config.max_commission
+                    "⛔ `{}` commission is too high ({})",
+                    identity, commission_msg
                 ),
             ))
         } else if !too_many_poor_voters && poor_voters.contains(&identity) {
             Some((
                 ValidatorStakeState::None,
-                format!("💔 `{}` was a poor voter ({})", identity, vote_credits_msg,),
+                format!("💔 `{}` was a poor voter ({})", identity, vote_credits_msg),
             ))
         } else if !too_many_old_validators
             && cluster_nodes_with_old_version.contains_key(&identity.to_string())
@@ -1054,8 +1043,8 @@ fn main() -> BoxResult<()> {
             Some((
                 ValidatorStakeState::None,
                 format!(
-                    "🧮 `{}` is running an old software release {} (minimum: {})",
-                    identity, node_version, min_release_version
+                    "🧮 `{}` is running an older Solana release ({})",
+                    identity, node_version
                 ),
             ))
         } else if quality_block_producers.contains(&identity) {
@@ -1066,18 +1055,14 @@ fn main() -> BoxResult<()> {
                     identity, last_epoch, block_producer_classification_reason_msg
                 ),
             ))
-        } else if poor_block_producers.contains(&identity) {
-            if too_many_poor_block_producers {
-                None
-            } else {
-                Some((
-                    ValidatorStakeState::Baseline,
-                    format!(
-                        "💔 `{}` was a poor block producer during epoch {} ({})",
-                        identity, last_epoch, block_producer_classification_reason_msg
-                    ),
-                ))
-            }
+        } else if !too_many_poor_block_producers && poor_block_producers.contains(&identity) {
+            Some((
+                ValidatorStakeState::Baseline,
+                format!(
+                    "💔 `{}` was a poor block producer during epoch {} ({})",
+                    identity, last_epoch, block_producer_classification_reason_msg
+                ),
+            ))
         } else if !poor_voters.contains(&identity) {
             Some((
                 ValidatorStakeState::Baseline,
@@ -1088,15 +1073,20 @@ fn main() -> BoxResult<()> {
         };
 
         debug!(
-            "\nidentity: {}\n - vote address: {}\n - root slot: {}\n - epoch credits: {}\n - operation: {:?}",
-            identity, vote_address, root_slot, epoch_credits, operation
+            "\nidentity: {}\n - vote address: {}\n - {}\n - {}\n - {}\n - operation: {:?}",
+            identity,
+            vote_address,
+            vote_credits_msg,
+            block_producer_classification_reason_msg,
+            commission_msg,
+            operation
         );
         if let Some((stake_state, memo)) = operation {
             desired_validator_stake.push(ValidatorStake {
                 identity,
                 vote_address,
                 stake_state,
-                memo,
+                memo: format!("{}. Staking level: {:?}", memo, stake_state),
             });
         }
     }
@@ -1126,7 +1116,6 @@ mod test {
         let config = Config {
             quality_block_producer_percentage: 10,
             max_poor_block_producer_percentage: 40,
-            use_cluster_average_skip_rate: true,
             ..Config::default_for_test()
         };
 
@@ -1147,42 +1136,17 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _reason_msg, _cluster_average, too_many_poor_block_producers) =
+        let (quality, poor, _reason_msg, cluster_average_skip_rate, too_many_poor_block_producers) =
             classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
+        assert_eq!(cluster_average_skip_rate, 58);
         assert!(quality.contains(&l1));
         assert!(quality.contains(&l5));
         assert!(quality.contains(&l2));
+        assert_eq!(quality.len(), 3);
         assert!(poor.contains(&l3));
         assert!(poor.contains(&l4));
+        assert_eq!(poor.len(), 2);
         assert!(!too_many_poor_block_producers);
-    }
-
-    #[test]
-    fn test_quality_producer_when_all_poor() {
-        solana_logger::setup();
-        let config = Config {
-            quality_block_producer_percentage: 10,
-            use_cluster_average_skip_rate: false,
-            ..Config::default_for_test()
-        };
-
-        let confirmed_blocks = HashSet::<Slot>::new();
-        let mut leader_schedule = HashMap::new();
-        let l1 = Pubkey::new_unique();
-        let l2 = Pubkey::new_unique();
-        let l3 = Pubkey::new_unique();
-        let l4 = Pubkey::new_unique();
-        let l5 = Pubkey::new_unique();
-        leader_schedule.insert(l1.to_string(), (0..10).collect());
-        leader_schedule.insert(l2.to_string(), (10..20).collect());
-        leader_schedule.insert(l3.to_string(), (20..30).collect());
-        leader_schedule.insert(l4.to_string(), (30..40).collect());
-        leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _reason_msg, _cluster_average, too_many_poor_block_producers) =
-            classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
-        assert!(quality.is_empty());
-        assert_eq!(poor.len(), 5);
-        assert!(too_many_poor_block_producers);
     }
 
     #[test]
@@ -1190,7 +1154,6 @@ mod test {
         solana_logger::setup();
         let config = Config {
             quality_block_producer_percentage: 10,
-            use_cluster_average_skip_rate: false,
             ..Config::default_for_test()
         };
 
@@ -1206,8 +1169,9 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _reason_msg, _cluster_average, too_many_poor_block_producers) =
-            classify_producers(0, dbg!(confirmed_blocks), leader_schedule, &config).unwrap();
+        let (quality, poor, _reason_msg, cluster_average_skip_rate, too_many_poor_block_producers) =
+            classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
+        assert_eq!(cluster_average_skip_rate, 0);
         assert!(poor.is_empty());
         assert_eq!(quality.len(), 5);
         assert!(!too_many_poor_block_producers);
