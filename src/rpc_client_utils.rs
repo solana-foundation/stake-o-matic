@@ -9,7 +9,7 @@ use {
         rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
     },
     solana_sdk::{
-        clock::{Epoch, Slot},
+        clock::Epoch,
         native_token::*,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
@@ -218,9 +218,6 @@ pub struct VoteAccountInfo {
     pub vote_address: Pubkey,
     pub commission: u8,
 
-    /// Current root slot for this vote account (0 if not root slot exists)
-    pub root_slot: Slot,
-
     /// Credits earned in the epoch
     pub epoch_credits: u64,
 }
@@ -254,7 +251,6 @@ pub fn get_vote_account_info(
             |RpcVoteAccountInfo {
                  commission,
                  node_pubkey,
-                 root_slot,
                  vote_pubkey,
                  epoch_credits,
                  ..
@@ -273,7 +269,6 @@ pub fn get_vote_account_info(
                     identity,
                     vote_address,
                     commission: *commission,
-                    root_slot: *root_slot,
                     epoch_credits,
                 }
             },
