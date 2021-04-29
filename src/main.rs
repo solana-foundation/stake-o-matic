@@ -1010,6 +1010,11 @@ fn main() -> BoxResult<()> {
             .cloned()
             .unwrap_or_default();
 
+        let vote_credits_msg = format!(
+            "{} credits earned in epoch {}; {} required)",
+            epoch_credits, last_epoch, min_epoch_credits
+        );
+
         let infrastructure_concentration_destake_memo = infrastructure_concentration
             .get(&identity)
             .map(|concentration| {
@@ -1038,10 +1043,7 @@ fn main() -> BoxResult<()> {
         } else if !too_many_poor_voters && poor_voters.contains(&identity) {
             Some((
                 ValidatorStakeState::None,
-                format!(
-                    "💔 `{}` was a poor voter during epoch {} ({} credits earned; {} required)",
-                    identity, last_epoch, epoch_credits, min_epoch_credits
-                ),
+                format!("💔 `{}` was a poor voter ({})", identity, vote_credits_msg,),
             ))
         } else if !too_many_old_validators
             && cluster_nodes_with_old_version.contains_key(&identity.to_string())
@@ -1076,11 +1078,13 @@ fn main() -> BoxResult<()> {
                     ),
                 ))
             }
-        } else {
+        } else if !poor_voters.contains(&identity) {
             Some((
                 ValidatorStakeState::Baseline,
-                format!("🥩 `{}` is current", identity),
+                format!("🥩 `{}` is current ({})", identity, vote_credits_msg),
             ))
+        } else {
+            None
         };
 
         debug!(
