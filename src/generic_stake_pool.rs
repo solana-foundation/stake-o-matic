@@ -16,7 +16,6 @@ pub struct ValidatorStake {
 }
 
 pub trait GenericStakePool {
-    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool;
     fn apply(
         &mut self,
         rpc_client: &RpcClient,
