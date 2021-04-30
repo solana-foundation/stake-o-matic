@@ -130,7 +130,7 @@ impl GenericStakePool for StakePool {
             inuse_stake_addresses.insert(transient_stake_address);
 
             match stake_state {
-                ValidatorStakeState::None => min_stake_node_count += 1,
+                ValidatorStakeState::No => min_stake_node_count += 1,
                 ValidatorStakeState::Bonus => bonus_stake_node_count += 1,
                 ValidatorStakeState::Baseline => baseline_stake_node_count += 1,
             }
@@ -617,7 +617,7 @@ where
     } in desired_validator_stake
     {
         let desired_balance = match stake_state {
-            ValidatorStakeState::None => MIN_STAKE_ACCOUNT_BALANCE,
+            ValidatorStakeState::No => MIN_STAKE_ACCOUNT_BALANCE,
             ValidatorStakeState::Baseline => baseline_stake_amount,
             ValidatorStakeState::Bonus => bonus_stake_amount,
         };
@@ -905,7 +905,7 @@ mod test {
                     .map(|vap| ValidatorStake {
                         identity: vap.identity,
                         vote_address: vap.vote_address,
-                        stake_state: ValidatorStakeState::None,
+                        stake_state: ValidatorStakeState::No,
                         memo: "none".to_string(),
                     })
                     .collect::<Vec<_>>(),
@@ -968,7 +968,7 @@ mod test {
             ValidatorStake {
                 identity: validators[0].identity,
                 vote_address: validators[0].vote_address,
-                stake_state: ValidatorStakeState::None,
+                stake_state: ValidatorStakeState::No,
                 memo: "none".to_string(),
             },
             ValidatorStake {

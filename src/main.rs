@@ -1060,74 +1060,73 @@ fn main() -> BoxResult<()> {
                 }
             });
 
-        let operation = if let Some(memo) = infrastructure_concentration_destake_memo {
-            Some((ValidatorStakeState::None, memo))
-        } else if commission > config.max_commission {
-            Some((
-                ValidatorStakeState::None,
-                format!(
-                    "⛔ `{}` commission is too high ({})",
-                    identity, commission_msg
-                ),
-            ))
-        } else if !too_many_poor_voters && poor_voters.contains(&identity) {
-            Some((
-                ValidatorStakeState::None,
-                format!("💔 `{}` was a poor voter ({})", identity, vote_credits_msg),
-            ))
-        } else if !too_many_old_validators
-            && cluster_nodes_with_old_version.contains_key(&identity.to_string())
+        let (new_stake_state, memo) = if let Some(memo) = infrastructure_concentration_destake_memo
         {
-            let node_version = cluster_nodes_with_old_version
-                .get(&identity.to_string())
-                .unwrap();
-            Some((
-                ValidatorStakeState::None,
+            (Some(ValidatorStakeState::No), memo)
+        } else if commission > config.max_commission {
+            (
+                Some(ValidatorStakeState::No),
+                format!("commission is too high: {}", commission_msg),
+            )
+        } else if poor_voters.contains(&identity) {
+            (
+                if too_many_poor_voters {
+                    None
+                } else {
+                    Some(ValidatorStakeState::No)
+                },
+                format!("insufficient vote credits: {}", vote_credits_msg),
+            )
+        } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
+            (
+                if too_many_old_validators {
+                    None
+                } else {
+                    Some(ValidatorStakeState::No)
+                },
                 format!(
-                    "🧮 `{}` is running an older Solana release ({})",
-                    identity, node_version
+                    "Outdated solana release: {}",
+                    cluster_nodes_with_old_version
+                        .get(&identity.to_string())
+                        .unwrap()
                 ),
-            ))
+            )
         } else if quality_block_producers.contains(&identity) {
-            Some((
-                ValidatorStakeState::Bonus,
+            (
+                Some(ValidatorStakeState::Bonus),
                 format!(
-                    "🏅 `{}` was a quality block producer during epoch {} ({})",
-                    identity, last_epoch, block_producer_classification_reason_msg
+                    "good block production during epoch {}: {}",
+                    last_epoch, block_producer_classification_reason_msg
                 ),
-            ))
-        } else if !too_many_poor_block_producers && poor_block_producers.contains(&identity) {
-            Some((
-                ValidatorStakeState::Baseline,
+            )
+        } else if poor_block_producers.contains(&identity) {
+            (
+                if too_many_poor_block_producers {
+                    None
+                } else {
+                    Some(ValidatorStakeState::Baseline)
+                },
                 format!(
-                    "💔 `{}` was a poor block producer during epoch {} ({})",
-                    identity, last_epoch, block_producer_classification_reason_msg
+                    "poor block production during epoch {}: {} ",
+                    last_epoch, block_producer_classification_reason_msg
                 ),
-            ))
-        } else if !poor_voters.contains(&identity) {
-            Some((
-                ValidatorStakeState::Baseline,
-                format!("🥩 `{}` is current ({})", identity, vote_credits_msg),
-            ))
+            )
         } else {
-            None
+            assert!(!poor_voters.contains(&identity));
+            (Some(ValidatorStakeState::Baseline), vote_credits_msg)
         };
 
         debug!(
-            "\nidentity: {}\n - vote address: {}\n - {}\n - {}\n - {}\n - operation: {:?}",
-            identity,
-            vote_address,
-            vote_credits_msg,
-            block_producer_classification_reason_msg,
-            commission_msg,
-            operation
+            "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
+            identity, vote_address, new_stake_state, memo
         );
-        if let Some((stake_state, memo)) = operation {
+
+        if let Some(stake_state) = new_stake_state {
             desired_validator_stake.push(ValidatorStake {
                 identity,
                 vote_address,
                 stake_state,
-                memo: format!("{}. Staking level: {:?}", memo, stake_state),
+                memo: format!("* {:?} stake: {}: {}", stake_state, identity, memo),
             });
         }
     }

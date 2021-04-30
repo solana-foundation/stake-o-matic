@@ -2,9 +2,9 @@ use {solana_client::rpc_client::RpcClient, solana_sdk::pubkey::Pubkey, std::erro
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ValidatorStakeState {
-    None,     // Validator should receive no stake
-    Baseline, // Validator has been awarded a baseline stake
-    Bonus,    // Validator has been awarded a bonus stake in addition to the baseline stake
+    No,       // Validator should receive no stake
+    Baseline, // Validator has earned the baseline stake level
+    Bonus,    // Validator has earned the bonus stake level
 }
 
 #[derive(Debug, Clone)]
