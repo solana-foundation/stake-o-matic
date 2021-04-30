@@ -31,7 +31,6 @@ pub struct StakePool {
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
-    validator_list: HashSet<Pubkey>,
 }
 
 pub fn new(
@@ -40,7 +39,6 @@ pub fn new(
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
-    validator_list: HashSet<Pubkey>,
 ) -> Result<StakePool, Box<dyn error::Error>> {
     if baseline_stake_amount < MIN_STAKE_CHANGE_AMOUNT {
         return Err(format!(
@@ -63,7 +61,6 @@ pub fn new(
         baseline_stake_amount,
         reserve_stake_address,
         min_reserve_stake_balance,
-        validator_list,
     })
 }
 
@@ -94,10 +91,6 @@ fn validator_transient_stake_address(authorized_staker: Pubkey, vote_address: Pu
 }
 
 impl GenericStakePool for StakePool {
-    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool {
-        self.validator_list.contains(validator_identity)
-    }
-
     fn apply(
         &mut self,
         rpc_client: &RpcClient,
@@ -889,7 +882,6 @@ mod test {
             baseline_stake_amount,
             reserve_stake_address,
             min_reserve_stake_balance,
-            validators.iter().map(|vap| vap.identity).collect(),
         )
         .unwrap();
 

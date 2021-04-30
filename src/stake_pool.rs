@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use {
     crate::generic_stake_pool::*,
-    log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{pubkey::Pubkey, signature::Keypair},
     std::{collections::HashMap, error},
@@ -36,10 +35,6 @@ pub fn new(
 }
 
 impl GenericStakePool for SplStakePool {
-    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool {
-        info!("validator: {}", validator_identity);
-        todo!();
-    }
     fn apply(
         &mut self,
         _rpc_client: &RpcClient,

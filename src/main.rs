@@ -45,6 +45,7 @@ use {
 };
 
 type BoxResult<T> = Result<T, Box<dyn error::Error>>;
+type ValidatorList = HashSet<Pubkey>;
 
 enum InfrastructureConcentrationAffectKind {
     Destake(String),
@@ -54,7 +55,7 @@ enum InfrastructureConcentrationAffectKind {
 #[derive(Debug)]
 enum InfrastructureConcentrationAffects {
     WarnAll,
-    DestakeListed(HashSet<Pubkey>),
+    DestakeListed(ValidatorList),
     DestakeAll,
 }
 
@@ -122,7 +123,7 @@ impl FromStr for InfrastructureConcentrationAffects {
                 let list = list
                     .drain(..)
                     .filter_map(|ref s| Pubkey::from_str(s).ok())
-                    .collect::<HashSet<_>>();
+                    .collect();
                 Ok(Self::DestakeListed(list))
             }
         }
@@ -241,7 +242,7 @@ fn app_version() -> String {
     })
 }
 
-fn validator_list_of(matches: &ArgMatches, cluster: &str) -> HashSet<Pubkey> {
+fn validator_list_of(matches: &ArgMatches, cluster: &str) -> ValidatorList {
     match cluster {
         "mainnet-beta" => validator_list::mainnet_beta_validators(),
         "testnet" => validator_list::testnet_validators(),
@@ -274,7 +275,7 @@ fn validator_list_of(matches: &ArgMatches, cluster: &str) -> HashSet<Pubkey> {
     .collect()
 }
 
-fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericStakePool>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -633,6 +634,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         .get_health()
         .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
+    let validator_list = validator_list_of(&matches, config.cluster.as_str());
+
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("legacy", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
@@ -641,7 +644,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
             let bonus_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "bonus_stake_amount", f64));
-            let validator_list = validator_list_of(matches, config.cluster.as_str());
 
             Box::new(legacy_stake_pool::new(
                 &rpc_client,
@@ -649,7 +651,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 baseline_stake_amount,
                 bonus_stake_amount,
                 source_stake_address,
-                validator_list,
             )?)
         }
         ("stake-pool-v0", Some(matches)) => {
@@ -659,14 +660,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            let validator_list = validator_list_of(matches, config.cluster.as_str());
             Box::new(stake_pool_v0::new(
                 &rpc_client,
                 authorized_staker,
                 baseline_stake_amount,
                 reserve_stake_address,
                 min_reserve_stake_balance,
-                validator_list,
             )?)
         }
         ("stake-pool", Some(matches)) => {
@@ -684,14 +683,14 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         _ => unreachable!(),
     };
 
-    Ok((config, rpc_client, stake_pool))
+    Ok((config, rpc_client, validator_list, stake_pool))
 }
 
 type ClassifyResult = (
     // quality
-    HashSet<Pubkey>,
+    ValidatorList,
     // poor
-    HashSet<Pubkey>,
+    ValidatorList,
     // classification reason
     HashMap<Pubkey, String>,
     // cluster_skip_rate
@@ -779,7 +778,7 @@ fn classify_producers(
 fn classify_poor_voters(
     config: &Config,
     vote_account_info: &[VoteAccountInfo],
-) -> (HashSet<Pubkey>, u64, u64, bool) {
+) -> (ValidatorList, u64, u64, bool) {
     let avg_epoch_credits = vote_account_info
         .iter()
         .map(|vai| vai.epoch_credits)
@@ -889,26 +888,13 @@ fn classify_block_producers(
     )
 }
 
-fn main() -> BoxResult<()> {
-    solana_logger::setup_with_default("solana=info");
-    let (config, rpc_client, mut stake_pool) = get_config()?;
-
-    let notifier = if config.dry_run {
-        Notifier::new("DRYRUN")
-    } else {
-        Notifier::default()
-    };
-
-    if !config.dry_run && notifier.is_empty() {
-        return Err("A notifier must be active with --confirm".into());
-    }
-
-    let epoch_info = rpc_client.get_epoch_info()?;
-    info!("Epoch info: {:?}", epoch_info);
-    if epoch_info.epoch == 0 {
-        return Ok(());
-    }
-    let last_epoch = epoch_info.epoch - 1;
+fn classify(
+    rpc_client: &RpcClient,
+    config: &Config,
+    epoch: Epoch,
+    validator_list: &ValidatorList,
+) -> BoxResult<(Vec<String>, Vec<ValidatorStake>)> {
+    let last_epoch = epoch - 1;
 
     let vote_account_info = get_vote_account_info(&rpc_client, last_epoch)?;
 
@@ -919,8 +905,8 @@ fn main() -> BoxResult<()> {
                     .get_cluster_nodes()?
                     .into_iter()
                     .filter_map(|rpc_contact_info| {
-                        if let Ok(pubkey) = Pubkey::from_str(&rpc_contact_info.pubkey) {
-                            if stake_pool.is_enrolled(&pubkey) {
+                        if let Ok(identity) = Pubkey::from_str(&rpc_contact_info.pubkey) {
+                            if validator_list.contains(&identity) {
                                 if let Some(ref version) = rpc_contact_info.version {
                                     if let Ok(semver) = semver::Version::parse(version) {
                                         if semver < *min_release_version {
@@ -1032,7 +1018,7 @@ fn main() -> BoxResult<()> {
         epoch_credits,
     } in vote_account_info
     {
-        if !stake_pool.is_enrolled(&identity) {
+        if !validator_list.contains(&identity) {
             continue;
         }
         validators_processed += 1;
@@ -1130,15 +1116,38 @@ fn main() -> BoxResult<()> {
             });
         }
     }
-
-    notifications.extend(stake_pool.apply(
-        &rpc_client,
-        config.dry_run,
-        &desired_validator_stake,
-    )?);
     notifications.push(format!("{} validators processed", validators_processed));
 
-    for notification in notifications {
+    Ok((notifications, desired_validator_stake))
+}
+
+fn main() -> BoxResult<()> {
+    solana_logger::setup_with_default("solana=info");
+    let (config, rpc_client, validator_list, mut stake_pool) = get_config()?;
+
+    let notifier = if config.dry_run {
+        Notifier::new("DRYRUN")
+    } else {
+        Notifier::default()
+    };
+
+    if !config.dry_run && notifier.is_empty() {
+        return Err("A notifier must be active with --confirm".into());
+    }
+
+    let epoch_info = rpc_client.get_epoch_info()?;
+    info!("Epoch info: {:?}", epoch_info);
+    if epoch_info.epoch == 0 {
+        return Ok(());
+    }
+
+    let (classify_notifications, desired_validator_stake) =
+        classify(&rpc_client, &config, epoch_info.epoch, &validator_list)?;
+
+    let apply_notifications =
+        stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+
+    for notification in classify_notifications.iter().chain(&apply_notifications) {
         info!("notification: {}", notification);
         notifier.send(&notification);
     }

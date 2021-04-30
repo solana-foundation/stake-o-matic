@@ -10,7 +10,7 @@ use {
         transaction::Transaction,
     },
     solana_stake_program::stake_instruction,
-    std::{collections::HashSet, error},
+    std::error,
 };
 
 pub struct LegacyStakePool {
@@ -18,7 +18,6 @@ pub struct LegacyStakePool {
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
     source_stake_address: Pubkey,
-    validator_list: HashSet<Pubkey>,
 }
 
 pub fn new(
@@ -27,22 +26,16 @@ pub fn new(
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
     source_stake_address: Pubkey,
-    validator_list: HashSet<Pubkey>,
 ) -> Result<LegacyStakePool, Box<dyn error::Error>> {
     Ok(LegacyStakePool {
         authorized_staker,
         baseline_stake_amount,
         bonus_stake_amount,
         source_stake_address,
-        validator_list,
     })
 }
 
 impl GenericStakePool for LegacyStakePool {
-    fn is_enrolled(&self, validator_identity: &Pubkey) -> bool {
-        self.validator_list.contains(validator_identity)
-    }
-
     fn apply(
         &mut self,
         rpc_client: &RpcClient,
@@ -125,10 +118,6 @@ impl LegacyStakePool {
             stake_state,
         } in validator_stake
         {
-            if !self.is_enrolled(identity) {
-                continue;
-            }
-
             let baseline_seed = &vote_address.to_string()[..32];
             let bonus_seed = &format!("A{{{}", vote_address.to_string())[..32];
 
