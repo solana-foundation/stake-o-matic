@@ -1,13 +1,14 @@
 use {
     crate::validators_app,
     log::*,
+    serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
     std::{collections::HashMap, error, str::FromStr},
 };
 
 const DATA_CENTER_ID_UNKNOWN: &str = "0-Unknown";
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct DataCenterId {
     pub asn: u64,
     pub location: String,
@@ -41,15 +42,15 @@ impl std::fmt::Display for DataCenterId {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct DatacenterInfo {
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct DataCenterInfo {
     pub id: DataCenterId,
     pub stake: u64,
     pub stake_percent: f64,
     pub validators: Vec<Pubkey>,
 }
 
-impl DatacenterInfo {
+impl DataCenterInfo {
     pub fn new(id: DataCenterId) -> Self {
         Self {
             id,
@@ -58,7 +59,7 @@ impl DatacenterInfo {
     }
 }
 
-impl std::fmt::Display for DatacenterInfo {
+impl std::fmt::Display for DataCenterInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
@@ -71,7 +72,7 @@ impl std::fmt::Display for DatacenterInfo {
     }
 }
 
-pub fn get() -> Result<Vec<DatacenterInfo>, Box<dyn error::Error>> {
+pub fn get() -> Result<Vec<DataCenterInfo>, Box<dyn error::Error>> {
     let token = std::env::var("VALIDATORS_APP_TOKEN")?;
     let client = validators_app::Client::new(token);
     let validators = client.validators(None, None)?;
@@ -109,7 +110,7 @@ pub fn get() -> Result<Vec<DatacenterInfo>, Box<dyn error::Error>> {
 
         let mut data_center_info = data_center_infos
             .entry(data_center_id.clone())
-            .or_insert_with(|| DatacenterInfo::new(data_center_id));
+            .or_insert_with(|| DataCenterInfo::new(data_center_id));
         data_center_info.stake += stake;
         total_stake += stake;
         data_center_info.validators.push(account);

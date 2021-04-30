@@ -1,13 +1,18 @@
-use {solana_client::rpc_client::RpcClient, solana_sdk::pubkey::Pubkey, std::error};
+use {
+    serde::{Deserialize, Serialize},
+    solana_client::rpc_client::RpcClient,
+    solana_sdk::pubkey::Pubkey,
+    std::error,
+};
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Deserialize, Serialize)]
 pub enum ValidatorStakeState {
     No,       // Validator should receive no stake
     Baseline, // Validator has earned the baseline stake level
     Bonus,    // Validator has earned the bonus stake level
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ValidatorStake {
     pub identity: Pubkey,
     pub vote_address: Pubkey,

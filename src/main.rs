@@ -16,6 +16,7 @@ use {
     },
     confirmed_block_cache::ConfirmedBlockCache,
     log::*,
+    serde::{Deserialize, Serialize},
     solana_clap_utils::{
         input_parsers::{keypair_of, pubkey_of},
         input_validators::{
@@ -60,17 +61,17 @@ enum InfrastructureConcentrationAffects {
 }
 
 impl InfrastructureConcentrationAffects {
-    fn destake_memo(validator_id: &Pubkey, concentration: f64) -> String {
+    fn destake_memo(concentration: f64) -> String {
         format!(
-            "🏟️ `{}` infrastructure concentration {:.1}% is too high",
-            validator_id, concentration,
+            "infrastructure concentration {:.1}% is too high",
+            concentration
         )
     }
-    fn warning_memo(validator_id: &Pubkey, concentration: f64) -> String {
+    fn warning_memo(concentration: f64) -> String {
         format!(
-            "🗺  `{}` infrastructure concentration {:.1}% is too high. \
+            "infrastructure concentration {:.1}% is too high. \
             No stake removed yet, consider finding a new data center",
-            validator_id, concentration,
+            concentration
         )
     }
     pub fn memo(
@@ -79,25 +80,19 @@ impl InfrastructureConcentrationAffects {
         concentration: f64,
     ) -> InfrastructureConcentrationAffectKind {
         match self {
-            Self::DestakeAll => InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
-                validator_id,
-                concentration,
-            )),
-            Self::WarnAll => InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(
-                validator_id,
-                concentration,
-            )),
+            Self::DestakeAll => {
+                InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(concentration))
+            }
+            Self::WarnAll => {
+                InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
+            }
             Self::DestakeListed(ref list) => {
                 if list.contains(validator_id) {
                     InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
-                        validator_id,
                         concentration,
                     ))
                 } else {
-                    InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(
-                        validator_id,
-                        concentration,
-                    ))
+                    InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
                 }
             }
         }
@@ -888,13 +883,69 @@ fn classify_block_producers(
     )
 }
 
+#[derive(Deserialize, Serialize)]
+struct ValidatorClassification {
+    identity: Pubkey,
+    vote_address: Pubkey,
+
+    stake_state: ValidatorStakeState,
+    stake_state_reason: String,
+
+    notes: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct EpochClassificationV1 {
+    data_center_info: Vec<data_center_info::DataCenterInfo>,
+
+    paused: bool, // paused due to unusual information, to prevent accidental removal of too much stake
+    validator_classifications: HashMap<Pubkey, ValidatorClassification>,
+    notes: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+enum EpochClassification {
+    V1(EpochClassificationV1),
+}
+
+impl EpochClassification {
+    fn new(v1: EpochClassificationV1) -> Self {
+        EpochClassification::V1(v1)
+    }
+
+    fn into_current(self) -> EpochClassificationV1 {
+        match self {
+            EpochClassification::V1(v1) => v1,
+        }
+    }
+}
+
 fn classify(
     rpc_client: &RpcClient,
     config: &Config,
     epoch: Epoch,
     validator_list: &ValidatorList,
-) -> BoxResult<(Vec<String>, Vec<ValidatorStake>)> {
+) -> BoxResult<EpochClassification> {
     let last_epoch = epoch - 1;
+
+    let data_center_info = data_center_info::get()
+        .map_err(|e| {
+            warn!("infrastructure concentration skipped: {}", e);
+            e
+        })
+        .unwrap_or_default();
+
+    let infrastructure_concentration_too_high = data_center_info
+        .iter()
+        .filter_map(|dci| {
+            if dci.stake_percent > config.max_infrastructure_concentration {
+                Some((dci.validators.clone(), dci.stake_percent))
+            } else {
+                None
+            }
+        })
+        .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
+        .collect::<HashMap<_, _>>();
 
     let vote_account_info = get_vote_account_info(&rpc_client, last_epoch)?;
 
@@ -944,27 +995,10 @@ fn classify(
             * config.max_old_release_version_percentage
             / 100;
 
-    let infrastructure_concentration = data_center_info::get()
-        .map_err(|e| {
-            warn!("infrastructure concentration skipped: {}", e);
-            e
-        })
-        .unwrap_or_default()
-        .drain(..)
-        .filter_map(|dci| {
-            if dci.stake_percent > config.max_infrastructure_concentration {
-                Some((dci.validators, dci.stake_percent))
-            } else {
-                None
-            }
-        })
-        .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
-        .collect::<HashMap<_, _>>();
-
     let (poor_voters, min_epoch_credits, avg_epoch_credits, too_many_poor_voters) =
         classify_poor_voters(&config, &vote_account_info);
 
-    let mut notifications = vec![
+    let mut notes = vec![
         format!(
             "Minimum vote credits required for epoch {}: {} (cluster average: {}, grace: {}%)",
             last_epoch,
@@ -988,137 +1022,141 @@ fn classify(
     ];
 
     if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
-        notifications.push("Cluster average skip rate is poor".to_string());
+        notes.push("Cluster average skip rate is poor".to_string());
     }
     if too_many_poor_voters {
-        notifications.push(format!(
+        notes.push(format!(
             "Over {}% of validators classified as poor voters",
             config.max_poor_voter_percentage
         ));
     }
     if too_many_old_validators {
-        notifications.push(format!(
+        notes.push(format!(
             "Over {}% of validators classified as running an older release",
             config.max_old_release_version_percentage
         ));
     }
     if too_many_poor_block_producers {
-        notifications.push(format!(
+        notes.push(format!(
             "Over {}% of validators classified as poor block producers in epoch {}",
             config.max_poor_block_producer_percentage, last_epoch,
         ));
     }
 
-    let mut desired_validator_stake = vec![];
-    let mut validators_processed = 0;
-    for VoteAccountInfo {
-        identity,
-        vote_address,
-        commission,
-        epoch_credits,
-    } in vote_account_info
-    {
-        if !validator_list.contains(&identity) {
-            continue;
-        }
-        validators_processed += 1;
+    let paused = too_many_poor_voters || too_many_old_validators || too_many_poor_block_producers;
 
-        let block_producer_classification_reason_msg = block_producer_classification_reason
-            .get(&identity)
-            .cloned()
-            .unwrap_or_default();
+    let mut validator_classifications = HashMap::new();
 
-        let vote_credits_msg = format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
-        let commission_msg = format!("{}% commission", commission);
-
-        let infrastructure_concentration_destake_memo = infrastructure_concentration
-            .get(&identity)
-            .map(|concentration| {
-                config
-                    .infrastructure_concentration_affects
-                    .memo(&identity, *concentration)
-            })
-            .and_then(|affect| match affect {
-                InfrastructureConcentrationAffectKind::Destake(memo) => Some(memo),
-                InfrastructureConcentrationAffectKind::Warn(memo) => {
-                    notifications.push(memo);
-                    None
-                }
-            });
-
-        let (new_stake_state, memo) = if let Some(memo) = infrastructure_concentration_destake_memo
+    if paused {
+        notes.push("Paused".to_string());
+    } else {
+        for VoteAccountInfo {
+            identity,
+            vote_address,
+            commission,
+            epoch_credits,
+        } in vote_account_info
         {
-            (Some(ValidatorStakeState::No), memo)
-        } else if commission > config.max_commission {
-            (
-                Some(ValidatorStakeState::No),
-                format!("commission is too high: {}", commission_msg),
-            )
-        } else if poor_voters.contains(&identity) {
-            (
-                if too_many_poor_voters {
-                    None
-                } else {
-                    Some(ValidatorStakeState::No)
-                },
-                format!("insufficient vote credits: {}", vote_credits_msg),
-            )
-        } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
-            (
-                if too_many_old_validators {
-                    None
-                } else {
-                    Some(ValidatorStakeState::No)
-                },
-                format!(
-                    "Outdated solana release: {}",
-                    cluster_nodes_with_old_version
-                        .get(&identity.to_string())
-                        .unwrap()
-                ),
-            )
-        } else if quality_block_producers.contains(&identity) {
-            (
-                Some(ValidatorStakeState::Bonus),
-                format!(
-                    "good block production during epoch {}: {}",
-                    last_epoch, block_producer_classification_reason_msg
-                ),
-            )
-        } else if poor_block_producers.contains(&identity) {
-            (
-                if too_many_poor_block_producers {
-                    None
-                } else {
-                    Some(ValidatorStakeState::Baseline)
-                },
-                format!(
-                    "poor block production during epoch {}: {} ",
-                    last_epoch, block_producer_classification_reason_msg
-                ),
-            )
-        } else {
-            assert!(!poor_voters.contains(&identity));
-            (Some(ValidatorStakeState::Baseline), vote_credits_msg)
-        };
+            if !validator_list.contains(&identity) {
+                continue;
+            }
 
-        debug!(
-            "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
-            identity, vote_address, new_stake_state, memo
-        );
+            let block_producer_classification_reason_msg = block_producer_classification_reason
+                .get(&identity)
+                .cloned()
+                .unwrap_or_default();
+            let vote_credits_msg =
+                format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
 
-        if let Some(stake_state) = new_stake_state {
-            desired_validator_stake.push(ValidatorStake {
+            let mut validator_notes = vec![];
+
+            let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
+                .get(&identity)
+                .map(|concentration| {
+                    config
+                        .infrastructure_concentration_affects
+                        .memo(&identity, *concentration)
+                })
+                .and_then(|affect| match affect {
+                    InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
+                    InfrastructureConcentrationAffectKind::Warn(reason) => {
+                        validator_notes.push(reason);
+                        None
+                    }
+                });
+
+            let (stake_state, reason) =
+                if let Some(reason) = infrastructure_concentration_destake_reason {
+                    (ValidatorStakeState::No, reason)
+                } else if commission > config.max_commission {
+                    (
+                        ValidatorStakeState::No,
+                        format!("commission is too high: {}% commission", commission),
+                    )
+                } else if poor_voters.contains(&identity) {
+                    (
+                        ValidatorStakeState::No,
+                        format!("insufficient vote credits: {}", vote_credits_msg),
+                    )
+                } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
+                    (
+                        ValidatorStakeState::No,
+                        format!(
+                            "Outdated solana release: {}",
+                            cluster_nodes_with_old_version
+                                .get(&identity.to_string())
+                                .unwrap()
+                        ),
+                    )
+                } else if quality_block_producers.contains(&identity) {
+                    (
+                        ValidatorStakeState::Bonus,
+                        format!(
+                            "good block production during epoch {}: {}",
+                            last_epoch, block_producer_classification_reason_msg
+                        ),
+                    )
+                } else if poor_block_producers.contains(&identity) {
+                    (
+                        ValidatorStakeState::Baseline,
+                        format!(
+                            "poor block production during epoch {}: {} ",
+                            last_epoch, block_producer_classification_reason_msg
+                        ),
+                    )
+                } else {
+                    assert!(!poor_voters.contains(&identity));
+                    (ValidatorStakeState::Baseline, vote_credits_msg)
+                };
+
+            debug!(
+                "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
+                identity, vote_address, stake_state, reason
+            );
+
+            validator_classifications.insert(
                 identity,
-                vote_address,
-                stake_state,
-                memo: format!("* {:?} stake: {}: {}", stake_state, identity, memo),
-            });
+                ValidatorClassification {
+                    identity,
+                    vote_address,
+                    stake_state,
+                    stake_state_reason: reason,
+                    notes: validator_notes,
+                },
+            );
         }
+        notes.push(format!(
+            "{} validators processed",
+            validator_classifications.len()
+        ));
     }
-    notifications.push(format!("{} validators processed", validators_processed));
 
-    Ok((notifications, desired_validator_stake))
+    Ok(EpochClassification::new(EpochClassificationV1 {
+        data_center_info,
+        validator_classifications,
+        paused,
+        notes,
+    }))
 }
 
 fn main() -> BoxResult<()> {
@@ -1141,8 +1179,32 @@ fn main() -> BoxResult<()> {
         return Ok(());
     }
 
-    let (classify_notifications, desired_validator_stake) =
-        classify(&rpc_client, &config, epoch_info.epoch, &validator_list)?;
+    let EpochClassificationV1 {
+        notes: mut classify_notifications,
+        validator_classifications,
+        ..
+    } = classify(&rpc_client, &config, epoch_info.epoch, &validator_list)?.into_current();
+
+    let desired_validator_stake: Vec<_> = validator_classifications
+        .values()
+        .map(|vc| {
+            classify_notifications.extend(
+                vc.notes
+                    .iter()
+                    .map(|note| format!("Note: {}: {}", vc.identity, note)),
+            );
+
+            ValidatorStake {
+                identity: vc.identity,
+                vote_address: vc.vote_address,
+                stake_state: vc.stake_state,
+                memo: format!(
+                    "* {:?} stake: {}: {}",
+                    vc.stake_state, vc.identity, vc.stake_state_reason
+                ),
+            }
+        })
+        .collect();
 
     let apply_notifications =
         stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
