@@ -15,7 +15,13 @@ use {
         signature::{Keypair, Signature, Signer},
         transaction::Transaction,
     },
-    std::{collections::HashMap, error, str::FromStr, thread::sleep, time::Duration},
+    std::{
+        collections::{HashMap, HashSet},
+        error,
+        str::FromStr,
+        thread::sleep,
+        time::Duration,
+    },
 };
 
 pub fn retry_rpc_operation<T, F>(mut retries: usize, op: F) -> client_error::Result<T>
@@ -81,13 +87,17 @@ pub fn simulate_transactions(
     Ok(simulated_transactions)
 }
 
+pub struct SendAndConfirmTransactionResult {
+    pub succeeded: HashSet<Signature>,
+    pub failed: HashSet<Signature>,
+}
+
 pub fn send_and_confirm_transactions(
     rpc_client: &RpcClient,
     dry_run: bool,
-    transactions: Vec<(Transaction, String)>,
+    transactions: Vec<Transaction>,
     authorized_staker: &Keypair,
-    notifications: &mut Vec<String>,
-) -> Result<bool, Box<dyn error::Error>> {
+) -> Result<SendAndConfirmTransactionResult, Box<dyn error::Error>> {
     let authorized_staker_balance = rpc_client.get_balance(&authorized_staker.pubkey())?;
     info!(
         "Authorized staker balance: {} SOL",
@@ -97,7 +107,7 @@ pub fn send_and_confirm_transactions(
     let (blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
     info!("{} transactions to send", transactions.len());
 
-    let required_fee = transactions.iter().fold(0, |fee, (transaction, _)| {
+    let required_fee = transactions.iter().fold(0, |fee, transaction| {
         fee + fee_calculator.calculate_fee(&transaction.message)
     });
     info!("Required fee: {} SOL", lamports_to_sol(required_fee));
@@ -105,25 +115,20 @@ pub fn send_and_confirm_transactions(
         return Err("Authorized staker has insufficient funds".into());
     }
 
-    let mut pending_transactions = HashMap::new();
-    for (mut transaction, memo) in transactions.into_iter() {
+    let mut pending_signatures = HashSet::new();
+    for mut transaction in transactions {
         transaction.sign(&[authorized_staker], blockhash);
 
-        pending_transactions.insert(transaction.signatures[0], memo);
+        pending_signatures.insert(transaction.signatures[0]);
         if !dry_run {
             rpc_client.send_transaction(&transaction)?;
         }
     }
 
-    struct ConfirmedTransaction {
-        success: bool,
-        signature: Signature,
-        memo: String,
-    }
-
-    let mut confirmed_transactions = vec![];
+    let mut succeeded_transactions = HashSet::new();
+    let mut failed_transactions = HashSet::new();
     loop {
-        if pending_transactions.is_empty() {
+        if pending_signatures.is_empty() {
             break;
         }
 
@@ -134,23 +139,21 @@ pub fn send_and_confirm_transactions(
             error!(
                 "Blockhash {} expired with {} pending transactions",
                 blockhash,
-                pending_transactions.len()
+                pending_signatures.len()
             );
 
-            for (signature, memo) in pending_transactions.into_iter() {
-                confirmed_transactions.push(ConfirmedTransaction {
-                    success: false,
-                    signature,
-                    memo,
-                });
+            for signature in pending_signatures.into_iter() {
+                failed_transactions.insert(signature);
             }
             break;
         }
 
-        let pending_signatures = pending_transactions.keys().cloned().collect::<Vec<_>>();
         let mut statuses = vec![];
-        for pending_signatures_chunk in
-            pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
+        for pending_signatures_chunk in pending_signatures
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
         {
             trace!(
                 "checking {} pending_signatures",
@@ -158,13 +161,14 @@ pub fn send_and_confirm_transactions(
             );
             statuses.extend(
                 rpc_client
-                    .get_signature_statuses(&pending_signatures_chunk)?
+                    .get_signature_statuses(pending_signatures_chunk)?
                     .value
                     .into_iter(),
             )
         }
         assert_eq!(statuses.len(), pending_signatures.len());
 
+        let mut still_pending_signatures = HashSet::new();
         for (signature, status) in pending_signatures.into_iter().zip(statuses.into_iter()) {
             info!("{}: status={:?}", signature, status);
             let completed = if dry_run {
@@ -180,37 +184,24 @@ pub fn send_and_confirm_transactions(
             };
 
             if let Some(success) = completed {
-                warn!("{}: completed.  success={}", signature, success);
-                let memo = pending_transactions.remove(&signature).unwrap();
-                confirmed_transactions.push(ConfirmedTransaction {
-                    success,
-                    signature,
-                    memo,
-                });
+                warn!("{}: completed. success={}", signature, success);
+                if success {
+                    succeeded_transactions.insert(signature);
+                } else {
+                    failed_transactions.insert(signature);
+                }
+            } else {
+                still_pending_signatures.insert(signature);
             }
         }
+        pending_signatures = still_pending_signatures;
         sleep(Duration::from_millis(250));
     }
 
-    confirmed_transactions.sort_by(|a, b| a.memo.cmp(&b.memo));
-
-    let mut ok = true;
-
-    for ConfirmedTransaction {
-        success,
-        signature,
-        memo,
-    } in confirmed_transactions
-    {
-        if success {
-            info!("OK:   {}: {}", signature, memo);
-            notifications.push(memo)
-        } else {
-            error!("FAIL: {}: {}", signature, memo);
-            ok = false
-        }
-    }
-    Ok(ok)
+    Ok(SendAndConfirmTransactionResult {
+        succeeded: succeeded_transactions,
+        failed: failed_transactions,
+    })
 }
 
 pub struct VoteAccountInfo {

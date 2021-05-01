@@ -96,7 +96,7 @@ impl GenericStakePool for StakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<String>, Box<dyn error::Error>> {
+    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>> {
         if dry_run {
             return Err("dryrun not supported".into());
         }
@@ -197,23 +197,25 @@ impl GenericStakePool for StakePool {
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
-        let mut notifications = vec![
+        let notes = vec![
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
-        notifications.extend(distribute_validator_stake(
-            rpc_client,
-            &self.authorized_staker,
-            desired_validator_stake
-                .iter()
-                .filter(|vs| !busy_validators.contains(&vs.identity))
-                .cloned(),
-            self.reserve_stake_address,
-            self.min_reserve_stake_balance,
-            self.baseline_stake_amount,
-            bonus_stake_amount,
-        )?);
-        Ok(notifications)
+        Ok((
+            notes,
+            distribute_validator_stake(
+                rpc_client,
+                &self.authorized_staker,
+                desired_validator_stake
+                    .iter()
+                    .filter(|vs| !busy_validators.contains(&vs.identity))
+                    .cloned(),
+                self.reserve_stake_address,
+                self.min_reserve_stake_balance,
+                self.baseline_stake_amount,
+                bonus_stake_amount,
+            )?,
+        ))
     }
 }
 
@@ -296,43 +298,37 @@ fn merge_orphaned_stake_accounts(
         match stake_activation.state {
             StakeActivationState::Activating | StakeActivationState::Deactivating => {}
             StakeActivationState::Active => {
-                transactions.push((
-                    Transaction::new_with_payer(
-                        &[stake_instruction::deactivate_stake(
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                        )],
-                        Some(&authorized_staker.pubkey()),
-                    ),
-                    format!("Deactivating stake {}", stake_address),
+                transactions.push(Transaction::new_with_payer(
+                    &[stake_instruction::deactivate_stake(
+                        &stake_address,
+                        &authorized_staker.pubkey(),
+                    )],
+                    Some(&authorized_staker.pubkey()),
                 ));
+                info!("Deactivating stake {}", stake_address);
             }
             StakeActivationState::Inactive => {
-                transactions.push((
-                    Transaction::new_with_payer(
-                        &stake_instruction::merge(
-                            &reserve_stake_address,
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                        ),
-                        Some(&authorized_staker.pubkey()),
+                transactions.push(Transaction::new_with_payer(
+                    &stake_instruction::merge(
+                        &reserve_stake_address,
+                        &stake_address,
+                        &authorized_staker.pubkey(),
                     ),
-                    format!(
-                        "Merging orphaned stake, {}, into reserve {}",
-                        stake_address, reserve_stake_address
-                    ),
+                    Some(&authorized_staker.pubkey()),
                 ));
+
+                info!(
+                    "Merging orphaned stake, {}, into reserve {}",
+                    stake_address, reserve_stake_address
+                );
             }
         }
     }
 
-    if !send_and_confirm_transactions(
-        rpc_client,
-        false,
-        transactions,
-        authorized_staker,
-        &mut vec![],
-    )? {
+    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
         Err("Failed to merge orphaned stake accounts".into())
     } else {
         Ok(())
@@ -391,17 +387,15 @@ fn merge_transient_stake_accounts(
                         &stake_account,
                         &transient_stake_account,
                     )? {
-                        transactions.push((
-                            Transaction::new_with_payer(
-                                &stake_instruction::merge(
-                                    &stake_address,
-                                    &transient_stake_address,
-                                    &authorized_staker.pubkey(),
-                                ),
-                                Some(&authorized_staker.pubkey()),
+                        transactions.push(Transaction::new_with_payer(
+                            &stake_instruction::merge(
+                                &stake_address,
+                                &transient_stake_address,
+                                &authorized_staker.pubkey(),
                             ),
-                            format!("Merging active transient stake for {}", identity),
+                            Some(&authorized_staker.pubkey()),
                         ));
+                        info!("Merging active transient stake for {}", identity);
                     } else {
                         warn!(
                                 "Unable to merge active transient stake for {} due to credits observed mismatch",
@@ -411,29 +405,24 @@ fn merge_transient_stake_accounts(
                     }
                 }
                 StakeActivationState::Inactive => {
-                    transactions.push((
-                        Transaction::new_with_payer(
-                            &stake_instruction::merge(
-                                &reserve_stake_address,
-                                &transient_stake_address,
-                                &authorized_staker.pubkey(),
-                            ),
-                            Some(&authorized_staker.pubkey()),
+                    transactions.push(Transaction::new_with_payer(
+                        &stake_instruction::merge(
+                            &reserve_stake_address,
+                            &transient_stake_address,
+                            &authorized_staker.pubkey(),
                         ),
-                        format!("Merging inactive transient stake for {}", identity),
+                        Some(&authorized_staker.pubkey()),
                     ));
+                    info!("Merging inactive transient stake for {}", identity);
                 }
             }
         }
     }
 
-    if !send_and_confirm_transactions(
-        rpc_client,
-        false,
-        transactions,
-        authorized_staker,
-        &mut vec![],
-    )? {
+    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
         Err("Failed to merge transient stake".into())
     } else {
         Ok(())
@@ -549,26 +538,24 @@ fn create_validator_stake_accounts(
                     vote_address,
                 ));
 
-                transactions.push((
-                    Transaction::new_with_payer(&instructions, Some(&authorized_staker.pubkey())),
-                    format!(
-                        "Creating stake account for validator {} ({})",
-                        identity, stake_address
-                    ),
+                transactions.push(Transaction::new_with_payer(
+                    &instructions,
+                    Some(&authorized_staker.pubkey()),
                 ));
+                info!(
+                    "Creating stake account for validator {} ({})",
+                    identity, stake_address
+                );
             }
             warn!("Validator {} busy due to no stake account", identity);
             busy_validators.insert(*identity);
         }
     }
 
-    if !send_and_confirm_transactions(
-        rpc_client,
-        false,
-        transactions,
-        authorized_staker,
-        &mut vec![],
-    )? {
+    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
         Err("Failed to create validator stake accounts".into())
     } else {
         Ok(())
@@ -583,7 +570,7 @@ fn distribute_validator_stake<V>(
     min_reserve_stake_balance: u64,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
-) -> Result<Vec<String>, Box<dyn error::Error>>
+) -> Result<bool, Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
 {
@@ -605,7 +592,6 @@ where
     for ValidatorStake {
         identity,
         stake_state,
-        memo,
         vote_address,
     } in desired_validator_stake
     {
@@ -659,9 +645,9 @@ where
                     &authorized_staker.pubkey(),
                 ));
 
-                transactions.push((
-                    Transaction::new_with_payer(&instructions, Some(&authorized_staker.pubkey())),
-                    format!("{}. Removing {} stake", memo, Sol(amount_to_remove)),
+                transactions.push(Transaction::new_with_payer(
+                    &instructions,
+                    Some(&authorized_staker.pubkey()),
                 ));
             }
         } else if balance < desired_balance {
@@ -697,9 +683,9 @@ where
                     &vote_address,
                 ));
 
-                transactions.push((
-                    Transaction::new_with_payer(&instructions, Some(&authorized_staker.pubkey())),
-                    format!("{}. Adding {} stake", memo, Sol(amount_to_add)),
+                transactions.push(Transaction::new_with_payer(
+                    &instructions,
+                    Some(&authorized_staker.pubkey()),
                 ));
             }
         }
@@ -709,19 +695,14 @@ where
         Sol(reserve_stake_balance)
     );
 
-    let mut notifications = vec![];
-    let ok = send_and_confirm_transactions(
-        rpc_client,
-        false,
-        transactions,
-        authorized_staker,
-        &mut notifications,
-    )?;
+    let ok = send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty();
 
     if !ok {
         error!("One or more transactions failed to execute")
     }
-    Ok(notifications)
+    Ok(ok)
 }
 
 #[cfg(test)]

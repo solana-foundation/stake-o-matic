@@ -40,7 +40,7 @@ impl GenericStakePool for SplStakePool {
         _rpc_client: &RpcClient,
         _dry_run: bool,
         _desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<String>, Box<dyn error::Error>> {
-        todo!();
+    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>> {
+        Ok((vec!["TODO".to_string()], false))
     }
 }

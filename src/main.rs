@@ -37,8 +37,9 @@ use {
     std::{
         collections::{HashMap, HashSet},
         error,
-        fs::File,
-        path::PathBuf,
+        fs::{self, File},
+        io::{self, Write},
+        path::{Path, PathBuf},
         process,
         str::FromStr,
     },
@@ -152,6 +153,7 @@ fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Ve
 struct Config {
     json_rpc_url: String,
     cluster: String,
+    cluster_data_dir: PathBuf,
 
     dry_run: bool,
 
@@ -205,6 +207,7 @@ impl Config {
         Self {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: "mainnet-beta".to_string(),
+            data_dir: PathBuf::default(),
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -241,7 +244,7 @@ fn validator_list_of(matches: &ArgMatches, cluster: &str) -> ValidatorList {
     match cluster {
         "mainnet-beta" => validator_list::mainnet_beta_validators(),
         "testnet" => validator_list::testnet_validators(),
-        "unknown" => {
+        "custom" => {
             let validator_list_file =
                 File::open(value_t_or_exit!(matches, "--validator-list", PathBuf)).unwrap_or_else(
                     |err| {
@@ -308,8 +311,10 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
             Arg::with_name("cluster")
                 .long("cluster")
                 .value_name("NAME")
-                .possible_values(&["mainnet-beta", "testnet"])
+                .possible_values(&["mainnet-beta", "testnet", "custom"])
                 .takes_value(true)
+                .default_value("custom")
+                .required(true)
                 .help("Name of the cluster to operate on")
         )
         .arg(
@@ -317,6 +322,14 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                 .long("confirm")
                 .takes_value(false)
                 .help("Confirm that the stake adjustments should actually be made")
+        )
+        .arg(
+            Arg::with_name("db_path")
+                .long("db-path")
+                .value_name("PATH")
+                .takes_value(true)
+                .default_value("db")
+                .help("Location for storing staking history")
         )
         .arg(
             Arg::with_name("quality_block_producer_percentage")
@@ -565,7 +578,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
     };
 
     let dry_run = !matches.is_present("confirm");
-    let cluster = value_t!(matches, "cluster", String).unwrap_or_else(|_| "unknown".into());
+    let cluster = value_t!(matches, "cluster", String).unwrap_or_else(|_| "custom".into());
     let quality_block_producer_percentage =
         value_t_or_exit!(matches, "quality_block_producer_percentage", usize);
     let min_epoch_credit_percentage_of_average =
@@ -583,10 +596,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
         "testnet" => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://testnet.solana.com".into()),
-        "unknown" => value_t!(matches, "json_rpc_url", String)
+        "custom" => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| config.json_rpc_url.clone()),
         _ => unreachable!(),
     };
+    let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
+    let cluster_data_dir = db_path.join(format!("data-{}", cluster));
 
     let confirmed_block_cache_path = matches
         .value_of("confirmed_block_cache_path")
@@ -607,6 +622,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
     let config = Config {
         json_rpc_url,
         cluster,
+        cluster_data_dir,
         dry_run,
         quality_block_producer_percentage,
         max_commission,
@@ -883,40 +899,82 @@ fn classify_block_producers(
     )
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct ValidatorClassification {
     identity: Pubkey,
+
     vote_address: Pubkey,
 
     stake_state: ValidatorStakeState,
     stake_state_reason: String,
 
+    // Informational notes regarding this validator
     notes: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Default, Deserialize, Serialize, Clone)]
 struct EpochClassificationV1 {
+    // Data Center observations for this epoch
     data_center_info: Vec<data_center_info::DataCenterInfo>,
 
-    paused: bool, // paused due to unusual information, to prevent accidental removal of too much stake
-    validator_classifications: HashMap<Pubkey, ValidatorClassification>,
+    // `None` indicates a pause due to unusual observations during classification
+    validator_classifications: Option<HashMap<Pubkey, ValidatorClassification>>,
+
+    // Informational notes regarding this epoch
     notes: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 enum EpochClassification {
     V1(EpochClassificationV1),
 }
 
 impl EpochClassification {
-    fn new(v1: EpochClassificationV1) -> Self {
+    pub fn new(v1: EpochClassificationV1) -> Self {
         EpochClassification::V1(v1)
     }
 
-    fn into_current(self) -> EpochClassificationV1 {
+    pub fn into_current(self) -> EpochClassificationV1 {
         match self {
             EpochClassification::V1(v1) => v1,
         }
+    }
+
+    fn file_name<P>(epoch: Epoch, path: P) -> PathBuf
+    where
+        P: AsRef<Path>,
+    {
+        path.as_ref().join(format!("epoch-{}.yml", epoch))
+    }
+
+    pub fn exists<P>(epoch: Epoch, path: P) -> bool
+    where
+        P: AsRef<Path>,
+    {
+        Self::file_name(epoch, path).exists()
+    }
+
+    pub fn load<P>(epoch: Epoch, path: P) -> Result<Self, io::Error>
+    where
+        P: AsRef<Path>,
+    {
+        let file = File::open(Self::file_name(epoch, path))?;
+        serde_yaml::from_reader(file)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))
+    }
+
+    pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
+    where
+        P: AsRef<Path>,
+    {
+        let serialized = serde_yaml::to_string(self)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))?;
+
+        fs::create_dir_all(&path)?;
+        let mut file = File::create(Self::file_name(epoch, path))?;
+        file.write_all(&serialized.into_bytes())?;
+
+        Ok(())
     }
 }
 
@@ -1043,118 +1101,120 @@ fn classify(
         ));
     }
 
-    let paused = too_many_poor_voters || too_many_old_validators || too_many_poor_block_producers;
+    let validator_classifications =
+        if too_many_poor_voters || too_many_old_validators || too_many_poor_block_producers {
+            notes.push("Stake adjustments skipped this epoch".to_string());
+            None
+        } else {
+            let mut validator_classifications = HashMap::new();
 
-    let mut validator_classifications = HashMap::new();
-
-    if paused {
-        notes.push("Paused".to_string());
-    } else {
-        for VoteAccountInfo {
-            identity,
-            vote_address,
-            commission,
-            epoch_credits,
-        } in vote_account_info
-        {
-            if !validator_list.contains(&identity) {
-                continue;
-            }
-
-            let block_producer_classification_reason_msg = block_producer_classification_reason
-                .get(&identity)
-                .cloned()
-                .unwrap_or_default();
-            let vote_credits_msg =
-                format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
-
-            let mut validator_notes = vec![];
-
-            let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
-                .get(&identity)
-                .map(|concentration| {
-                    config
-                        .infrastructure_concentration_affects
-                        .memo(&identity, *concentration)
-                })
-                .and_then(|affect| match affect {
-                    InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
-                    InfrastructureConcentrationAffectKind::Warn(reason) => {
-                        validator_notes.push(reason);
-                        None
-                    }
-                });
-
-            let (stake_state, reason) =
-                if let Some(reason) = infrastructure_concentration_destake_reason {
-                    (ValidatorStakeState::No, reason)
-                } else if commission > config.max_commission {
-                    (
-                        ValidatorStakeState::No,
-                        format!("commission is too high: {}% commission", commission),
-                    )
-                } else if poor_voters.contains(&identity) {
-                    (
-                        ValidatorStakeState::No,
-                        format!("insufficient vote credits: {}", vote_credits_msg),
-                    )
-                } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
-                    (
-                        ValidatorStakeState::No,
-                        format!(
-                            "Outdated solana release: {}",
-                            cluster_nodes_with_old_version
-                                .get(&identity.to_string())
-                                .unwrap()
-                        ),
-                    )
-                } else if quality_block_producers.contains(&identity) {
-                    (
-                        ValidatorStakeState::Bonus,
-                        format!(
-                            "good block production during epoch {}: {}",
-                            last_epoch, block_producer_classification_reason_msg
-                        ),
-                    )
-                } else if poor_block_producers.contains(&identity) {
-                    (
-                        ValidatorStakeState::Baseline,
-                        format!(
-                            "poor block production during epoch {}: {} ",
-                            last_epoch, block_producer_classification_reason_msg
-                        ),
-                    )
-                } else {
-                    assert!(!poor_voters.contains(&identity));
-                    (ValidatorStakeState::Baseline, vote_credits_msg)
-                };
-
-            debug!(
-                "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
-                identity, vote_address, stake_state, reason
-            );
-
-            validator_classifications.insert(
+            for VoteAccountInfo {
                 identity,
-                ValidatorClassification {
+                vote_address,
+                commission,
+                epoch_credits,
+            } in vote_account_info
+            {
+                if !validator_list.contains(&identity) {
+                    continue;
+                }
+
+                let block_producer_classification_reason_msg = block_producer_classification_reason
+                    .get(&identity)
+                    .cloned()
+                    .unwrap_or_default();
+                let vote_credits_msg =
+                    format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
+
+                let mut validator_notes = vec![];
+
+                let infrastructure_concentration_destake_reason =
+                    infrastructure_concentration_too_high
+                        .get(&identity)
+                        .map(|concentration| {
+                            config
+                                .infrastructure_concentration_affects
+                                .memo(&identity, *concentration)
+                        })
+                        .and_then(|affect| match affect {
+                            InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
+                            InfrastructureConcentrationAffectKind::Warn(reason) => {
+                                validator_notes.push(reason);
+                                None
+                            }
+                        });
+
+                let (stake_state, reason) =
+                    if let Some(reason) = infrastructure_concentration_destake_reason {
+                        (ValidatorStakeState::No, reason)
+                    } else if commission > config.max_commission {
+                        (
+                            ValidatorStakeState::No,
+                            format!("commission is too high: {}% commission", commission),
+                        )
+                    } else if poor_voters.contains(&identity) {
+                        (
+                            ValidatorStakeState::No,
+                            format!("insufficient vote credits: {}", vote_credits_msg),
+                        )
+                    } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
+                        (
+                            ValidatorStakeState::No,
+                            format!(
+                                "Outdated solana release: {}",
+                                cluster_nodes_with_old_version
+                                    .get(&identity.to_string())
+                                    .unwrap()
+                            ),
+                        )
+                    } else if quality_block_producers.contains(&identity) {
+                        (
+                            ValidatorStakeState::Bonus,
+                            format!(
+                                "good block production during epoch {}: {}",
+                                last_epoch, block_producer_classification_reason_msg
+                            ),
+                        )
+                    } else if poor_block_producers.contains(&identity) {
+                        (
+                            ValidatorStakeState::Baseline,
+                            format!(
+                                "poor block production during epoch {}: {} ",
+                                last_epoch, block_producer_classification_reason_msg
+                            ),
+                        )
+                    } else {
+                        assert!(!poor_voters.contains(&identity));
+                        (ValidatorStakeState::Baseline, vote_credits_msg)
+                    };
+
+                debug!(
+                    "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
+                    identity, vote_address, stake_state, reason
+                );
+
+                validator_classifications.insert(
                     identity,
-                    vote_address,
-                    stake_state,
-                    stake_state_reason: reason,
-                    notes: validator_notes,
-                },
-            );
-        }
-        notes.push(format!(
-            "{} validators processed",
-            validator_classifications.len()
-        ));
-    }
+                    ValidatorClassification {
+                        identity,
+                        vote_address,
+                        stake_state,
+                        stake_state_reason: reason,
+                        notes: validator_notes,
+                    },
+                );
+            }
+            notes.push(format!(
+                "{} validators processed",
+                validator_classifications.len()
+            ));
+
+            Some(validator_classifications)
+        };
 
     Ok(EpochClassification::new(EpochClassificationV1 {
         data_center_info,
         validator_classifications,
-        paused,
         notes,
     }))
 }
@@ -1173,48 +1233,132 @@ fn main() -> BoxResult<()> {
         return Err("A notifier must be active with --confirm".into());
     }
 
-    let epoch_info = rpc_client.get_epoch_info()?;
-    info!("Epoch info: {:?}", epoch_info);
-    if epoch_info.epoch == 0 {
+    let epoch = rpc_client.get_epoch_info()?.epoch;
+    info!("Epoch: {:?}", epoch);
+    if epoch == 0 {
         return Ok(());
     }
 
+    info!("Data directory: {}", config.cluster_data_dir.display());
+
+    let mut previous_epoch = epoch;
+    let previous_epoch_classification = loop {
+        if previous_epoch == 0 {
+            info!("No previous EpochClassification found");
+            break EpochClassificationV1::default();
+        }
+        previous_epoch -= 1;
+
+        if EpochClassification::exists(previous_epoch, &config.cluster_data_dir) {
+            let previous_epoch_classification =
+                EpochClassification::load(previous_epoch, &config.cluster_data_dir)?.into_current();
+
+            if previous_epoch_classification
+                .validator_classifications
+                .is_some()
+            {
+                info!(
+                    "Previous EpochClassification found for epoch {}",
+                    previous_epoch
+                );
+                break previous_epoch_classification;
+            } else {
+                info!(
+                    "Skipping previous EpochClassification for epoch {}",
+                    previous_epoch
+                );
+            }
+        }
+    };
+
+    let (epoch_classification, first_time) =
+        if EpochClassification::exists(epoch, &config.cluster_data_dir) {
+            info!("Classification for {} already exists", epoch);
+            (
+                EpochClassification::load(epoch, &config.cluster_data_dir)?,
+                false,
+            )
+        } else {
+            let epoch_classification = classify(&rpc_client, &config, epoch, &validator_list)?;
+            epoch_classification.save(epoch, &config.cluster_data_dir)?;
+            (epoch_classification, true)
+        };
+
     let EpochClassificationV1 {
-        notes: mut classify_notifications,
+        mut notes,
         validator_classifications,
         ..
-    } = classify(&rpc_client, &config, epoch_info.epoch, &validator_list)?.into_current();
+    } = epoch_classification.into_current();
 
-    let desired_validator_stake: Vec<_> = validator_classifications
-        .values()
-        .map(|vc| {
-            classify_notifications.extend(
-                vc.notes
-                    .iter()
-                    .map(|note| format!("Note: {}: {}", vc.identity, note)),
-            );
+    let mut validator_stake_change_notes = vec![];
+    let mut validator_notes = vec![];
+    let success = if let Some(validator_classifications) = validator_classifications {
+        let previous_validator_classifications = previous_epoch_classification
+            .validator_classifications
+            .unwrap_or_default();
 
-            ValidatorStake {
-                identity: vc.identity,
-                vote_address: vc.vote_address,
-                stake_state: vc.stake_state,
-                memo: format!(
-                    "* {:?} stake: {}: {}",
-                    vc.stake_state, vc.identity, vc.stake_state_reason
-                ),
-            }
-        })
-        .collect();
+        let desired_validator_stake: Vec<_> = validator_classifications
+            .values()
+            .map(|vc| {
+                validator_notes.extend(
+                    vc.notes
+                        .iter()
+                        .map(|note| format!("Note: {}: {}", vc.identity, note)),
+                );
 
-    let apply_notifications =
-        stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+                let stake_state_changed = match previous_validator_classifications
+                    .get(&vc.identity)
+                    .map(|prev_vc| prev_vc.stake_state)
+                {
+                    Some(previous_stake_state) => previous_stake_state != vc.stake_state,
+                    None => true,
+                };
 
-    for notification in classify_notifications.iter().chain(&apply_notifications) {
-        info!("notification: {}", notification);
-        notifier.send(&notification);
+                if stake_state_changed {
+                    validator_stake_change_notes.push(format!(
+                        "* {:?} stake: {}: {}",
+                        vc.stake_state, vc.identity, vc.stake_state_reason
+                    ));
+                }
+
+                ValidatorStake {
+                    identity: vc.identity,
+                    vote_address: vc.vote_address,
+                    stake_state: vc.stake_state,
+                }
+            })
+            .collect();
+
+        let (stake_pool_notes, success) =
+            stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+        notes.extend(stake_pool_notes);
+
+        validator_notes.sort();
+        notes.extend(validator_notes);
+
+        validator_stake_change_notes.sort();
+        notes.extend(validator_stake_change_notes);
+
+        success
+    } else {
+        true
+    };
+
+    // Only notify the user if this is the first run for this epoch
+    if first_time {
+        for note in notes {
+            info!("notification: {}", note);
+            notifier.send(&note);
+        }
+    } else {
+        info!("notifications skipped on re-run");
     }
 
-    Ok(())
+    if success {
+        Ok(())
+    } else {
+        Err("something failed".into())
+    }
 }
 
 #[cfg(test)]

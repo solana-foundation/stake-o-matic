@@ -41,7 +41,7 @@ impl GenericStakePool for LegacyStakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<String>, Box<dyn error::Error>> {
+    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>> {
         let (init_transactions, update_transactions) = self.build_transactions(
             rpc_client,
             self.authorized_staker.pubkey(),
@@ -53,12 +53,14 @@ impl GenericStakePool for LegacyStakePool {
             dry_run,
             init_transactions,
             &self.authorized_staker,
-            &mut vec![],
-        )? {
+        )?
+        .failed
+        .is_empty()
+        {
             return Err("Failed to initialize stake pool. Unable to continue".into());
         }
 
-        let mut notifications = vec![
+        let notes = vec![
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(self.bonus_stake_amount)),
         ];
@@ -67,17 +69,16 @@ impl GenericStakePool for LegacyStakePool {
             dry_run,
             update_transactions,
             &self.authorized_staker,
-            &mut notifications,
-        )?;
+        )?
+        .failed
+        .is_empty();
 
         if !ok {
             error!("One or more transactions failed to execute")
         }
-        Ok(notifications)
+        Ok((notes, ok))
     }
 }
-
-type TransactionWithMemo = (Transaction, String);
 
 impl LegacyStakePool {
     fn build_transactions(
@@ -85,7 +86,7 @@ impl LegacyStakePool {
         rpc_client: &RpcClient,
         authorized_staker: Pubkey,
         validator_stake: &[ValidatorStake],
-    ) -> Result<(Vec<TransactionWithMemo>, Vec<TransactionWithMemo>), Box<dyn error::Error>> {
+    ) -> Result<(Vec<Transaction>, Vec<Transaction>), Box<dyn error::Error>> {
         let mut init_transactions = vec![];
         let mut update_transactions = vec![];
         let mut source_stake_lamports_required = 0;
@@ -114,7 +115,6 @@ impl LegacyStakePool {
         for ValidatorStake {
             identity,
             vote_address,
-            memo,
             stake_state,
         } in validator_stake
         {
@@ -153,27 +153,23 @@ impl LegacyStakePool {
                         )
                     })?.state
             } else {
-                let memo = format!(
+                info!(
                     "Creating baseline stake account for validator {} ({})",
                     identity, baseline_stake_address
                 );
-                debug!("Adding transaction: {}", memo);
 
                 source_stake_lamports_required += self.baseline_stake_amount;
-                init_transactions.push((
-                    Transaction::new_unsigned(Message::new(
-                        &stake_instruction::split_with_seed(
-                            &self.source_stake_address,
-                            &authorized_staker,
-                            self.baseline_stake_amount,
-                            &baseline_stake_address,
-                            &authorized_staker,
-                            baseline_seed,
-                        ),
-                        Some(&authorized_staker),
-                    )),
-                    memo,
-                ));
+                init_transactions.push(Transaction::new_unsigned(Message::new(
+                    &stake_instruction::split_with_seed(
+                        &self.source_stake_address,
+                        &authorized_staker,
+                        self.baseline_stake_amount,
+                        &baseline_stake_address,
+                        &authorized_staker,
+                        baseline_seed,
+                    ),
+                    Some(&authorized_staker),
+                )));
                 StakeActivationState::Inactive
             };
 
@@ -192,26 +188,22 @@ impl LegacyStakePool {
                     })?
                     .state
             } else {
-                let memo = format!(
+                info!(
                     "Creating bonus stake account for validator {} ({})",
                     identity, bonus_stake_address
                 );
-                debug!("Adding transaction: {}", memo);
                 source_stake_lamports_required += self.bonus_stake_amount;
-                init_transactions.push((
-                    Transaction::new_unsigned(Message::new(
-                        &stake_instruction::split_with_seed(
-                            &self.source_stake_address,
-                            &authorized_staker,
-                            self.bonus_stake_amount,
-                            &bonus_stake_address,
-                            &authorized_staker,
-                            bonus_seed,
-                        ),
-                        Some(&authorized_staker),
-                    )),
-                    memo,
-                ));
+                init_transactions.push(Transaction::new_unsigned(Message::new(
+                    &stake_instruction::split_with_seed(
+                        &self.source_stake_address,
+                        &authorized_staker,
+                        self.bonus_stake_amount,
+                        &bonus_stake_address,
+                        &authorized_staker,
+                        bonus_seed,
+                    ),
+                    Some(&authorized_staker),
+                )));
                 StakeActivationState::Inactive
             };
 
@@ -224,7 +216,7 @@ impl LegacyStakePool {
                 bonus_stake_activation_state,
                 stake_state,
             ) {
-                update_transactions.push((transaction, memo.clone()))
+                update_transactions.push(transaction)
             }
         }
 

@@ -17,7 +17,6 @@ pub struct ValidatorStake {
     pub identity: Pubkey,
     pub vote_address: Pubkey,
     pub stake_state: ValidatorStakeState,
-    pub memo: String,
 }
 
 pub trait GenericStakePool {
@@ -26,5 +25,5 @@ pub trait GenericStakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<String>, Box<dyn error::Error>>;
+    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>>;
 }
