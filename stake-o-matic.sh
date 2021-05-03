@@ -19,7 +19,7 @@ fi
 
 if [[ $BUILDKITE = true ]]; then
   cd db
-  git add *
+  git add ./*
   if ! git diff-index --quiet HEAD; then
     git commit -m "Automated update by $BUILDKITE_BUILD_ID"
     git push origin
