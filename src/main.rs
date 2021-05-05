@@ -1,4 +1,3 @@
-mod confirmed_block_cache;
 mod data_center_info;
 mod generic_stake_pool;
 mod legacy_stake_pool;
@@ -14,7 +13,6 @@ use {
         crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, ArgMatches,
         SubCommand,
     },
-    confirmed_block_cache::ConfirmedBlockCache,
     log::*,
     serde::{Deserialize, Serialize},
     solana_clap_utils::{
@@ -207,7 +205,7 @@ impl Config {
         Self {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: "mainnet-beta".to_string(),
-            data_dir: PathBuf::default(),
+            cluster_data_dir: PathBuf::default(),
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -832,19 +830,9 @@ fn classify_poor_voters(
 
 fn get_confirmed_blocks(
     rpc_client: &RpcClient,
-    config: &Config,
     start_slot: Slot,
     end_slot: Slot,
 ) -> BoxResult<HashSet<Slot>> {
-    let first_available_block = rpc_client.get_first_available_block()?;
-    if first_available_block >= start_slot {
-        return Err(format!(
-            "First available block is newer than the start slot: {} > {}",
-            first_available_block, start_slot,
-        )
-        .into());
-    }
-
     info!(
         "loading slot history. slot range is [{},{}]",
         start_slot, end_slot
@@ -863,11 +851,7 @@ fn get_confirmed_blocks(
             .filter(|slot| slot_history.check(*slot) == slot_history::Check::Found)
             .collect())
     } else {
-        info!("slot range is not within the SlotHistory sysvar, using slower path");
-        let cache_path = config.confirmed_block_cache_path.join(&config.cluster);
-        let cbc = ConfirmedBlockCache::new(cache_path, &config.json_rpc_url).unwrap();
-
-        Ok(cbc.query(start_slot, end_slot)?.into_iter().collect())
+        Err("slot range is not within the SlotHistory sysvar".into())
     }
 }
 
@@ -882,7 +866,7 @@ fn classify_block_producers(
     let last_slot_in_epoch = epoch_schedule.get_last_slot_in_epoch(epoch);
 
     let confirmed_blocks =
-        get_confirmed_blocks(rpc_client, config, first_slot_in_epoch, last_slot_in_epoch)?;
+        get_confirmed_blocks(rpc_client, first_slot_in_epoch, last_slot_in_epoch)?;
 
     let leader_schedule = rpc_client
         .get_leader_schedule_with_commitment(
