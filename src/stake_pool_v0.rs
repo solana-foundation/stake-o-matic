@@ -749,7 +749,6 @@ mod test {
                 identity: vap.identity,
                 vote_address: vap.vote_address,
                 stake_state,
-                memo: format!("{:?}", stake_state),
             })
             .collect::<Vec<_>>();
 
@@ -879,7 +878,6 @@ mod test {
                         identity: vap.identity,
                         vote_address: vap.vote_address,
                         stake_state: ValidatorStakeState::No,
-                        memo: "none".to_string(),
                     })
                     .collect::<Vec<_>>(),
             )
@@ -942,19 +940,16 @@ mod test {
                 identity: validators[0].identity,
                 vote_address: validators[0].vote_address,
                 stake_state: ValidatorStakeState::No,
-                memo: "none".to_string(),
             },
             ValidatorStake {
                 identity: validators[1].identity,
                 vote_address: validators[1].vote_address,
                 stake_state: ValidatorStakeState::Baseline,
-                memo: "baseline".to_string(),
             },
             ValidatorStake {
                 identity: validators[2].identity,
                 vote_address: validators[2].vote_address,
                 stake_state: ValidatorStakeState::Bonus,
-                memo: "bonus".to_string(),
             },
         ];
 
