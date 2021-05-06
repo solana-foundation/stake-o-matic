@@ -16,7 +16,7 @@ use {
     log::*,
     serde::{Deserialize, Serialize},
     solana_clap_utils::{
-        input_parsers::{keypair_of, pubkey_of},
+        input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
             is_amount, is_keypair, is_pubkey_or_keypair, is_url, is_valid_percentage,
         },
@@ -25,13 +25,17 @@ use {
     solana_notifier::Notifier,
     solana_sdk::{
         account::from_account,
+        account_utils::StateMut,
         clock::{Epoch, Slot},
         commitment_config::CommitmentConfig,
         native_token::*,
         pubkey::Pubkey,
         slot_history::{self, SlotHistory},
+        stake_history::StakeHistory,
         sysvar,
     },
+    solana_stake_program::stake_state::StakeState,
+    solana_vote_program::vote_state::VoteState,
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -40,6 +44,7 @@ use {
         path::{Path, PathBuf},
         process,
         str::FromStr,
+        time::Duration,
     },
     thiserror::Error,
 };
@@ -197,6 +202,12 @@ struct Config {
     /// Destake if the validator's vote credits for the latest full epoch are less than this percentage
     /// of the cluster average
     min_epoch_credit_percentage_of_average: usize,
+
+    /// Minimum amount of lamports a validator must stake on itself to be eligible for a delegation
+    min_self_stake_lamports: u64,
+
+    /// If true, enforce the `min_self_stake_lamports` limit. If false, only warn on insufficient stake
+    enforce_min_self_stake: bool,
 }
 
 impl Config {
@@ -218,6 +229,8 @@ impl Config {
             infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
             bad_cluster_average_skip_rate: 50,
             min_epoch_credit_percentage_of_average: 50,
+            min_self_stake_lamports: 0,
+            enforce_min_self_stake: false,
         }
     }
 }
@@ -447,6 +460,22 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                                          destaking those in the list and warning \
                                          any others")
         )
+        .arg(
+            Arg::with_name("min_self_stake")
+                .long("min-self-stake")
+                .value_name("AMOUNT")
+                .takes_value(true)
+                .validator(is_amount)
+                .default_value("0")
+                .required(true)
+                .help("Minimum amount of SOL a validator must stake on itself to be eligible for a delegation"),
+        )
+        .arg(
+            Arg::with_name("enforce_min_self_stake")
+                .long("enforce-min-self-stake")
+                .takes_value(false)
+                .help("Enforce the minimum self-stake requirement")
+        )
         .subcommand(
             SubCommand::with_name("legacy").about("Use the legacy staking solution")
             .arg(
@@ -589,6 +618,9 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         value_t_or_exit!(matches, "max_old_release_version_percentage", usize);
     let min_release_version = release_version_of(&matches, "min_release_version");
 
+    let enforce_min_self_stake = matches.is_present("enforce_min_self_stake");
+    let min_self_stake_lamports = lamports_of_sol(&matches, "min_self_stake").unwrap();
+
     let json_rpc_url = match cluster.as_str() {
         "mainnet-beta" => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
@@ -633,10 +665,13 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         infrastructure_concentration_affects,
         bad_cluster_average_skip_rate,
         min_epoch_credit_percentage_of_average,
+        min_self_stake_lamports,
+        enforce_min_self_stake,
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
-    let rpc_client = RpcClient::new(config.json_rpc_url.clone());
+    let rpc_client =
+        RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(90));
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
     rpc_client
@@ -962,6 +997,60 @@ impl EpochClassification {
     }
 }
 
+// Look for self stake, where the stake withdraw authority matches the vote account withdraw
+// authority
+fn get_self_stake_by_vote_account(
+    rpc_client: &RpcClient,
+    epoch: Epoch,
+    vote_account_info: &[VoteAccountInfo],
+) -> BoxResult<HashMap<Pubkey, u64>> {
+    let mut self_stake_by_vote_account = HashMap::new();
+
+    info!("Building list of authorized voters...");
+
+    let mut authorized_withdrawer = HashMap::new();
+    for VoteAccountInfo { vote_address, .. } in vote_account_info {
+        let vote_account = rpc_client.get_account(vote_address)?;
+
+        if let Some(vote_state) = VoteState::from(&vote_account) {
+            authorized_withdrawer.insert(vote_address, vote_state.authorized_withdrawer);
+        }
+    }
+
+    info!("Fetching stake accounts...");
+    let all_stake_accounts = rpc_client.get_program_accounts(&solana_stake_program::id())?;
+
+    let stake_history_account = rpc_client
+        .get_account_with_commitment(&sysvar::stake_history::id(), CommitmentConfig::finalized())?
+        .value
+        .unwrap();
+
+    let stake_history: StakeHistory =
+        from_account(&stake_history_account).ok_or("Failed to deserialize stake history")?;
+
+    for (_stake_pubkey, stake_account) in all_stake_accounts {
+        if let Ok(StakeState::Stake(meta, stake)) = stake_account.state() {
+            let vote_address = &stake.delegation.voter_pubkey;
+            if let Some(vote_account_authorized_withdrawer) =
+                authorized_withdrawer.get(vote_address)
+            {
+                if *vote_account_authorized_withdrawer == meta.authorized.withdrawer {
+                    let effective_stake = stake
+                        .delegation
+                        .stake_activating_and_deactivating(epoch, Some(&stake_history), true)
+                        .0;
+                    if effective_stake > 0 {
+                        *self_stake_by_vote_account.entry(*vote_address).or_default() +=
+                            effective_stake;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(self_stake_by_vote_account)
+}
+
 fn classify(
     rpc_client: &RpcClient,
     config: &Config,
@@ -990,6 +1079,9 @@ fn classify(
         .collect::<HashMap<_, _>>();
 
     let vote_account_info = get_vote_account_info(&rpc_client, last_epoch)?;
+
+    let self_stake_by_vote_account =
+        get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
 
     let (cluster_nodes_with_old_version, min_release_version): (HashMap<String, _>, _) =
         match config.min_release_version {
@@ -1061,6 +1153,10 @@ fn classify(
             "Maximum infrastructure concentration: {:0}%",
             config.max_infrastructure_concentration
         ),
+        format!(
+            "Minimum required self stake: {}",
+            Sol(config.min_self_stake_lamports)
+        ),
     ];
 
     if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
@@ -1085,116 +1181,131 @@ fn classify(
         ));
     }
 
-    let validator_classifications =
-        if too_many_poor_voters || too_many_old_validators || too_many_poor_block_producers {
-            notes.push("Stake adjustments skipped this epoch".to_string());
-            None
-        } else {
-            let mut validator_classifications = HashMap::new();
+    let validator_classifications = if too_many_poor_voters
+        || too_many_old_validators
+        || too_many_poor_block_producers
+    {
+        notes.push("Stake adjustments skipped this epoch".to_string());
+        None
+    } else {
+        let mut validator_classifications = HashMap::new();
 
-            for VoteAccountInfo {
-                identity,
-                vote_address,
-                commission,
-                epoch_credits,
-            } in vote_account_info
-            {
-                if !validator_list.contains(&identity) {
-                    continue;
-                }
-
-                let block_producer_classification_reason_msg = block_producer_classification_reason
-                    .get(&identity)
-                    .cloned()
-                    .unwrap_or_default();
-                let vote_credits_msg =
-                    format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
-
-                let mut validator_notes = vec![];
-
-                let infrastructure_concentration_destake_reason =
-                    infrastructure_concentration_too_high
-                        .get(&identity)
-                        .map(|concentration| {
-                            config
-                                .infrastructure_concentration_affects
-                                .memo(&identity, *concentration)
-                        })
-                        .and_then(|affect| match affect {
-                            InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
-                            InfrastructureConcentrationAffectKind::Warn(reason) => {
-                                validator_notes.push(reason);
-                                None
-                            }
-                        });
-
-                let (stake_state, reason) =
-                    if let Some(reason) = infrastructure_concentration_destake_reason {
-                        (ValidatorStakeState::No, reason)
-                    } else if commission > config.max_commission {
-                        (
-                            ValidatorStakeState::No,
-                            format!("commission is too high: {}% commission", commission),
-                        )
-                    } else if poor_voters.contains(&identity) {
-                        (
-                            ValidatorStakeState::No,
-                            format!("insufficient vote credits: {}", vote_credits_msg),
-                        )
-                    } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
-                        (
-                            ValidatorStakeState::No,
-                            format!(
-                                "Outdated solana release: {}",
-                                cluster_nodes_with_old_version
-                                    .get(&identity.to_string())
-                                    .unwrap()
-                            ),
-                        )
-                    } else if quality_block_producers.contains(&identity) {
-                        (
-                            ValidatorStakeState::Bonus,
-                            format!(
-                                "good block production during epoch {}: {}",
-                                last_epoch, block_producer_classification_reason_msg
-                            ),
-                        )
-                    } else if poor_block_producers.contains(&identity) {
-                        (
-                            ValidatorStakeState::Baseline,
-                            format!(
-                                "poor block production during epoch {}: {} ",
-                                last_epoch, block_producer_classification_reason_msg
-                            ),
-                        )
-                    } else {
-                        assert!(!poor_voters.contains(&identity));
-                        (ValidatorStakeState::Baseline, vote_credits_msg)
-                    };
-
-                debug!(
-                    "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
-                    identity, vote_address, stake_state, reason
-                );
-
-                validator_classifications.insert(
-                    identity,
-                    ValidatorClassification {
-                        identity,
-                        vote_address,
-                        stake_state,
-                        stake_state_reason: reason,
-                        notes: validator_notes,
-                    },
-                );
+        for VoteAccountInfo {
+            identity,
+            vote_address,
+            commission,
+            epoch_credits,
+        } in vote_account_info
+        {
+            if !validator_list.contains(&identity) {
+                continue;
             }
-            notes.push(format!(
-                "{} validators processed",
-                validator_classifications.len()
-            ));
 
-            Some(validator_classifications)
-        };
+            let self_stake = self_stake_by_vote_account
+                .get(&vote_address)
+                .cloned()
+                .unwrap_or_default();
+
+            let block_producer_classification_reason_msg = block_producer_classification_reason
+                .get(&identity)
+                .cloned()
+                .unwrap_or_default();
+            let vote_credits_msg =
+                format!("{} credits earned in epoch {}", epoch_credits, last_epoch);
+
+            let mut validator_notes = vec![];
+
+            let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
+                .get(&identity)
+                .map(|concentration| {
+                    config
+                        .infrastructure_concentration_affects
+                        .memo(&identity, *concentration)
+                })
+                .and_then(|affect| match affect {
+                    InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
+                    InfrastructureConcentrationAffectKind::Warn(reason) => {
+                        validator_notes.push(reason);
+                        None
+                    }
+                });
+
+            let insufficent_self_stake_msg =
+                format!("insufficient self stake: {}", Sol(self_stake));
+            if !config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
+                validator_notes.push(insufficent_self_stake_msg.clone());
+            }
+
+            let (stake_state, reason) = if let Some(reason) =
+                infrastructure_concentration_destake_reason
+            {
+                (ValidatorStakeState::No, reason)
+            } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
+                (ValidatorStakeState::No, insufficent_self_stake_msg)
+            } else if commission > config.max_commission {
+                (
+                    ValidatorStakeState::No,
+                    format!("commission is too high: {}% commission", commission),
+                )
+            } else if poor_voters.contains(&identity) {
+                (
+                    ValidatorStakeState::No,
+                    format!("insufficient vote credits: {}", vote_credits_msg),
+                )
+            } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
+                (
+                    ValidatorStakeState::No,
+                    format!(
+                        "Outdated solana release: {}",
+                        cluster_nodes_with_old_version
+                            .get(&identity.to_string())
+                            .unwrap()
+                    ),
+                )
+            } else if quality_block_producers.contains(&identity) {
+                (
+                    ValidatorStakeState::Bonus,
+                    format!(
+                        "good block production during epoch {}: {}",
+                        last_epoch, block_producer_classification_reason_msg
+                    ),
+                )
+            } else if poor_block_producers.contains(&identity) {
+                (
+                    ValidatorStakeState::Baseline,
+                    format!(
+                        "poor block production during epoch {}: {} ",
+                        last_epoch, block_producer_classification_reason_msg
+                    ),
+                )
+            } else {
+                assert!(!poor_voters.contains(&identity));
+                (ValidatorStakeState::Baseline, vote_credits_msg)
+            };
+
+            debug!(
+                "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
+                identity, vote_address, stake_state, reason
+            );
+
+            validator_classifications.insert(
+                identity,
+                ValidatorClassification {
+                    identity,
+                    vote_address,
+                    stake_state,
+                    stake_state_reason: reason,
+                    notes: validator_notes,
+                },
+            );
+        }
+        notes.push(format!(
+            "{} validators processed",
+            validator_classifications.len()
+        ));
+
+        Some(validator_classifications)
+    };
 
     Ok(EpochClassification::new(EpochClassificationV1 {
         data_center_info,
