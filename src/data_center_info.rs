@@ -72,22 +72,30 @@ impl std::fmt::Display for DataCenterInfo {
     }
 }
 
-pub fn get() -> Result<Vec<DataCenterInfo>, Box<dyn error::Error>> {
+#[derive(Default)]
+pub struct DataCenters {
+    pub info: Vec<DataCenterInfo>,
+    pub by_identity: HashMap<Pubkey, DataCenterId>,
+}
+
+pub fn get() -> Result<DataCenters, Box<dyn error::Error>> {
     let token = std::env::var("VALIDATORS_APP_TOKEN")?;
     let client = validators_app::Client::new(token);
     let validators = client.validators(None, None)?;
-    let mut data_center_infos = HashMap::new();
+    let mut data_center_map = HashMap::new();
     let mut total_stake = 0;
     let mut unknown_data_center_stake: u64 = 0;
+
+    let mut by_identity = HashMap::new();
     for v in validators.as_ref() {
-        let account = v
+        let identity = v
             .account
             .as_ref()
             .and_then(|pubkey| Pubkey::from_str(pubkey).ok());
-        let account = if let Some(account) = account {
-            account
+        let identity = if let Some(identity) = identity {
+            identity
         } else {
-            warn!("No vote pubkey for: {:?}", v);
+            warn!("No identity for: {:?}", v);
             continue;
         };
 
@@ -108,12 +116,14 @@ pub fn get() -> Result<Vec<DataCenterInfo>, Box<dyn error::Error>> {
             })
             .unwrap_or_default();
 
-        let mut data_center_info = data_center_infos
+        by_identity.insert(identity, data_center_id.clone());
+
+        let mut data_center_info = data_center_map
             .entry(data_center_id.clone())
             .or_insert_with(|| DataCenterInfo::new(data_center_id));
         data_center_info.stake += stake;
         total_stake += stake;
-        data_center_info.validators.push(account);
+        data_center_info.validators.push(identity);
     }
 
     let unknown_percent = 100f64 * (unknown_data_center_stake as f64) / total_stake as f64;
@@ -121,12 +131,12 @@ pub fn get() -> Result<Vec<DataCenterInfo>, Box<dyn error::Error>> {
         warn!("unknown data center percentage: {:.0}%", unknown_percent);
     }
 
-    let data_center_infos = data_center_infos
+    let info = data_center_map
         .drain()
         .map(|(_, mut i)| {
             i.stake_percent = 100f64 * i.stake as f64 / total_stake as f64;
             i
         })
         .collect();
-    Ok(data_center_infos)
+    Ok(DataCenters { info, by_identity })
 }

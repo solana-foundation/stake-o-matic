@@ -62,6 +62,7 @@ enum InfrastructureConcentrationAffects {
     WarnAll,
     DestakeListed(ValidatorList),
     DestakeAll,
+    DestakeNew,
 }
 
 impl InfrastructureConcentrationAffects {
@@ -73,19 +74,29 @@ impl InfrastructureConcentrationAffects {
     }
     fn warning_memo(concentration: f64) -> String {
         format!(
-            "infrastructure concentration {:.1}% is too high. \
-            No stake removed yet, consider finding a new data center",
+            "infrastructure concentration {:.1}% is too high; \
+            consider finding a new data center",
             concentration
         )
     }
     pub fn memo(
         &self,
         validator_id: &Pubkey,
+        new_validator: bool,
         concentration: f64,
     ) -> InfrastructureConcentrationAffectKind {
         match self {
             Self::DestakeAll => {
                 InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(concentration))
+            }
+            Self::DestakeNew => {
+                if new_validator {
+                    InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
+                        concentration,
+                    ))
+                } else {
+                    InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
+                }
             }
             Self::WarnAll => {
                 InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
@@ -113,7 +124,8 @@ impl FromStr for InfrastructureConcentrationAffects {
         let lower = s.to_ascii_lowercase();
         match lower.as_str() {
             "warn" => Ok(Self::WarnAll),
-            "destake" => Ok(Self::DestakeAll),
+            "destake-all" => Ok(Self::DestakeAll),
+            "destake-new" => Ok(Self::DestakeNew),
             _ => {
                 let file = File::open(s)
                     .map_err(|_| InfrastructureConcentrationAffectsFromStrError(s.to_string()))?;
@@ -451,11 +463,11 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                 })
                 .help("How validators with infrastruction concentration above \
                        `max_infrastructure_concentration` will be affected. \
-                       Accepted values are: \
-                       1) warn         - Stake unaffected. A warning message \
-                                         is notified \
-                       2) destake      - Removes all validator stake \
-                       3) PATH_TO_YAML - Reads a list of validator identity \
+                       Accepted values are:\n\
+                       1) warn         - Stake unaffected. A warning message is notified\n\
+                       2) destake-new  - Will not stake new validators, existing validator retain their stake\n\
+                       3) destake-all  - Removes all validator stake \n\
+                       4) PATH_TO_YAML - Reads a list of validator identity \
                                          pubkeys from the specified YAML file \
                                          destaking those in the list and warning \
                                          any others")
@@ -655,8 +667,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         cluster_data_dir,
         dry_run,
         quality_block_producer_percentage,
-        max_commission,
         max_poor_block_producer_percentage,
+        max_commission,
         min_release_version,
         max_old_release_version_percentage,
         max_poor_voter_percentage,
@@ -929,7 +941,13 @@ struct ValidatorClassification {
 
     // Informational notes regarding this validator
     notes: Vec<String>,
+
+    // Map of data center to number of times the validator has been observed there.
+    data_center_residency: Option<HashMap<data_center_info::DataCenterId, usize>>,
 }
+
+type ValidatorClassificationByIdentity =
+    HashMap<solana_sdk::pubkey::Pubkey, ValidatorClassification>;
 
 #[derive(Default, Deserialize, Serialize, Clone)]
 struct EpochClassificationV1 {
@@ -937,7 +955,7 @@ struct EpochClassificationV1 {
     data_center_info: Vec<data_center_info::DataCenterInfo>,
 
     // `None` indicates a pause due to unusual observations during classification
-    validator_classifications: Option<HashMap<Pubkey, ValidatorClassification>>,
+    validator_classifications: Option<ValidatorClassificationByIdentity>,
 
     // Informational notes regarding this epoch
     notes: Vec<String>,
@@ -1056,17 +1074,19 @@ fn classify(
     config: &Config,
     epoch: Epoch,
     validator_list: &ValidatorList,
+    previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
 ) -> BoxResult<EpochClassification> {
     let last_epoch = epoch - 1;
 
-    let data_center_info = data_center_info::get()
+    let data_centers = data_center_info::get()
         .map_err(|e| {
             warn!("infrastructure concentration skipped: {}", e);
             e
         })
         .unwrap_or_default();
 
-    let infrastructure_concentration_too_high = data_center_info
+    let infrastructure_concentration_too_high = data_centers
+        .info
         .iter()
         .filter_map(|dci| {
             if dci.stake_percent > config.max_infrastructure_concentration {
@@ -1201,6 +1221,26 @@ fn classify(
                 continue;
             }
 
+            let current_data_center_id =
+                data_centers.by_identity.get(&identity).ok_or_else(|| {
+                    format!("Validator {:?} not found in the data center list", identity)
+                })?;
+
+            let mut data_center_residency = {
+                let previous_data_center_residency = previous_epoch_validator_classifications
+                    .map(|p| p.get(&identity).map(|vc| vc.data_center_residency.clone()))
+                    .flatten()
+                    .flatten()
+                    .unwrap_or_default();
+
+                // Decay previous data center residency observations
+                previous_data_center_residency
+                    .into_iter()
+                    .map(|(dc, i)| (dc, i.saturating_sub(1)))
+                    .filter(|(_, i)| *i > 0)
+                    .collect::<HashMap<_, _>>()
+            };
+
             let self_stake = self_stake_by_vote_account
                 .get(&vote_address)
                 .cloned()
@@ -1218,9 +1258,11 @@ fn classify(
             let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
                 .get(&identity)
                 .map(|concentration| {
-                    config
-                        .infrastructure_concentration_affects
-                        .memo(&identity, *concentration)
+                    config.infrastructure_concentration_affects.memo(
+                        &identity,
+                        !data_center_residency.contains_key(current_data_center_id),
+                        *concentration,
+                    )
                 })
                 .and_then(|affect| match affect {
                     InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
@@ -1283,9 +1325,18 @@ fn classify(
                 (ValidatorStakeState::Baseline, vote_credits_msg)
             };
 
+            if stake_state == ValidatorStakeState::Bonus {
+                // Add weight to the current data center location
+                *data_center_residency
+                    .entry(current_data_center_id.clone())
+                    .or_default() += 1;
+            }
+
             debug!(
-                "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - {}",
-                identity, vote_address, stake_state, reason
+                "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - data center: {:?} (seniority: {})\n - {}",
+                identity, vote_address, stake_state, current_data_center_id,
+                data_center_residency.get(&current_data_center_id).cloned().unwrap_or_default(),
+                reason
             );
 
             validator_classifications.insert(
@@ -1296,6 +1347,7 @@ fn classify(
                     stake_state,
                     stake_state_reason: reason,
                     notes: validator_notes,
+                    data_center_residency: Some(data_center_residency),
                 },
             );
         }
@@ -1308,7 +1360,7 @@ fn classify(
     };
 
     Ok(EpochClassification::new(EpochClassificationV1 {
-        data_center_info,
+        data_center_info: data_centers.info,
         validator_classifications,
         notes,
     }))
@@ -1374,7 +1426,15 @@ fn main() -> BoxResult<()> {
                 false,
             )
         } else {
-            let epoch_classification = classify(&rpc_client, &config, epoch, &validator_list)?;
+            let epoch_classification = classify(
+                &rpc_client,
+                &config,
+                epoch,
+                &validator_list,
+                previous_epoch_classification
+                    .validator_classifications
+                    .as_ref(),
+            )?;
             epoch_classification.save(epoch, &config.cluster_data_dir)?;
             (epoch_classification, true)
         };
