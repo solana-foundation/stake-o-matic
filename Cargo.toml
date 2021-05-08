@@ -19,16 +19,16 @@ semver = "0.11.0"
 serde = { version = "1.0.122", features = ["derive"] }
 serde_json = "1.0.62"
 serde_yaml = "0.8.13"
-solana-account-decoder = "1.6.5"
-solana-clap-utils = "1.6.5"
-solana-client = "1.6.5"
-solana-cli-config = "1.6.5"
-solana-logger = "1.6.5"
-solana-notifier = "1.6.5"
-solana-sdk = "1.6.5"
-solana-stake-program = "1.6.5"
-solana-vote-program = "1.6.5"
-solana-transaction-status = "1.6.5"
+solana-account-decoder = "1.6.8"
+solana-clap-utils = "1.6.8"
+solana-client = "1.6.8"
+solana-cli-config = "1.6.8"
+solana-logger = "1.6.8"
+solana-notifier = "1.6.8"
+solana-sdk = "1.6.8"
+solana-stake-program = "1.6.8"
+solana-vote-program = "1.6.8"
+solana-transaction-status = "1.6.8"
 thiserror = "1.0.21"
 
 spl-stake-pool = { git = "https://github.com/solana-labs/solana-program-library", rev = "938dd01e9b6ca60a184abad359a9385abf0ffbfa" }
@@ -36,8 +36,8 @@ spl-stake-pool = { git = "https://github.com/solana-labs/solana-program-library"
 
 [dev-dependencies]
 indicatif = "0.15.0"
-solana-validator = "1.6.5"
-solana-vote-program = "1.6.5"
+solana-validator = "1.6.8"
+solana-vote-program = "1.6.8"
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]
