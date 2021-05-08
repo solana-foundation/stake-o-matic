@@ -305,7 +305,7 @@ fn merge_orphaned_stake_accounts(
                     )],
                     Some(&authorized_staker.pubkey()),
                 ));
-                info!("Deactivating stake {}", stake_address);
+                debug!("Deactivating stake {}", stake_address);
             }
             StakeActivationState::Inactive => {
                 transactions.push(Transaction::new_with_payer(
@@ -317,7 +317,7 @@ fn merge_orphaned_stake_accounts(
                     Some(&authorized_staker.pubkey()),
                 ));
 
-                info!(
+                debug!(
                     "Merging orphaned stake, {}, into reserve {}",
                     stake_address, reserve_stake_address
                 );
@@ -395,12 +395,12 @@ fn merge_transient_stake_accounts(
                             ),
                             Some(&authorized_staker.pubkey()),
                         ));
-                        info!("Merging active transient stake for {}", identity);
+                        debug!("Merging active transient stake for {}", identity);
                     } else {
                         warn!(
-                                "Unable to merge active transient stake for {} due to credits observed mismatch",
-                                identity
-                            );
+                            "Unable to merge active transient stake for {} due to credits observed mismatch",
+                            identity
+                        );
                         busy_validators.insert(*identity);
                     }
                 }
@@ -413,7 +413,7 @@ fn merge_transient_stake_accounts(
                         ),
                         Some(&authorized_staker.pubkey()),
                     ));
-                    info!("Merging inactive transient stake for {}", identity);
+                    debug!("Merging inactive transient stake for {}", identity);
                 }
             }
         }
@@ -542,7 +542,7 @@ fn create_validator_stake_accounts(
                     &instructions,
                     Some(&authorized_staker.pubkey()),
                 ));
-                info!(
+                debug!(
                     "Creating stake account for validator {} ({})",
                     identity, stake_address
                 );
@@ -612,26 +612,14 @@ where
             )
         })?;
 
-        info!(
-            "desired stake for {} ({:?}) is {}, current balance is {}",
-            identity,
-            stake_state,
-            Sol(desired_balance),
-            Sol(balance)
-        );
-
         let transient_stake_address_seed = validator_transient_stake_address_seed(vote_address);
 
         #[allow(clippy::comparison_chain)]
-        if balance > desired_balance {
+        let op_msg = if balance > desired_balance {
             let amount_to_remove = balance - desired_balance;
             if amount_to_remove < MIN_STAKE_CHANGE_AMOUNT {
-                info!(
-                    "Skipping deactivation since amount_to_remove is too small: {}",
-                    Sol(amount_to_remove)
-                );
+                format!("not removing {} (amount too small)", Sol(amount_to_remove))
             } else {
-                info!("removing {} stake", Sol(amount_to_remove));
                 let mut instructions = stake_instruction::split_with_seed(
                     &stake_address,
                     &authorized_staker.pubkey(),
@@ -649,25 +637,25 @@ where
                     &instructions,
                     Some(&authorized_staker.pubkey()),
                 ));
+                format!("removing {}", Sol(amount_to_remove))
             }
         } else if balance < desired_balance {
             let mut amount_to_add = desired_balance - balance;
             if amount_to_add > reserve_stake_balance {
-                info!(
+                trace!(
                     "note: amount_to_add > reserve_stake_balance: {} > {}",
-                    amount_to_add, reserve_stake_balance
+                    amount_to_add,
+                    reserve_stake_balance
                 );
                 amount_to_add = reserve_stake_balance;
             }
 
-            if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
-                info!(
-                    "Skipping delegation since amount_to_add is too small: {}",
-                    Sol(amount_to_add)
-                );
+            if amount_to_add == 0 {
+                "reserve depleted".to_string()
+            } else if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
+                format!("not adding {} (amount too small)", Sol(amount_to_add))
             } else {
                 reserve_stake_balance -= amount_to_add;
-                info!("adding {} stake", Sol(amount_to_add));
 
                 let mut instructions = stake_instruction::split_with_seed(
                     &reserve_stake_address,
@@ -687,8 +675,20 @@ where
                     &instructions,
                     Some(&authorized_staker.pubkey()),
                 ));
+                format!("adding {}", Sol(amount_to_add))
             }
-        }
+        } else {
+            "no change".to_string()
+        };
+
+        debug!(
+            "{} ({:?}) target: {}, current: {}, {}",
+            identity,
+            stake_state,
+            Sol(desired_balance),
+            Sol(balance),
+            op_msg,
+        );
     }
     info!(
         "Reserve stake available balance after updates: {}",
