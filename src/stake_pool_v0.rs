@@ -506,12 +506,34 @@ fn create_validator_stake_accounts(
                     )
                 })?;
 
-            if stake_activation.state != StakeActivationState::Active {
-                warn!(
-                    "Validator {} busy due to stake activation of {}: {:?}",
-                    identity, stake_address, stake_activation
-                );
-                busy_validators.insert(*identity);
+            match stake_activation.state {
+                StakeActivationState::Activating | StakeActivationState::Deactivating => {
+                    warn!(
+                        "Validator {} busy due to stake activation or deactivation of {}: {:?}",
+                        identity, stake_address, stake_activation
+                    );
+                    busy_validators.insert(*identity);
+                }
+                StakeActivationState::Active => {}
+                StakeActivationState::Inactive => {
+                    warn!(
+                        "Validator {} busy due to inactive stake {}: {:?}",
+                        identity, stake_address, stake_activation
+                    );
+                    transactions.push(Transaction::new_with_payer(
+                        &[stake_instruction::delegate_stake(
+                            &stake_address,
+                            &authorized_staker.pubkey(),
+                            vote_address,
+                        )],
+                        Some(&authorized_staker.pubkey()),
+                    ));
+                    debug!(
+                        "Activating stake account for validator {} ({})",
+                        identity, stake_address
+                    );
+                    busy_validators.insert(*identity);
+                }
             }
         } else {
             if reserve_stake_balance < MIN_STAKE_ACCOUNT_BALANCE {
