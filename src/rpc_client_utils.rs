@@ -170,7 +170,7 @@ pub fn send_and_confirm_transactions(
 
         let mut still_pending_signatures = HashSet::new();
         for (signature, status) in pending_signatures.into_iter().zip(statuses.into_iter()) {
-            info!("{}: status={:?}", signature, status);
+            trace!("{}: status={:?}", signature, status);
             let completed = if dry_run {
                 Some(true)
             } else if let Some(status) = &status {
@@ -184,7 +184,7 @@ pub fn send_and_confirm_transactions(
             };
 
             if let Some(success) = completed {
-                warn!("{}: completed. success={}", signature, success);
+                info!("{}: completed. success={}", signature, success);
                 if success {
                     succeeded_transactions.insert(signature);
                 } else {
