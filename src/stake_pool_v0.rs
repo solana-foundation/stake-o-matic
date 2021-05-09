@@ -632,7 +632,14 @@ where
                 "Unable to get stake account balance: {}: {}",
                 stake_address, err
             )
-        })?;
+        })? + rpc_client
+            .get_balance(&transient_stake_address)
+            .map_err(|err| {
+                format!(
+                    "Unable to get transient stake account balance: {}: {}",
+                    transient_stake_address, err
+                )
+            })?;
 
         let transient_stake_address_seed = validator_transient_stake_address_seed(vote_address);
 
