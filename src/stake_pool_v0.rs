@@ -1,12 +1,10 @@
 use {
-    crate::{generic_stake_pool::*, rpc_client_utils::send_and_confirm_transactions},
-    log::*,
-    solana_client::{
-        rpc_client::RpcClient,
-        rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
-        rpc_filter,
-        rpc_response::StakeActivationState,
+    crate::{
+        generic_stake_pool::*,
+        rpc_client_utils::{get_all_stake, send_and_confirm_transactions},
     },
+    log::*,
+    solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
         account::Account,
         native_token::{Sol, LAMPORTS_PER_SOL},
@@ -243,40 +241,6 @@ fn get_available_stake_balance(
     } else {
         Ok(balance.saturating_sub(reserve_stake_balance))
     }
-}
-
-fn get_all_stake(
-    rpc_client: &RpcClient,
-    authorized_staker: Pubkey,
-) -> Result<(HashSet<Pubkey>, u64), Box<dyn error::Error>> {
-    let mut all_stake_addresses = HashSet::new();
-    let mut total_stake_balance = 0;
-
-    let all_stake_accounts = rpc_client.get_program_accounts_with_config(
-        &solana_stake_program::id(),
-        RpcProgramAccountsConfig {
-            filters: Some(vec![
-                // Filter by `Meta::authorized::staker`, which begins at byte offset 12
-                rpc_filter::RpcFilterType::Memcmp(rpc_filter::Memcmp {
-                    offset: 12,
-                    bytes: rpc_filter::MemcmpEncodedBytes::Binary(authorized_staker.to_string()),
-                    encoding: Some(rpc_filter::MemcmpEncoding::Binary),
-                }),
-            ]),
-            account_config: RpcAccountInfoConfig {
-                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
-                commitment: Some(rpc_client.commitment()),
-                ..RpcAccountInfoConfig::default()
-            },
-        },
-    )?;
-
-    for (address, account) in all_stake_accounts {
-        all_stake_addresses.insert(address);
-        total_stake_balance += account.lamports;
-    }
-
-    Ok((all_stake_addresses, total_stake_balance))
 }
 
 fn merge_orphaned_stake_accounts(
@@ -856,10 +820,14 @@ mod test {
             (baseline_stake_amount + sol_to_lamports(100.)) * validators.len() as u64;
         let total_stake_amount_plus_min = total_stake_amount + min_reserve_stake_balance;
 
-        let reserve_stake_address =
-            create_stake_account(&rpc_client, &authorized_staker, total_stake_amount_plus_min)
-                .unwrap()
-                .pubkey();
+        let reserve_stake_address = create_stake_account(
+            &rpc_client,
+            &authorized_staker,
+            &authorized_staker.pubkey(),
+            total_stake_amount_plus_min,
+        )
+        .unwrap()
+        .pubkey();
 
         let assert_reserve_account_only = || {
             assert_eq!(
