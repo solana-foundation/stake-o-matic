@@ -1,12 +1,3 @@
-mod data_center_info;
-mod generic_stake_pool;
-mod legacy_stake_pool;
-mod rpc_client_utils;
-mod stake_pool;
-mod stake_pool_v0;
-mod validator_list;
-mod validators_app;
-
 use {
     crate::{generic_stake_pool::*, rpc_client_utils::*},
     clap::{
@@ -48,6 +39,15 @@ use {
     },
     thiserror::Error,
 };
+
+mod data_center_info;
+mod generic_stake_pool;
+mod legacy_stake_pool;
+mod rpc_client_utils;
+mod stake_pool;
+mod stake_pool_v0;
+mod validator_list;
+mod validators_app;
 
 type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ValidatorList = HashSet<Pubkey>;
@@ -939,6 +939,9 @@ struct ValidatorClassification {
     stake_state: ValidatorStakeState,
     stake_state_reason: String,
 
+    // History of stake states, newest first, including (`stake_state`, `stake_state_reason`) at index 0
+    stake_states: Option<Vec<(ValidatorStakeState, String)>>,
+
     // Informational notes regarding this validator
     notes: Vec<String>,
 
@@ -1226,10 +1229,13 @@ fn classify(
                     format!("Validator {:?} not found in the data center list", identity)
                 })?;
 
+            let previous_classification = previous_epoch_validator_classifications
+                .map(|p| p.get(&identity))
+                .flatten();
+
             let mut data_center_residency = {
-                let previous_data_center_residency = previous_epoch_validator_classifications
-                    .map(|p| p.get(&identity).map(|vc| vc.data_center_residency.clone()))
-                    .flatten()
+                let previous_data_center_residency = previous_classification
+                    .map(|vc| vc.data_center_residency.clone())
                     .flatten()
                     .unwrap_or_default();
 
@@ -1339,12 +1345,19 @@ fn classify(
                 reason
             );
 
+            let mut stake_states = previous_classification
+                .map(|vc| vc.stake_states.clone())
+                .flatten()
+                .unwrap_or_default();
+            stake_states.insert(0, (stake_state, reason.clone()));
+
             validator_classifications.insert(
                 identity,
                 ValidatorClassification {
                     identity,
                     vote_address,
                     stake_state,
+                    stake_states: Some(stake_states),
                     stake_state_reason: reason,
                     notes: validator_notes,
                     data_center_residency: Some(data_center_residency),
