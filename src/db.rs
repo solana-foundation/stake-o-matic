@@ -1,5 +1,8 @@
 use {
-    crate::{data_center_info, generic_stake_pool::ValidatorStakeState},
+    crate::{
+        data_center_info::{DataCenterId, DataCenterInfo},
+        generic_stake_pool::ValidatorStakeState,
+    },
     log::*,
     serde::{Deserialize, Serialize},
     solana_sdk::{clock::Epoch, pubkey::Pubkey},
@@ -27,13 +30,16 @@ pub struct ValidatorClassification {
     pub notes: Vec<String>,
 
     // Map of data center to number of times the validator has been observed there.
-    pub data_center_residency: Option<HashMap<data_center_info::DataCenterId, usize>>,
+    pub data_center_residency: Option<HashMap<DataCenterId, usize>>,
+
+    // The data center that the validator was observed at for this classification
+    pub current_data_center: Option<DataCenterId>,
 }
 
 impl ValidatorClassification {
     // data center that the validator has been observed at the most
-    pub fn primary_data_center(&self) -> data_center_info::DataCenterId {
-        let mut primary_data_center = &data_center_info::DataCenterId::default();
+    pub fn primary_data_center(&self) -> DataCenterId {
+        let mut primary_data_center = &DataCenterId::default();
         if let Some(ref data_center_residency) = self.data_center_residency {
             let mut primary_count = 0;
 
@@ -65,7 +71,7 @@ pub type ValidatorClassificationByIdentity =
 #[derive(Default, Deserialize, Serialize, Clone)]
 pub struct EpochClassificationV1 {
     // Data Center observations for this epoch
-    pub data_center_info: Vec<data_center_info::DataCenterInfo>,
+    pub data_center_info: Vec<DataCenterInfo>,
 
     // `None` indicates a pause due to unusual observations during classification
     pub validator_classifications: Option<ValidatorClassificationByIdentity>,

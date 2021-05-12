@@ -72,7 +72,7 @@ impl std::fmt::Display for DataCenterInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct DataCenters {
     pub info: Vec<DataCenterInfo>,
     pub by_identity: HashMap<Pubkey, DataCenterId>,
