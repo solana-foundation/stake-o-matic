@@ -1150,9 +1150,11 @@ fn classify(
                 continue;
             }
 
-            let current_data_center = data_centers.by_identity.get(&identity).ok_or_else(|| {
-                format!("Validator {:?} not found in the data center list", identity)
-            })?;
+            let current_data_center = data_centers
+                .by_identity
+                .get(&identity)
+                .cloned()
+                .unwrap_or_default();
 
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
