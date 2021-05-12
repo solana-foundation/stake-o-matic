@@ -1,11 +1,10 @@
 use {
-    crate::{generic_stake_pool::*, rpc_client_utils::*},
+    crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
     clap::{
         crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, ArgMatches,
         SubCommand,
     },
     log::*,
-    serde::{Deserialize, Serialize},
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
@@ -31,8 +30,8 @@ use {
         collections::{HashMap, HashSet},
         error,
         fs::{self, File},
-        io::{self, Write},
-        path::{Path, PathBuf},
+        io::Write,
+        path::PathBuf,
         process,
         str::FromStr,
         time::Duration,
@@ -41,6 +40,7 @@ use {
 };
 
 mod data_center_info;
+mod db;
 mod generic_stake_pool;
 mod legacy_stake_pool;
 mod rpc_client_utils;
@@ -169,6 +169,7 @@ struct Config {
     json_rpc_url: String,
     cluster: String,
     cluster_data_dir: PathBuf,
+    markdown_dir: Option<PathBuf>,
 
     dry_run: bool,
 
@@ -229,6 +230,7 @@ impl Config {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: "mainnet-beta".to_string(),
             cluster_data_dir: PathBuf::default(),
+            markdown_dir: None,
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -345,6 +347,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                 .long("confirm")
                 .takes_value(false)
                 .help("Confirm that the stake adjustments should actually be made")
+        )
+        .arg(
+            Arg::with_name("markdown")
+                .long("markdown")
+                .takes_value(false)
+                .help("Output markdown")
         )
         .arg(
             Arg::with_name("db_path")
@@ -644,6 +652,11 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let cluster_data_dir = db_path.join(format!("data-{}", cluster));
+    let markdown_dir = if matches.is_present("markdown") {
+        Some(db_path.join("md"))
+    } else {
+        None
+    };
 
     let confirmed_block_cache_path = matches
         .value_of("confirmed_block_cache_path")
@@ -665,6 +678,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         json_rpc_url,
         cluster,
         cluster_data_dir,
+        markdown_dir,
         dry_run,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
@@ -928,94 +942,6 @@ fn classify_block_producers(
         leader_schedule,
         config,
     )
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct ValidatorClassification {
-    identity: Pubkey,
-
-    vote_address: Pubkey,
-
-    stake_state: ValidatorStakeState,
-    stake_state_reason: String,
-
-    // History of stake states, newest first, including (`stake_state`, `stake_state_reason`) at index 0
-    stake_states: Option<Vec<(ValidatorStakeState, String)>>,
-
-    // Informational notes regarding this validator
-    notes: Vec<String>,
-
-    // Map of data center to number of times the validator has been observed there.
-    data_center_residency: Option<HashMap<data_center_info::DataCenterId, usize>>,
-}
-
-type ValidatorClassificationByIdentity =
-    HashMap<solana_sdk::pubkey::Pubkey, ValidatorClassification>;
-
-#[derive(Default, Deserialize, Serialize, Clone)]
-struct EpochClassificationV1 {
-    // Data Center observations for this epoch
-    data_center_info: Vec<data_center_info::DataCenterInfo>,
-
-    // `None` indicates a pause due to unusual observations during classification
-    validator_classifications: Option<ValidatorClassificationByIdentity>,
-
-    // Informational notes regarding this epoch
-    notes: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize, Clone)]
-enum EpochClassification {
-    V1(EpochClassificationV1),
-}
-
-impl EpochClassification {
-    pub fn new(v1: EpochClassificationV1) -> Self {
-        EpochClassification::V1(v1)
-    }
-
-    pub fn into_current(self) -> EpochClassificationV1 {
-        match self {
-            EpochClassification::V1(v1) => v1,
-        }
-    }
-
-    fn file_name<P>(epoch: Epoch, path: P) -> PathBuf
-    where
-        P: AsRef<Path>,
-    {
-        path.as_ref().join(format!("epoch-{}.yml", epoch))
-    }
-
-    pub fn exists<P>(epoch: Epoch, path: P) -> bool
-    where
-        P: AsRef<Path>,
-    {
-        Self::file_name(epoch, path).exists()
-    }
-
-    pub fn load<P>(epoch: Epoch, path: P) -> Result<Self, io::Error>
-    where
-        P: AsRef<Path>,
-    {
-        let file = File::open(Self::file_name(epoch, path))?;
-        serde_yaml::from_reader(file)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))
-    }
-
-    pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
-    where
-        P: AsRef<Path>,
-    {
-        let serialized = serde_yaml::to_string(self)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))?;
-
-        fs::create_dir_all(&path)?;
-        let mut file = File::create(Self::file_name(epoch, path))?;
-        file.write_all(&serialized.into_bytes())?;
-
-        Ok(())
-    }
 }
 
 // Look for self stake, where the stake withdraw authority matches the vote account withdraw
@@ -1402,36 +1328,11 @@ fn main() -> BoxResult<()> {
 
     info!("Data directory: {}", config.cluster_data_dir.display());
 
-    let mut previous_epoch = epoch;
-    let previous_epoch_classification = loop {
-        if previous_epoch == 0 {
-            info!("No previous EpochClassification found");
-            break EpochClassificationV1::default();
-        }
-        previous_epoch -= 1;
-
-        if EpochClassification::exists(previous_epoch, &config.cluster_data_dir) {
-            let previous_epoch_classification =
-                EpochClassification::load(previous_epoch, &config.cluster_data_dir)?.into_current();
-
-            if previous_epoch_classification
-                .validator_classifications
-                .is_some()
-            {
-                info!(
-                    "Previous EpochClassification found for epoch {}",
-                    previous_epoch
-                );
-                break previous_epoch_classification;
-            } else {
-                info!(
-                    "Skipping previous EpochClassification for epoch {}",
-                    previous_epoch
-                );
-            }
-        }
-    };
-
+    let previous_epoch_classification =
+        EpochClassification::load_previous(epoch, &config.cluster_data_dir)?
+            .map(|p| p.1)
+            .unwrap_or_default()
+            .into_current();
     let (epoch_classification, first_time) =
         if EpochClassification::exists(epoch, &config.cluster_data_dir) {
             info!("Classification for {} already exists", epoch);
@@ -1452,6 +1353,8 @@ fn main() -> BoxResult<()> {
             epoch_classification.save(epoch, &config.cluster_data_dir)?;
             (epoch_classification, true)
         };
+
+    generate_markdown(epoch, &config)?;
 
     let EpochClassificationV1 {
         mut notes,
@@ -1528,6 +1431,97 @@ fn main() -> BoxResult<()> {
     } else {
         Err("something failed".into())
     }
+}
+
+fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
+    let markdown_dir = match config.markdown_dir.as_ref() {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    fs::create_dir_all(&markdown_dir)?;
+
+    let mut list = vec![(
+        epoch,
+        EpochClassification::load(epoch, &config.cluster_data_dir)?.into_current(),
+    )];
+
+    let cluster = match config.cluster.as_str() {
+        "mainnet-beta" => "Mainnet",
+        "testnet" => "Testnet",
+        x => x,
+    };
+
+    while let Some((epoch, epoch_classification)) =
+        EpochClassification::load_previous(list.last().unwrap().0, &config.cluster_data_dir)?
+    {
+        list.push((epoch, epoch_classification.into_current()));
+    }
+
+    let mut validators_markdown: HashMap<_, Vec<_>> = HashMap::new();
+
+    let mut cluster_markdown = vec![];
+
+    for (epoch, epoch_classification) in list {
+        cluster_markdown.push(format!("### Epoch {}", epoch));
+        for note in epoch_classification.notes {
+            cluster_markdown.push(format!("* {}", note));
+        }
+
+        let mut validator_classifications = epoch_classification
+            .validator_classifications
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
+        for (identity, classification) in validator_classifications {
+            let validator_markdown = validators_markdown.entry(identity).or_default();
+
+            validator_markdown.push(format!(
+                "### [[{1} Epoch {0}|{1}#Epoch-{0}]]",
+                epoch, cluster
+            ));
+            validator_markdown.push(classification.stake_state_reason.clone());
+
+            let stake_state_streak = classification.stake_state_streak();
+            validator_markdown.push(format!(
+                "* Stake level: **{:?}** {}",
+                classification.stake_state,
+                if stake_state_streak > 1 {
+                    format!("(for {} epochs) ", stake_state_streak)
+                } else {
+                    "".to_string()
+                }
+            ));
+            validator_markdown.push(format!(
+                "* Vote account address: {}",
+                classification.vote_address
+            ));
+            validator_markdown.push(format!(
+                "* Data Center: {}",
+                classification.primary_data_center()
+            ));
+
+            for note in classification.notes {
+                validator_markdown.push(format!("* {}", note));
+            }
+        }
+    }
+
+    for (identity, validator_markdown) in validators_markdown {
+        let markdown = validator_markdown.join("\n");
+        let filename = markdown_dir.join(format!("Validator-{}.md", identity));
+        info!("Writing {}", filename.display());
+        let mut file = File::create(filename)?;
+        file.write_all(&markdown.into_bytes())?;
+    }
+
+    let markdown = cluster_markdown.join("\n");
+    let filename = markdown_dir.join(format!("{}.md", cluster));
+    info!("Writing {}", filename.display());
+    let mut file = File::create(filename)?;
+    file.write_all(&markdown.into_bytes())?;
+
+    Ok(())
 }
 
 #[cfg(test)]
