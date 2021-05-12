@@ -1150,11 +1150,8 @@ fn classify(
                 continue;
             }
 
-            let current_data_center_id = data_centers
-                .by_identity
-                .get(&identity)
-                .cloned()
-                .unwrap_or_default();
+            let current_data_center_id =
+                data_centers.by_identity.get(&identity).cloned().unwrap_or_default();
 
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
