@@ -97,10 +97,6 @@ impl GenericStakePool for StakePool {
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<(Vec<String>, bool), Box<dyn error::Error>> {
-        if dry_run {
-            return Err("dryrun not supported".into());
-        }
-
         let mut inuse_stake_addresses = HashSet::new();
         inuse_stake_addresses.insert(self.reserve_stake_address);
 
@@ -201,6 +197,11 @@ impl GenericStakePool for StakePool {
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
+
+        if dry_run {
+            return Ok((notes, true));
+        }
+
         Ok((
             notes,
             distribute_validator_stake(
