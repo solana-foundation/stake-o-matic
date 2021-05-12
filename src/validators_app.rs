@@ -1,6 +1,10 @@
 use {
+    log::*,
     serde::{Deserialize, Serialize},
-    std::collections::HashMap,
+    std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    },
 };
 
 #[allow(dead_code)]
@@ -33,6 +37,7 @@ pub struct ClientConfig {
     pub base_url: String,
     pub cluster: ClusterJson,
     pub api_token: String,
+    pub timeout: Duration,
 }
 
 impl Default for ClientConfig {
@@ -41,6 +46,7 @@ impl Default for ClientConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
             cluster: ClusterJson::default(),
             api_token: String::default(),
+            timeout: Duration::from_secs(90),
         }
     }
 }
@@ -151,12 +157,16 @@ impl Client {
             base_url,
             cluster,
             api_token,
+            timeout,
         } = config;
         Self {
             base_url: reqwest::Url::parse(&base_url).unwrap(),
             cluster,
             api_token,
-            client: reqwest::blocking::Client::new(),
+            client: reqwest::blocking::Client::builder()
+                .timeout(timeout)
+                .build()
+                .unwrap(),
         }
     }
 
@@ -166,13 +176,17 @@ impl Client {
         query: &HashMap<String, String>,
     ) -> reqwest::Result<reqwest::blocking::Response> {
         let url = self.base_url.join(&endpoint.path(&self.cluster)).unwrap();
+        info!("Requesting {}", url);
+        let start = Instant::now();
         let request = self
             .client
             .get(url)
             .header(TOKEN_HTTP_HEADER_NAME, &self.api_token)
             .query(&query)
             .build()?;
-        self.client.execute(request)
+        let result = self.client.execute(request);
+        info!("Response took {:?}", Instant::now().duration_since(start));
+        result
     }
 
     #[allow(dead_code)]
