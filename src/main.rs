@@ -1007,7 +1007,7 @@ fn classify(
 ) -> BoxResult<EpochClassification> {
     let last_epoch = epoch - 1;
 
-    let data_centers = data_center_info::get()
+    let data_centers = data_center_info::get(&config.cluster)
         .map_err(|e| {
             warn!("infrastructure concentration skipped: {}", e);
             e

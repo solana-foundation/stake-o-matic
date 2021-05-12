@@ -137,9 +137,10 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new<T: AsRef<str>>(api_token: T) -> Self {
+    pub fn new<T: AsRef<str>>(api_token: T, cluster: ClusterJson) -> Self {
         let config = ClientConfig {
             api_token: api_token.as_ref().to_string(),
+            cluster,
             ..ClientConfig::default()
         };
         Self::new_with_config(config)
