@@ -1150,10 +1150,9 @@ fn classify(
                 continue;
             }
 
-            let current_data_center_id =
-                data_centers.by_identity.get(&identity).ok_or_else(|| {
-                    format!("Validator {:?} not found in the data center list", identity)
-                })?;
+            let current_data_center = data_centers.by_identity.get(&identity).ok_or_else(|| {
+                format!("Validator {:?} not found in the data center list", identity)
+            })?;
 
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
@@ -1192,7 +1191,7 @@ fn classify(
                 .map(|concentration| {
                     config.infrastructure_concentration_affects.memo(
                         &identity,
-                        !data_center_residency.contains_key(current_data_center_id),
+                        !data_center_residency.contains_key(&current_data_center),
                         *concentration,
                     )
                 })
@@ -1260,14 +1259,14 @@ fn classify(
             if stake_state == ValidatorStakeState::Bonus {
                 // Add weight to the current data center location
                 *data_center_residency
-                    .entry(current_data_center_id.clone())
+                    .entry(current_data_center.clone())
                     .or_default() += 1;
             }
 
             debug!(
                 "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - data center: {:?} (seniority: {})\n - {}",
-                identity, vote_address, stake_state, current_data_center_id,
-                data_center_residency.get(&current_data_center_id).cloned().unwrap_or_default(),
+                identity, vote_address, stake_state, current_data_center,
+                data_center_residency.get(&current_data_center).cloned().unwrap_or_default(),
                 reason
             );
 
@@ -1287,6 +1286,7 @@ fn classify(
                     stake_state_reason: reason,
                     notes: validator_notes,
                     data_center_residency: Some(data_center_residency),
+                    current_data_center: Some(current_data_center.clone()),
                 },
             );
         }
@@ -1333,7 +1333,7 @@ fn main() -> BoxResult<()> {
             .unwrap_or_default()
             .into_current();
     let (epoch_classification, first_time) =
-        if EpochClassification::exists(epoch, &config.cluster_data_dir) {
+        if !EpochClassification::exists(epoch, &config.cluster_data_dir) {
             info!("Classification for {} already exists", epoch);
             (
                 EpochClassification::load(epoch, &config.cluster_data_dir)?,
