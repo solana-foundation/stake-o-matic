@@ -1225,9 +1225,7 @@ fn classify(
             }
 
             let current_data_center_id =
-                data_centers.by_identity.get(&identity).ok_or_else(|| {
-                    format!("Validator {:?} not found in the data center list", identity)
-                })?;
+                data_centers.by_identity.get(&identity).cloned().unwrap_or_default();
 
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
@@ -1266,7 +1264,7 @@ fn classify(
                 .map(|concentration| {
                     config.infrastructure_concentration_affects.memo(
                         &identity,
-                        !data_center_residency.contains_key(current_data_center_id),
+                        !data_center_residency.contains_key(&current_data_center_id),
                         *concentration,
                     )
                 })
