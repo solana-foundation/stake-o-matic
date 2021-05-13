@@ -37,22 +37,6 @@ pub struct ValidatorClassification {
 }
 
 impl ValidatorClassification {
-    // data center that the validator has been observed at the most
-    pub fn primary_data_center(&self) -> DataCenterId {
-        let mut primary_data_center = &DataCenterId::default();
-        if let Some(ref data_center_residency) = self.data_center_residency {
-            let mut primary_count = 0;
-
-            for (data_center, count) in data_center_residency {
-                if *count > primary_count {
-                    primary_count = *count;
-                    primary_data_center = data_center;
-                }
-            }
-        }
-        primary_data_center.clone()
-    }
-
     pub fn stake_state_streak(&self) -> usize {
         let mut streak = 1;
 

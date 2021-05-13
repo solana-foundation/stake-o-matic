@@ -237,7 +237,7 @@ impl Config {
             max_commission: 100,
             min_release_version: None,
             max_old_release_version_percentage: 10,
-            max_poor_voter_percentage: 10,
+            max_poor_voter_percentage: 20,
             confirmed_block_cache_path: default_confirmed_block_cache_path(),
             max_infrastructure_concentration: 100.0,
             infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
@@ -424,7 +424,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                 .long("max-poor-voter-percentage")
                 .value_name("PERCENTAGE")
                 .takes_value(true)
-                .default_value("10")
+                .default_value("20")
                 .validator(is_valid_percentage)
                 .help("Do not remove stake from validators poor voting history \
                        if more than this percentage of all validators have a \
@@ -848,7 +848,7 @@ fn classify_producers(
 fn classify_poor_voters(
     config: &Config,
     vote_account_info: &[VoteAccountInfo],
-) -> (ValidatorList, u64, u64, bool) {
+) -> (ValidatorList, usize, u64, u64, bool) {
     let avg_epoch_credits = vote_account_info
         .iter()
         .map(|vai| vai.epoch_credits)
@@ -870,10 +870,12 @@ fn classify_poor_voters(
         .collect::<HashSet<_>>();
 
     let max_poor_voters = vote_account_info.len() * config.max_poor_voter_percentage / 100;
+    let poor_voter_percentage = poor_voters.len() * 100 / vote_account_info.len();
     let too_many_poor_voters = poor_voters.len() > max_poor_voters;
 
     info!("Cluster average epoch credits: {}", avg_epoch_credits);
     info!("Minimum required epoch credits: {}", min_epoch_credits);
+    info!("Poor voter: {}%", poor_voter_percentage);
     debug!(
         "poor_voters: {}, max poor_voters: {}",
         poor_voters.len(),
@@ -883,6 +885,7 @@ fn classify_poor_voters(
 
     (
         poor_voters,
+        poor_voter_percentage,
         min_epoch_credits,
         avg_epoch_credits,
         too_many_poor_voters,
@@ -1078,8 +1081,13 @@ fn classify(
             * config.max_old_release_version_percentage
             / 100;
 
-    let (poor_voters, min_epoch_credits, avg_epoch_credits, too_many_poor_voters) =
-        classify_poor_voters(&config, &vote_account_info);
+    let (
+        poor_voters,
+        poor_voter_percentage,
+        min_epoch_credits,
+        avg_epoch_credits,
+        too_many_poor_voters,
+    ) = classify_poor_voters(&config, &vote_account_info);
 
     let mut notes = vec![
         format!(
@@ -1113,8 +1121,8 @@ fn classify(
     }
     if too_many_poor_voters {
         notes.push(format!(
-            "Over {}% of validators classified as poor voters",
-            config.max_poor_voter_percentage
+            "Too many validators classified as poor voters for epoch {}: {}% (limit: {}%)",
+            last_epoch, poor_voter_percentage, config.max_poor_voter_percentage
         ));
     }
     if too_many_old_validators {
@@ -1335,7 +1343,7 @@ fn main() -> BoxResult<()> {
             .unwrap_or_default()
             .into_current();
     let (epoch_classification, first_time) =
-        if !EpochClassification::exists(epoch, &config.cluster_data_dir) {
+        if EpochClassification::exists(epoch, &config.cluster_data_dir) {
             info!("Classification for {} already exists", epoch);
             (
                 EpochClassification::load(epoch, &config.cluster_data_dir)?,
@@ -1468,42 +1476,58 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
             cluster_markdown.push(format!("* {}", note));
         }
 
-        let mut validator_classifications = epoch_classification
-            .validator_classifications
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
-        for (identity, classification) in validator_classifications {
-            let validator_markdown = validators_markdown.entry(identity).or_default();
+        if let Some(validator_classifications) = epoch_classification.validator_classifications {
+            let mut validator_classifications =
+                validator_classifications.into_iter().collect::<Vec<_>>();
+            validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
+            for (identity, classification) in validator_classifications {
+                let validator_markdown = validators_markdown.entry(identity).or_default();
 
-            validator_markdown.push(format!(
-                "### [[{1} Epoch {0}|{1}#Epoch-{0}]]",
-                epoch, cluster
-            ));
-            validator_markdown.push(classification.stake_state_reason.clone());
+                validator_markdown.push(format!(
+                    "### [[{1} Epoch {0}|{1}#Epoch-{0}]]",
+                    epoch, cluster
+                ));
+                validator_markdown.push(classification.stake_state_reason.clone());
 
-            let stake_state_streak = classification.stake_state_streak();
-            validator_markdown.push(format!(
-                "* Stake level: **{:?}** {}",
-                classification.stake_state,
-                if stake_state_streak > 1 {
-                    format!("(for {} epochs) ", stake_state_streak)
-                } else {
-                    "".to_string()
+                let stake_state_streak = classification.stake_state_streak();
+                validator_markdown.push(format!(
+                    "* Stake level: **{:?}**{}",
+                    classification.stake_state,
+                    if stake_state_streak > 1 {
+                        format!(" (for {} epochs)", stake_state_streak)
+                    } else {
+                        "".to_string()
+                    }
+                ));
+                validator_markdown.push(format!(
+                    "* Vote account address: {}",
+                    classification.vote_address
+                ));
+                if let (Some(current_data_center), Some(data_center_residency)) = (
+                    classification.current_data_center,
+                    classification.data_center_residency,
+                ) {
+                    validator_markdown.push(format!("* Data Center: {}", current_data_center));
+
+                    if data_center_residency.len() > 1
+                        || (data_center_residency.len() == 1
+                            && !data_center_residency.contains_key(&current_data_center))
+                    {
+                        let data_center_residency = data_center_residency
+                            .keys()
+                            .cloned()
+                            .map(|data_center| data_center.to_string())
+                            .collect::<Vec<_>>();
+                        validator_markdown.push(format!(
+                            "* Resident Data Center: {}",
+                            data_center_residency.join(",")
+                        ));
+                    }
                 }
-            ));
-            validator_markdown.push(format!(
-                "* Vote account address: {}",
-                classification.vote_address
-            ));
-            validator_markdown.push(format!(
-                "* Data Center: {}",
-                classification.primary_data_center()
-            ));
 
-            for note in classification.notes {
-                validator_markdown.push(format!("* {}", note));
+                for note in classification.notes {
+                    validator_markdown.push(format!("* {}", note));
+                }
             }
         }
     }
