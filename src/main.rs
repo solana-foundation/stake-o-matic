@@ -1007,7 +1007,7 @@ fn classify(
     epoch: Epoch,
     validator_list: &ValidatorList,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
-) -> BoxResult<EpochClassification> {
+) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
     let data_centers = data_center_info::get(&config.cluster)
@@ -1308,11 +1308,11 @@ fn classify(
         Some(validator_classifications)
     };
 
-    Ok(EpochClassification::new(EpochClassificationV1 {
+    Ok(EpochClassificationV1 {
         data_center_info: data_centers.info,
         validator_classifications,
         notes,
-    }))
+    })
 }
 
 fn main() -> BoxResult<()> {
@@ -1342,42 +1342,39 @@ fn main() -> BoxResult<()> {
             .map(|p| p.1)
             .unwrap_or_default()
             .into_current();
-    let (epoch_classification, first_time) =
+    let (mut epoch_classification, first_time) =
         if EpochClassification::exists(epoch, &config.cluster_data_dir) {
             info!("Classification for {} already exists", epoch);
             (
-                EpochClassification::load(epoch, &config.cluster_data_dir)?,
+                EpochClassification::load(epoch, &config.cluster_data_dir)?.into_current(),
                 false,
             )
         } else {
-            let epoch_classification = classify(
-                &rpc_client,
-                &config,
-                epoch,
-                &validator_list,
-                previous_epoch_classification
-                    .validator_classifications
-                    .as_ref(),
-            )?;
-            epoch_classification.save(epoch, &config.cluster_data_dir)?;
-            (epoch_classification, true)
+            (
+                classify(
+                    &rpc_client,
+                    &config,
+                    epoch,
+                    &validator_list,
+                    previous_epoch_classification
+                        .validator_classifications
+                        .as_ref(),
+                )?,
+                true,
+            )
         };
 
-    generate_markdown(epoch, &config)?;
+    let mut notifications = epoch_classification.notes.clone();
 
-    let EpochClassificationV1 {
-        mut notes,
-        validator_classifications,
-        ..
-    } = epoch_classification.into_current();
-
-    let mut validator_stake_change_notes = vec![];
-    let mut validator_notes = vec![];
-    let success = if let Some(validator_classifications) = validator_classifications {
+    let success = if let Some(ref validator_classifications) =
+        epoch_classification.validator_classifications
+    {
         let previous_validator_classifications = previous_epoch_classification
             .validator_classifications
             .unwrap_or_default();
 
+        let mut validator_stake_change_notes = vec![];
+        let mut validator_notes = vec![];
         let desired_validator_stake: Vec<_> = validator_classifications
             .values()
             .map(|vc| {
@@ -1412,27 +1409,29 @@ fn main() -> BoxResult<()> {
 
         let (stake_pool_notes, success) =
             stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
-        notes.extend(stake_pool_notes);
+        notifications.extend(stake_pool_notes.clone());
+        epoch_classification.notes.extend(stake_pool_notes);
 
         validator_notes.sort();
-        notes.extend(validator_notes);
+        notifications.extend(validator_notes);
 
         validator_stake_change_notes.sort();
-        notes.extend(validator_stake_change_notes);
+        notifications.extend(validator_stake_change_notes);
 
         success
     } else {
         true
     };
 
-    // Only notify the user if this is the first run for this epoch
     if first_time {
-        for note in notes {
-            info!("notification: {}", note);
-            notifier.send(&note);
+        EpochClassification::new(epoch_classification).save(epoch, &config.cluster_data_dir)?;
+        generate_markdown(epoch, &config)?;
+
+        // Only notify the user if this is the first run for this epoch
+        for notification in notifications {
+            info!("notification: {}", notification);
+            notifier.send(&notification);
         }
-    } else {
-        info!("notifications skipped on re-run");
     }
 
     if success {
