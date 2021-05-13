@@ -1222,22 +1222,22 @@ fn classify(
             let (stake_state, reason) = if let Some(reason) =
                 infrastructure_concentration_destake_reason
             {
-                (ValidatorStakeState::No, reason)
+                (ValidatorStakeState::None, reason)
             } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
-                (ValidatorStakeState::No, insufficent_self_stake_msg)
+                (ValidatorStakeState::None, insufficent_self_stake_msg)
             } else if commission > config.max_commission {
                 (
-                    ValidatorStakeState::No,
+                    ValidatorStakeState::None,
                     format!("commission is too high: {}% commission", commission),
                 )
             } else if poor_voters.contains(&identity) {
                 (
-                    ValidatorStakeState::No,
+                    ValidatorStakeState::None,
                     format!("insufficient vote credits: {}", vote_credits_msg),
                 )
             } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
                 (
-                    ValidatorStakeState::No,
+                    ValidatorStakeState::None,
                     format!(
                         "Outdated solana release: {}",
                         cluster_nodes_with_old_version

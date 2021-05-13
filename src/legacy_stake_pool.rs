@@ -250,7 +250,7 @@ impl LegacyStakePool {
         stake_state: &ValidatorStakeState,
     ) -> Option<Transaction> {
         let (baseline, bonus) = match stake_state {
-            ValidatorStakeState::No => (false, false),
+            ValidatorStakeState::None => (false, false),
             ValidatorStakeState::Baseline => (true, false),
             ValidatorStakeState::Bonus => (true, true),
         };
