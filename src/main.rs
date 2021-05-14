@@ -1,14 +1,14 @@
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
     clap::{
-        crate_description, crate_name, value_t, value_t_or_exit, App, AppSettings, Arg, ArgMatches,
-        SubCommand,
+        crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
+        ArgMatches, SubCommand,
     },
     log::*,
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
-            is_amount, is_keypair, is_pubkey_or_keypair, is_url, is_valid_percentage,
+            is_amount, is_keypair, is_parsable, is_pubkey_or_keypair, is_url, is_valid_percentage,
         },
     },
     solana_client::rpc_client::RpcClient,
@@ -168,8 +168,8 @@ fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Ve
 struct Config {
     json_rpc_url: String,
     cluster: String,
-    cluster_data_dir: PathBuf,
-    markdown_dir: Option<PathBuf>,
+    db_path: PathBuf,
+    markdown_path: Option<PathBuf>,
 
     dry_run: bool,
 
@@ -221,6 +221,19 @@ struct Config {
 
     /// If true, enforce the `min_self_stake_lamports` limit. If false, only warn on insufficient stake
     enforce_min_self_stake: bool,
+
+    /// If true, enforce `min_testnet_staked_epochs`. If false, only warn if
+    /// `min_testnet_staked_epochs` is Some.
+    ///
+    /// This setting is ignored if `cluster` is not `"mainnet-beta"` or `min_testnet_participation
+    /// is `None`.
+    enforce_testnet_participation: bool,
+
+    /// If Some, require that the participant's mainnet-beta validator be staked for `n` out of the
+    /// last `m` epochs to be delegable for mainnet-beta stake
+    ///
+    /// This setting is ignored if `cluster` is not `"mainnet-beta"`
+    min_testnet_participation: Option<(/*n:*/ usize, /*m:*/ usize)>,
 }
 
 impl Config {
@@ -229,8 +242,8 @@ impl Config {
         Self {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: "mainnet-beta".to_string(),
-            cluster_data_dir: PathBuf::default(),
-            markdown_dir: None,
+            db_path: PathBuf::default(),
+            markdown_path: None,
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -245,7 +258,17 @@ impl Config {
             min_epoch_credit_percentage_of_average: 50,
             min_self_stake_lamports: 0,
             enforce_min_self_stake: false,
+            enforce_testnet_participation: false,
+            min_testnet_participation: None,
         }
+    }
+
+    fn cluster_db_path_for<T: AsRef<str>>(&self, cluster: T) -> PathBuf {
+        self.db_path.join(format!("data-{}", cluster.as_ref()))
+    }
+
+    fn cluster_db_path(&self) -> PathBuf {
+        self.cluster_db_path_for(&self.cluster)
     }
 }
 
@@ -496,6 +519,25 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                 .takes_value(false)
                 .help("Enforce the minimum self-stake requirement")
         )
+        .arg(
+            Arg::with_name("min_testnet_participation")
+                .long("min-testnet-participation")
+                .value_name("N M")
+                .multiple(true)
+                .min_values(2)
+                .max_values(2)
+                .validator(is_parsable::<usize>)
+                .help("Require that the participant's mainnet-beta validator be staked for N out of the \
+                       last M epochs to be delegable for mainnet-beta stake.\n\
+                       This setting is ignored if the --cluster is not `mainnet-beta`")
+        )
+        .arg(
+            Arg::with_name("enforce_testnet_participation")
+                .long("enforce-testnet-participation")
+                .takes_value(false)
+                .help("Enforce the minimum testnet participation requirement.\n
+                       This setting is ignored if the --cluster is not `mainnet-beta`")
+        )
         .subcommand(
             SubCommand::with_name("legacy").about("Use the legacy staking solution")
             .arg(
@@ -641,6 +683,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
     let enforce_min_self_stake = matches.is_present("enforce_min_self_stake");
     let min_self_stake_lamports = lamports_of_sol(&matches, "min_self_stake").unwrap();
 
+    let enforce_testnet_participation = matches.is_present("enforce_testnet_participation");
+    let min_testnet_participation = values_t!(matches, "min_testnet_participation", usize)
+        .ok()
+        .map(|v| (v[0], v[1]));
+    if min_testnet_participation.is_some() && cluster != "mainnet-beta" {
+        error!("--min-testnet-participation only available for `--cluster mainnet-beta`");
+        process::exit(1);
+    }
+
     let json_rpc_url = match cluster.as_str() {
         "mainnet-beta" => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
@@ -651,8 +702,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         _ => unreachable!(),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
-    let cluster_data_dir = db_path.join(format!("data-{}", cluster));
-    let markdown_dir = if matches.is_present("markdown") {
+    let markdown_path = if matches.is_present("markdown") {
         Some(db_path.join("md"))
     } else {
         None
@@ -677,8 +727,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
     let config = Config {
         json_rpc_url,
         cluster,
-        cluster_data_dir,
-        markdown_dir,
+        db_path,
+        markdown_path,
         dry_run,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
@@ -693,6 +743,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         min_epoch_credit_percentage_of_average,
         min_self_stake_lamports,
         enforce_min_self_stake,
+        enforce_testnet_participation,
+        min_testnet_participation,
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
@@ -1001,14 +1053,61 @@ fn get_self_stake_by_vote_account(
     Ok(self_stake_by_vote_account)
 }
 
+fn get_testnet_participation(config: &Config) -> BoxResult<Option<HashMap<Pubkey, bool>>> {
+    if let Some((n, m)) = &config.min_testnet_participation {
+        assert_eq!(config.cluster, "mainnet-beta");
+        let latest_testnet_epoch_classification =
+            EpochClassification::load_latest(&config.cluster_db_path_for("testnet"))?
+                .ok_or("Unable to load testnet epoch classification")?
+                .1
+                .into_current();
+
+        let testnet_participation = latest_testnet_epoch_classification
+            .validator_classifications
+            .unwrap()
+            .drain()
+            .filter_map(|(_, validator_classification)| {
+                validator_classification
+                    .participant
+                    .map(|participant| (participant, validator_classification.staked_for(*n, *m)))
+            })
+            .collect::<HashMap<_, _>>();
+
+        let num_poor_testnet_participants =
+            testnet_participation.iter().filter(|(_, v)| !*v).count();
+
+        let poor_testnet_particiant_percentage = if testnet_participation.is_empty() {
+            100
+        } else {
+            num_poor_testnet_participants * 100 / testnet_participation.len()
+        };
+
+        info!(
+            "Total testnet participation: {}",
+            testnet_participation.len()
+        );
+        info!(
+            "Poor testnet participants: {} ({}%)",
+            num_poor_testnet_participants, poor_testnet_particiant_percentage
+        );
+
+        Ok(Some(testnet_participation))
+    } else {
+        Ok(None)
+    }
+}
+
 fn classify(
     rpc_client: &RpcClient,
     config: &Config,
     epoch: Epoch,
     validator_list: &ValidatorList,
+    validator_to_participant: &HashMap<Pubkey, Pubkey>,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
+
+    let testnet_participation = get_testnet_participation(config)?;
 
     let data_centers = data_center_info::get(&config.cluster)
         .map_err(|e| {
@@ -1116,6 +1215,13 @@ fn classify(
         ),
     ];
 
+    if let Some((n, m)) = &config.min_testnet_participation {
+        notes.push(format!(
+            "Participants must maintain Baseline or Bonus stake level for {} of the last {} Testnet epochs",
+            n, m
+        ));
+    }
+
     if cluster_average_skip_rate > config.bad_cluster_average_skip_rate {
         notes.push("Cluster average skip rate is poor".to_string());
     }
@@ -1157,6 +1263,8 @@ fn classify(
             if !validator_list.contains(&identity) {
                 continue;
             }
+
+            let participant = validator_to_participant.get(&identity).cloned();
 
             let current_data_center = data_centers
                 .by_identity
@@ -1219,6 +1327,23 @@ fn classify(
                 validator_notes.push(insufficent_self_stake_msg.clone());
             }
 
+            let insufficent_testnet_participation = testnet_participation
+                .as_ref()
+                .map(|testnet_participation| {
+                    if let Some(participant) = participant {
+                        if !testnet_participation.get(&participant).unwrap_or(&true) {
+                            let note = "insufficient testnet participation".to_string();
+                            if config.enforce_testnet_participation {
+                                return Some(note);
+                            } else {
+                                validator_notes.push(note);
+                            }
+                        }
+                    }
+                    None
+                })
+                .flatten();
+
             let (stake_state, reason) = if let Some(reason) =
                 infrastructure_concentration_destake_reason
             {
@@ -1230,6 +1355,10 @@ fn classify(
                     ValidatorStakeState::None,
                     format!("commission is too high: {}% commission", commission),
                 )
+            } else if let Some(insufficent_testnet_participation) =
+                insufficent_testnet_participation
+            {
+                (ValidatorStakeState::None, insufficent_testnet_participation)
             } else if poor_voters.contains(&identity) {
                 (
                     ValidatorStakeState::None,
@@ -1274,9 +1403,19 @@ fn classify(
             }
 
             debug!(
-                "\nidentity: {}\n - vote address: {}\n - stake state: {:?} - data center: {:?} (seniority: {})\n - {}",
-                identity, vote_address, stake_state, current_data_center,
-                data_center_residency.get(&current_data_center).cloned().unwrap_or_default(),
+                "\nidentity: {} ({:?})\n\
+                    - vote address: {}\n\
+                    - stake state: {:?} - data center: {:?} (seniority: {})\n\
+                    - {}",
+                identity,
+                participant,
+                vote_address,
+                stake_state,
+                current_data_center,
+                data_center_residency
+                    .get(&current_data_center)
+                    .cloned()
+                    .unwrap_or_default(),
                 reason
             );
 
@@ -1297,6 +1436,7 @@ fn classify(
                     notes: validator_notes,
                     data_center_residency: Some(data_center_residency),
                     current_data_center: Some(current_data_center.clone()),
+                    participant,
                 },
             );
         }
@@ -1335,18 +1475,19 @@ fn main() -> BoxResult<()> {
         return Ok(());
     }
 
-    info!("Data directory: {}", config.cluster_data_dir.display());
+    info!("Data directory: {}", config.cluster_db_path().display());
 
     let previous_epoch_classification =
-        EpochClassification::load_previous(epoch, &config.cluster_data_dir)?
+        EpochClassification::load_previous(epoch, &config.cluster_db_path())?
             .map(|p| p.1)
             .unwrap_or_default()
             .into_current();
+
     let (mut epoch_classification, first_time) =
-        if EpochClassification::exists(epoch, &config.cluster_data_dir) {
+        if EpochClassification::exists(epoch, &config.cluster_db_path()) {
             info!("Classification for {} already exists", epoch);
             (
-                EpochClassification::load(epoch, &config.cluster_data_dir)?.into_current(),
+                EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
                 false,
             )
         } else {
@@ -1356,6 +1497,7 @@ fn main() -> BoxResult<()> {
                     &config,
                     epoch,
                     &validator_list,
+                    &HashMap::default(), // TODO: ...
                     previous_epoch_classification
                         .validator_classifications
                         .as_ref(),
@@ -1424,7 +1566,7 @@ fn main() -> BoxResult<()> {
     };
 
     if first_time {
-        EpochClassification::new(epoch_classification).save(epoch, &config.cluster_data_dir)?;
+        EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
         generate_markdown(epoch, &config)?;
 
         // Only notify the user if this is the first run for this epoch
@@ -1442,15 +1584,15 @@ fn main() -> BoxResult<()> {
 }
 
 fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
-    let markdown_dir = match config.markdown_dir.as_ref() {
+    let markdown_path = match config.markdown_path.as_ref() {
         Some(d) => d,
         None => return Ok(()),
     };
-    fs::create_dir_all(&markdown_dir)?;
+    fs::create_dir_all(&markdown_path)?;
 
     let mut list = vec![(
         epoch,
-        EpochClassification::load(epoch, &config.cluster_data_dir)?.into_current(),
+        EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
     )];
 
     let cluster = match config.cluster.as_str() {
@@ -1460,7 +1602,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     };
 
     while let Some((epoch, epoch_classification)) =
-        EpochClassification::load_previous(list.last().unwrap().0, &config.cluster_data_dir)?
+        EpochClassification::load_previous(list.last().unwrap().0, &config.cluster_db_path())?
     {
         list.push((epoch, epoch_classification.into_current()));
     }
@@ -1533,14 +1675,14 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
 
     for (identity, validator_markdown) in validators_markdown {
         let markdown = validator_markdown.join("\n");
-        let filename = markdown_dir.join(format!("Validator-{}.md", identity));
+        let filename = markdown_path.join(format!("Validator-{}.md", identity));
         info!("Writing {}", filename.display());
         let mut file = File::create(filename)?;
         file.write_all(&markdown.into_bytes())?;
     }
 
     let markdown = cluster_markdown.join("\n");
-    let filename = markdown_dir.join(format!("{}.md", cluster));
+    let filename = markdown_path.join(format!("{}.md", cluster));
     info!("Writing {}", filename.display());
     let mut file = File::create(filename)?;
     file.write_all(&markdown.into_bytes())?;
