@@ -12,6 +12,12 @@ pub enum ValidatorStakeState {
     Bonus,    // Validator has earned the bonus stake level
 }
 
+impl Default for ValidatorStakeState {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ValidatorStake {
     pub identity: Pubkey,
