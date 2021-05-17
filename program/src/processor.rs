@@ -10,8 +10,26 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+#[cfg(test)]
+mod test_admin {
+    solana_program::declare_id!("563B79TEFBRx8f6vwJH1XWo85MSsJRaV3E2EdmwUtjmG");
+}
+
+fn is_admin(address: &Pubkey) -> bool {
+    if crate::admin::id() == *address {
+        return true;
+    }
+
+    #[cfg(test)]
+    if test_admin::id() == *address {
+        return true;
+    }
+
+    false
+}
+
 fn authenticate_admin(admin_info: &AccountInfo) -> ProgramResult {
-    if crate::admin::id() != *admin_info.key {
+    if !is_admin(admin_info.key) {
         msg!("Error: {} is not the admin", admin_info.key);
         return Err(ProgramError::InvalidArgument);
     }
@@ -88,4 +106,20 @@ pub fn process_instruction(
     participant.pack_into_slice(&mut participant_info.data.borrow_mut());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use {super::*, solana_sdk::signature::{Signer,Keypair}};
+
+    fn test_admin_keypair() -> Keypair {
+        let keypair = Keypair::from_bytes(&[
+            195, 121, 73, 133, 212, 8, 231, 45, 116, 99, 128, 66, 118, 174, 197, 26, 112, 146, 204,
+            201, 119, 40, 97, 2, 86, 10, 98, 116, 235, 40, 163, 221, 60, 185, 28, 52, 69, 70, 108,
+            96, 236, 253, 114, 203, 81, 219, 79, 136, 0, 185, 165, 101, 147, 67, 207, 255, 69, 83,
+            242, 34, 36, 32, 80, 87,
+        ]).unwrap();
+        assert_eq!(keypair.pubkey(), test_admin::id());
+        keypair
+    }
 }
