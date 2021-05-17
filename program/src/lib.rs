@@ -7,6 +7,6 @@ pub use solana_program;
 
 solana_program::declare_id!("reg8X1V65CSdmrtEjMgnXZk96b9SUSQrJ8n1rP1ZMg7");
 
-mod admin {
+pub mod admin {
     solana_program::declare_id!("AdminzUFhXiGmLZBCBeFQT5ZjQkZsHc2rUh28egNnMwd");
 }

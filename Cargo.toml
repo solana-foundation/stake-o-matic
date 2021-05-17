@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "bot",
+  "cli",
   "program",
 ]
 
