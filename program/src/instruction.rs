@@ -24,11 +24,13 @@ pub enum RegistryInstruction {
 
     /// Withdraw from the program
     ///
-    /// On success the participant will be moved to the `ParticipantState::Withdrawn` state
+    /// On success the participant account will be deleted and lamports in it refunded
     ///
     /// 0. `[writable]` `Participant` account in the `ParticipantState::Pending` or
     ///                 `ParticipantState::Enrolled` state
     /// 1. `[signer]` Mainnet or Testnet validator identity
+    /// 2. `[writable]`  The account to receive the closed account's lamports.
+    ///
     Withdraw,
 
     /// Approve a participant.
@@ -100,12 +102,13 @@ pub fn apply(
 }
 
 /// Create a `RegistryInstruction::Withdraw` instruction
-pub fn withdraw(participant: Pubkey, validator_identity: Pubkey) -> Instruction {
+pub fn withdraw(participant: Pubkey, validator_identity: Pubkey, refundee: Pubkey) -> Instruction {
     Instruction {
         program_id: id(),
         accounts: vec![
             AccountMeta::new(participant, false),
             AccountMeta::new_readonly(validator_identity, true),
+            AccountMeta::new(refundee, false),
         ],
         data: RegistryInstruction::Withdraw.pack_into_vec(),
     }
