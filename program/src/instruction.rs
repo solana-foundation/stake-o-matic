@@ -1,11 +1,13 @@
 //! Program instructions
 
-use crate::state::Participant;
+use crate::{id, state::Participant};
 use borsh::{BorshDeserialize, BorshSchema, BorshSerialize};
 use solana_program::{
+    instruction::{AccountMeta, Instruction},
     msg,
     program_error::ProgramError,
     program_pack::{Pack, Sealed},
+    pubkey::Pubkey,
 };
 
 /// Instructions supported by the Feature Proposal program
@@ -25,7 +27,7 @@ pub enum RegistryInstruction {
     /// On success the participant will be moved to the `ParticipantState::Withdrawn` state
     ///
     /// 0. `[writable]` `Participant` account in the `ParticipantState::Pending` or
-    ///    `ParticipantState::Enrolled` state
+    ///                 `ParticipantState::Enrolled` state
     /// 1. `[signer]` Mainnet or Testnet validator identity
     Withdraw,
 
@@ -77,6 +79,71 @@ impl Pack for RegistryInstruction {
 impl RegistryInstruction {
     fn pack_into_vec(&self) -> Vec<u8> {
         self.try_to_vec().expect("try_to_vec")
+    }
+}
+
+/// Create a `RegistryInstruction::Apply` instruction
+pub fn apply(
+    participant: Pubkey,
+    mainnet_validator_identity: Pubkey,
+    testnet_validator_identity: Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: id(),
+        accounts: vec![
+            AccountMeta::new(participant, false),
+            AccountMeta::new_readonly(mainnet_validator_identity, true),
+            AccountMeta::new_readonly(testnet_validator_identity, true),
+        ],
+        data: RegistryInstruction::Apply.pack_into_vec(),
+    }
+}
+
+/// Create a `RegistryInstruction::Withdraw` instruction
+pub fn withdraw(participant: Pubkey, validator_identity: Pubkey) -> Instruction {
+    Instruction {
+        program_id: id(),
+        accounts: vec![
+            AccountMeta::new(participant, false),
+            AccountMeta::new_readonly(validator_identity, true),
+        ],
+        data: RegistryInstruction::Withdraw.pack_into_vec(),
+    }
+}
+
+/// Create a `RegistryInstruction::Admin` instruction
+pub fn approve(participant: Pubkey, admin: Pubkey) -> Instruction {
+    Instruction {
+        program_id: id(),
+        accounts: vec![
+            AccountMeta::new(participant, false),
+            AccountMeta::new_readonly(admin, true),
+        ],
+        data: RegistryInstruction::Approve.pack_into_vec(),
+    }
+}
+
+/// Create a `RegistryInstruction::Reject` instruction
+pub fn reject(participant: Pubkey, admin: Pubkey) -> Instruction {
+    Instruction {
+        program_id: id(),
+        accounts: vec![
+            AccountMeta::new(participant, false),
+            AccountMeta::new_readonly(admin, true),
+        ],
+        data: RegistryInstruction::Reject.pack_into_vec(),
+    }
+}
+
+/// Create a `RegistryInstruction::Rewrite` instruction
+pub fn rewrite(participant: Pubkey, admin: Pubkey, new_state: Participant) -> Instruction {
+    Instruction {
+        program_id: id(),
+        accounts: vec![
+            AccountMeta::new(participant, false),
+            AccountMeta::new_readonly(admin, true),
+        ],
+        data: RegistryInstruction::Rewrite(new_state).pack_into_vec(),
     }
 }
 

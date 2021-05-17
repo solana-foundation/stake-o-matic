@@ -25,7 +25,13 @@ pub enum ParticipantState {
     Withdrawn,
 }
 
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize, BorshSchema, PartialEq)]
+impl Default for ParticipantState {
+    fn default() -> Self {
+        Self::Uninitialized
+    }
+}
+
+#[derive(Clone, Debug, Default, BorshSerialize, BorshDeserialize, BorshSchema, PartialEq)]
 pub struct Participant {
     pub testnet_identity: Pubkey,
     pub mainnet_identity: Pubkey,
