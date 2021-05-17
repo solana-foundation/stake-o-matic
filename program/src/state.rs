@@ -20,9 +20,6 @@ pub enum ParticipantState {
 
     /// Participant is enrolled
     Approved,
-
-    /// Participant has withdraw from the program
-    Withdrawn,
 }
 
 impl Default for ParticipantState {

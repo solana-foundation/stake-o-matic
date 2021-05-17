@@ -78,6 +78,7 @@ pub fn process_instruction(
         RegistryInstruction::Withdraw => {
             msg!("Withdraw");
             let identity_info = next_account_info(account_info_iter)?;
+            let refundee_info = next_account_info(account_info_iter)?;
 
             if !identity_info.is_signer {
                 msg!("Error: {} is not a signer", identity_info.key);
@@ -90,7 +91,10 @@ pub fn process_instruction(
                 msg!("Error: {} is not authorized", identity_info.key);
                 return Err(ProgramError::MissingRequiredSignature);
             }
-            participant.state = ParticipantState::Withdrawn;
+
+            **refundee_info.lamports.borrow_mut() += participant_info.lamports();
+            **participant_info.lamports.borrow_mut() = 0;
+            participant = Participant::default()
         }
         RegistryInstruction::Approve => {
             msg!("Approve");
@@ -154,13 +158,15 @@ mod test {
         .start()
         .await;
 
+        let rent = Rent::default().minimum_balance(Participant::get_packed_len());
+
         // Create/Apply...
         let mut transaction = Transaction::new_with_payer(
             &[
                 create_account(
                     &payer.pubkey(),
                     &participant.pubkey(),
-                    Rent::default().minimum_balance(Participant::get_packed_len()),
+                    rent,
                     Participant::get_packed_len() as u64,
                     &program_id,
                 ),
@@ -260,44 +266,6 @@ mod test {
         transaction.sign(&[&payer, &testnet_validator_identity], recent_blockhash);
         assert_matches!(banks_client.process_transaction(transaction).await, Err(_));
 
-        // Withdraw...
-        let mut transaction = Transaction::new_with_payer(
-            &[withdraw(
-                participant.pubkey(),
-                testnet_validator_identity.pubkey(),
-            )],
-            Some(&payer.pubkey()),
-        );
-        transaction.sign(&[&payer, &testnet_validator_identity], recent_blockhash);
-        assert_matches!(banks_client.process_transaction(transaction).await, Ok(()));
-
-        assert_eq!(
-            banks_client
-                .get_packed_account_data::<Participant>(participant.pubkey())
-                .await
-                .unwrap()
-                .state,
-            ParticipantState::Withdrawn
-        );
-
-        // Rewrite...
-        let mut transaction = Transaction::new_with_payer(
-            &[rewrite(
-                participant.pubkey(),
-                test_admin::id(),
-                Participant::default(),
-            )],
-            Some(&payer.pubkey()),
-        );
-        transaction.sign(&[&payer, &test_admin_keypair()], recent_blockhash);
-        assert_matches!(banks_client.process_transaction(transaction).await, Ok(()));
-
-        let participant_state = banks_client
-            .get_packed_account_data::<Participant>(participant.pubkey())
-            .await
-            .unwrap();
-        assert_eq!(participant_state, Participant::default());
-
         // Rewrite with wrong admin key, failure...
         let mut transaction = Transaction::new_with_payer(
             &[rewrite(
@@ -309,5 +277,75 @@ mod test {
         );
         transaction.sign(&[&payer, &testnet_validator_identity], recent_blockhash);
         assert_matches!(banks_client.process_transaction(transaction).await, Err(_));
+
+        // Rewrite...
+        let mut transaction = Transaction::new_with_payer(
+            &[rewrite(
+                participant.pubkey(),
+                test_admin::id(),
+                Participant {
+                    state: ParticipantState::Pending,
+                    testnet_identity: testnet_validator_identity.pubkey(),
+                    mainnet_identity: Pubkey::default(),
+                },
+            )],
+            Some(&payer.pubkey()),
+        );
+        transaction.sign(&[&payer, &test_admin_keypair()], recent_blockhash);
+        assert_matches!(banks_client.process_transaction(transaction).await, Ok(()));
+
+        let participant_state = banks_client
+            .get_packed_account_data::<Participant>(participant.pubkey())
+            .await
+            .unwrap();
+        assert_eq!(
+            participant_state,
+            Participant {
+                state: ParticipantState::Pending,
+                testnet_identity: testnet_validator_identity.pubkey(),
+                mainnet_identity: Pubkey::default(),
+            }
+        );
+
+        // Withdraw...
+        assert_eq!(
+            banks_client
+                .get_balance(testnet_validator_identity.pubkey())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            banks_client
+                .get_balance(participant.pubkey())
+                .await
+                .unwrap(),
+            rent
+        );
+        let mut transaction = Transaction::new_with_payer(
+            &[withdraw(
+                participant.pubkey(),
+                testnet_validator_identity.pubkey(),
+                testnet_validator_identity.pubkey(),
+            )],
+            Some(&payer.pubkey()),
+        );
+        transaction.sign(&[&payer, &testnet_validator_identity], recent_blockhash);
+        assert_matches!(banks_client.process_transaction(transaction).await, Ok(()));
+
+        assert_eq!(
+            banks_client
+                .get_balance(testnet_validator_identity.pubkey())
+                .await
+                .unwrap(),
+            rent
+        );
+        assert_eq!(
+            banks_client
+                .get_balance(participant.pubkey())
+                .await
+                .unwrap(),
+            0
+        );
     }
 }
