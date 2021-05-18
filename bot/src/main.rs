@@ -749,7 +749,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
 
     info!("RPC URL: {}", config.json_rpc_url);
     let rpc_client =
-        RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(90));
+        RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(180));
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
     rpc_client
