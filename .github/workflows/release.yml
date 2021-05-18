@@ -39,7 +39,7 @@ jobs:
 
     - run: |
         mv target/release/solana-stake-o-matic solana-stake-o-matic-${{ matrix.target }}
-        mv target/release/register-cli register-cli-${{ matrix.target }}
+        mv target/release/registry-cli registry-cli-${{ matrix.target }}
 
     - uses: actions/upload-artifact@v2
       with:

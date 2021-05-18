@@ -16,6 +16,7 @@ use {
     },
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_sdk::{
+        commitment_config::CommitmentConfig,
         message::Message,
         native_token::Sol,
         program_pack::Pack,
@@ -83,7 +84,8 @@ fn get_participants(
         &registry_program::id(),
         RpcProgramAccountsConfig {
             account_config: RpcAccountInfoConfig {
-                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64Zstd),
+                commitment: Some(rpc_client.commitment()), // TODO: Remove this line after updating to solana v1.6.10
                 ..RpcAccountInfoConfig::default()
             },
             filters: Some(vec![RpcFilterType::DataSize(
@@ -179,7 +181,10 @@ fn process_apply(
     println!("Testnet Validator Identity: {}", testnet_identity.pubkey());
 
     if !confirm {
-        println!("Warning: Your mainnet and testnet identities cannot be changed after applying. Add the --confirm flag to continue");
+        println!(
+            "\nWarning: Your mainnet and testnet identities cannot be changed after applying. \
+                    Add the --confirm flag to continue"
+        );
         return Ok(());
     }
 
@@ -230,7 +235,10 @@ fn process_withdraw(
     print_participant(&participant);
 
     if !confirm {
-        println!("Warning: this will delete this registration. Add the --confirm flag to continue");
+        println!(
+            "\nWarning: this will delete this registration. \
+               Add the --confirm flag to continue"
+        );
         return Ok(());
     }
 
@@ -249,6 +257,31 @@ fn process_withdraw(
         [identity.deref(), config.default_signer.deref()],
         None,
     )
+}
+
+fn process_list(
+    config: &Config,
+    rpc_client: &RpcClient,
+    state: Option<ParticipantState>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut participants = get_participants(rpc_client)?;
+    participants.retain(|_, p| {
+        if let Some(ref state) = state {
+            return p.state == *state;
+        }
+        true
+    });
+
+    for (address, participant) in &participants {
+        if config.verbose {
+            println!("Participant: {}", address);
+        }
+        print_participant(participant);
+        println!();
+    }
+
+    println!("{} entries found", participants.len());
+    Ok(())
 }
 
 fn process_admin_approve(
@@ -309,27 +342,6 @@ fn process_admin_reject(
         [admin_signer.deref(), config.default_signer.deref()],
         None,
     )
-}
-
-fn process_admin_list(
-    _config: &Config,
-    rpc_client: &RpcClient,
-    state: Option<ParticipantState>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut participants = get_participants(rpc_client)?;
-    participants.retain(|_, p| {
-        if let Some(ref state) = state {
-            return p.state == *state;
-        }
-        true
-    });
-
-    for (address, participant) in participants {
-        println!("\nParticipant: {}", address);
-        print_participant(&participant);
-    }
-
-    Ok(())
 }
 
 fn process_admin_import(
@@ -471,6 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("ADDRESS")
                         .takes_value(true)
                         .index(1)
+                        .required(true)
                         .help("Testnet or Mainnet validator identity"),
                 ),
         )
@@ -483,12 +496,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("ADDRESS")
                         .takes_value(true)
                         .index(1)
+                        .required(true)
                         .help("Testnet or Mainnet validator identity"),
                 )
                 .arg(
                     Arg::with_name("confirm")
                         .long("confirm")
                         .help("Add the --confirm flag to continue when you're ready to continue"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("list")
+                .about("List registrations")
+                .arg(
+                    Arg::with_name("state")
+                        .long("state")
+                        .value_name("STATE")
+                        .possible_values(&["all", "pending", "approved", "rejected"])
+                        .default_value("all")
+                        .help("Restrict the list to registrations in the specified state"),
                 ),
         )
         .subcommand(
@@ -501,20 +527,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .long("authority")
                         .validator(is_valid_signer)
                         .value_name("KEYPAIR")
-                        .required(true)
                         .help("Administration authority"),
-                )
-                .subcommand(
-                    SubCommand::with_name("list")
-                        .about("List registrations")
-                        .arg(
-                            Arg::with_name("state")
-                                .long("state")
-                                .value_name("STATE")
-                                .possible_values(&["all", "pending", "approved", "rejected"])
-                                .default_value("all")
-                                .help("Restrict the list to registrations in the specified state"),
-                        ),
                 )
                 .subcommand(
                     SubCommand::with_name("approve")
@@ -605,7 +618,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if config.verbose {
         println!("JSON RPC URL: {}", config.json_rpc_url);
     }
-    let rpc_client = RpcClient::new(config.json_rpc_url.clone());
+    let rpc_client =
+        RpcClient::new_with_commitment(config.json_rpc_url.clone(), CommitmentConfig::confirmed());
 
     match (sub_command, sub_matches) {
         ("apply", Some(arg_matches)) => {
@@ -654,6 +668,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             process_withdraw(&config, &rpc_client, identity_signer, confirm)?;
         }
+        ("list", Some(arg_matches)) => {
+            let state = match value_t_or_exit!(arg_matches, "state", String).as_str() {
+                "all" => None,
+                "pending" => Some(ParticipantState::Pending),
+                "rejected" => Some(ParticipantState::Rejected),
+                "approved" => Some(ParticipantState::Approved),
+                _ => unreachable!(),
+            };
+
+            process_list(&config, &rpc_client, state)?;
+        }
         ("admin", Some(admin_matches)) => {
             let admin_signer = match signer_of(admin_matches, "authority", &mut wallet_manager) {
                 Err(err) => {
@@ -677,17 +702,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("reject", Some(arg_matches)) => {
                     let participant = pubkey_of(arg_matches, "participant").unwrap();
                     process_admin_reject(&config, &rpc_client, admin_signer, participant)?;
-                }
-                ("list", Some(arg_matches)) => {
-                    let state = match value_t_or_exit!(arg_matches, "state", String).as_str() {
-                        "all" => None,
-                        "pending" => Some(ParticipantState::Pending),
-                        "rejected" => Some(ParticipantState::Rejected),
-                        "approved" => Some(ParticipantState::Approved),
-                        _ => unreachable!(),
-                    };
-
-                    process_admin_list(&config, &rpc_client, state)?;
                 }
                 ("import", Some(arg_matches)) => {
                     let testnet_identity = pubkey_of(arg_matches, "testnet").unwrap();
