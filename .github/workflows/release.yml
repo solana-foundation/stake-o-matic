@@ -44,7 +44,9 @@ jobs:
     - uses: actions/upload-artifact@v2
       with:
         name: ${{ matrix.target }}
-        path: solana-stake-o-matic-${{ matrix.target }}
+        path: |
+          solana-stake-o-matic-${{ matrix.target }}
+          registry-cli-${{ matrix.target }}
         if-no-files-found: error
 
   publish_release:
