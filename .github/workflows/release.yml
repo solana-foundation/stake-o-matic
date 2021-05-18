@@ -37,7 +37,9 @@ jobs:
         command: build
         args: --release
 
-    - run: mv target/release/solana-stake-o-matic solana-stake-o-matic-${{ matrix.target }}
+    - run: |
+        mv target/release/solana-stake-o-matic solana-stake-o-matic-${{ matrix.target }}
+        mv target/release/register-cli register-cli-${{ matrix.target }}
 
     - uses: actions/upload-artifact@v2
       with:
@@ -58,6 +60,8 @@ jobs:
         files: |
           x86_64-apple-darwin/solana-stake-o-matic-x86_64-apple-darwin
           x86_64-unknown-linux-gnu/solana-stake-o-matic-x86_64-unknown-linux-gnu
+          x86_64-apple-darwin/registry-cli-x86_64-apple-darwin
+          x86_64-unknown-linux-gnu/registry-cli-x86_64-unknown-linux-gnu
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
