@@ -167,10 +167,29 @@ fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Ve
         })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cluster {
+    Testnet,
+    MainnetBeta,
+}
+
+impl std::fmt::Display for Cluster {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Testnet => "testnet",
+                Self::MainnetBeta => "mainnet-beta",
+            }
+        )
+    }
+}
+
 #[derive(Debug)]
 struct Config {
     json_rpc_url: String,
-    cluster: String,
+    cluster: Cluster,
     db_path: PathBuf,
     markdown_path: Option<PathBuf>,
 
@@ -244,7 +263,7 @@ impl Config {
     pub fn default_for_test() -> Self {
         Self {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
-            cluster: "mainnet-beta".to_string(),
+            cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
             markdown_path: None,
             dry_run: true,
@@ -266,12 +285,12 @@ impl Config {
         }
     }
 
-    fn cluster_db_path_for<T: AsRef<str>>(&self, cluster: T) -> PathBuf {
-        self.db_path.join(format!("data-{}", cluster.as_ref()))
+    fn cluster_db_path_for(&self, cluster: Cluster) -> PathBuf {
+        self.db_path.join(format!("data-{}", cluster))
     }
 
     fn cluster_db_path(&self) -> PathBuf {
-        self.cluster_db_path_for(&self.cluster)
+        self.cluster_db_path_for(self.cluster)
     }
 }
 
@@ -303,20 +322,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .setting(AppSettings::VersionlessSubcommands)
         .setting(AppSettings::InferSubcommands)
-        .arg({
-            let arg = Arg::with_name("config_file")
-                .short("C")
-                .long("config")
-                .value_name("PATH")
-                .takes_value(true)
-                .global(true)
-                .help("Configuration file to use");
-            if let Some(ref config_file) = *solana_cli_config::CONFIG_FILE {
-                arg.default_value(&config_file)
-            } else {
-                arg
-            }
-        })
         .arg(
             Arg::with_name("json_rpc_url")
                 .long("url")
@@ -614,14 +619,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         )
         .get_matches();
 
-    let config = if let Some(config_file) = matches.value_of("config_file") {
-        solana_cli_config::Config::load(config_file).unwrap_or_default()
-    } else {
-        solana_cli_config::Config::default()
-    };
-
     let dry_run = !matches.is_present("confirm");
-    let cluster = value_t!(matches, "cluster", String).unwrap_or_else(|_| "custom".into());
+    let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
+        "mainnet-beta" => Cluster::MainnetBeta,
+        "testnet" => Cluster::Testnet,
+        _ => unreachable!(),
+    };
     let quality_block_producer_percentage =
         value_t_or_exit!(matches, "quality_block_producer_percentage", usize);
     let min_epoch_credit_percentage_of_average =
@@ -641,19 +644,16 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let min_testnet_participation = values_t!(matches, "min_testnet_participation", usize)
         .ok()
         .map(|v| (v[0], v[1]));
-    if min_testnet_participation.is_some() && cluster != "mainnet-beta" {
+    if min_testnet_participation.is_some() && cluster != Cluster::MainnetBeta {
         error!("--min-testnet-participation only available for `--cluster mainnet-beta`");
         process::exit(1);
     }
 
-    let json_rpc_url = match cluster.as_str() {
-        "mainnet-beta" => value_t!(matches, "json_rpc_url", String)
+    let json_rpc_url = match cluster {
+        Cluster::MainnetBeta => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
-        "testnet" => value_t!(matches, "json_rpc_url", String)
+        Cluster::Testnet => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://testnet.solana.com".into()),
-        "custom" => value_t!(matches, "json_rpc_url", String)
-            .unwrap_or_else(|_| config.json_rpc_url.clone()),
-        _ => unreachable!(),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let markdown_path = if matches.is_present("markdown") {
@@ -1007,9 +1007,9 @@ fn get_self_stake_by_vote_account(
 
 fn get_testnet_participation(config: &Config) -> BoxResult<Option<HashMap<Pubkey, bool>>> {
     if let Some((n, m)) = &config.min_testnet_participation {
-        assert_eq!(config.cluster, "mainnet-beta");
+        assert_eq!(config.cluster, Cluster::MainnetBeta);
         let latest_testnet_epoch_classification =
-            EpochClassification::load_latest(&config.cluster_db_path_for("testnet"))?
+            EpochClassification::load_latest(&config.cluster_db_path_for(Cluster::Testnet))?
                 .ok_or("Unable to load testnet epoch classification")?
                 .1
                 .into_current();
@@ -1061,7 +1061,7 @@ fn classify(
 
     let testnet_participation = get_testnet_participation(config)?;
 
-    let data_centers = data_center_info::get(&config.cluster)
+    let data_centers = data_center_info::get(&config.cluster.to_string())
         .map_err(|e| {
             warn!("infrastructure concentration skipped: {}", e);
             e
@@ -1443,16 +1443,15 @@ fn main() -> BoxResult<()> {
     info!("{} participants loaded", participants.len());
     assert!(participants.len() > 450); // Hard coded sanity check...
 
-    let (validator_list, identity_to_participant) = match config.cluster.as_str() {
-        "mainnet-beta" => (
+    let (validator_list, identity_to_participant) = match config.cluster {
+        Cluster::MainnetBeta => (
             mainnet_identity_to_participant.keys().cloned().collect(),
             mainnet_identity_to_participant,
         ),
-        "testnet" => (
+        Cluster::Testnet => (
             validator_list::testnet_validators().into_iter().collect(),
             testnet_identity_to_participant,
         ),
-        _ => unreachable!(),
     };
 
     let notifier = if config.dry_run {
@@ -1591,10 +1590,9 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
     )];
 
-    let cluster = match config.cluster.as_str() {
-        "mainnet-beta" => "Mainnet",
-        "testnet" => "Testnet",
-        x => x,
+    let cluster_md = match config.cluster {
+        Cluster::MainnetBeta => "Mainnet",
+        Cluster::Testnet => "Testnet",
     };
 
     while let Some((epoch, epoch_classification)) =
@@ -1622,7 +1620,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
 
                 validator_markdown.push(format!(
                     "### [[{1} Epoch {0}|{1}#Epoch-{0}]]",
-                    epoch, cluster
+                    epoch, cluster_md
                 ));
                 validator_markdown.push(classification.stake_state_reason.clone());
 
@@ -1678,7 +1676,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     }
 
     let markdown = cluster_markdown.join("\n");
-    let filename = markdown_path.join(format!("{}.md", cluster));
+    let filename = markdown_path.join(format!("{}.md", cluster_md));
     info!("Writing {}", filename.display());
     let mut file = File::create(filename)?;
     file.write_all(&markdown.into_bytes())?;
