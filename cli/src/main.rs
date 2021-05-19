@@ -3,17 +3,14 @@ use {
         crate_description, crate_name, crate_version, value_t_or_exit, App, AppSettings, Arg,
         SubCommand,
     },
+    registry_cli::{get_participants, get_participants_with_state},
     registry_program::state::{Participant, ParticipantState},
     solana_clap_utils::{
         input_parsers::{pubkey_of, signer_of},
         input_validators::{is_url, is_valid_pubkey, is_valid_signer},
         keypair::DefaultSigner,
     },
-    solana_client::{
-        rpc_client::RpcClient,
-        rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
-        rpc_filter::*,
-    },
+    solana_client::rpc_client::RpcClient,
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_sdk::{
         commitment_config::CommitmentConfig,
@@ -75,33 +72,6 @@ fn send_and_confirm_message<T: Signers>(
 
     println!("{}", signature);
     Ok(())
-}
-
-fn get_participants(
-    rpc_client: &RpcClient,
-) -> Result<HashMap<Pubkey, Participant>, Box<dyn std::error::Error>> {
-    let accounts = rpc_client.get_program_accounts_with_config(
-        &registry_program::id(),
-        RpcProgramAccountsConfig {
-            account_config: RpcAccountInfoConfig {
-                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64Zstd),
-                commitment: Some(rpc_client.commitment()), // TODO: Remove this line after updating to solana v1.6.10
-                ..RpcAccountInfoConfig::default()
-            },
-            filters: Some(vec![RpcFilterType::DataSize(
-                Participant::get_packed_len() as u64
-            )]),
-        },
-    )?;
-
-    Ok(accounts
-        .into_iter()
-        .filter_map(|(address, account)| {
-            Participant::unpack_from_slice(&account.data)
-                .ok()
-                .map(|p| (address, p))
-        })
-        .collect())
 }
 
 fn get_participants_with_identity(
@@ -264,13 +234,7 @@ fn process_list(
     rpc_client: &RpcClient,
     state: Option<ParticipantState>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut participants = get_participants(rpc_client)?;
-    participants.retain(|_, p| {
-        if let Some(ref state) = state {
-            return p.state == *state;
-        }
-        true
-    });
+    let participants = get_participants_with_state(rpc_client, state)?;
 
     for (address, participant) in &participants {
         if config.verbose {

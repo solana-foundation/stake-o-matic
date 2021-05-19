@@ -5,6 +5,8 @@ use {
         ArgMatches, SubCommand,
     },
     log::*,
+    registry_cli::get_participants_with_state,
+    registry_program::state::{Participant, ParticipantState},
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
@@ -51,6 +53,7 @@ mod validators_app;
 
 type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ValidatorList = HashSet<Pubkey>;
+type IdentityToParticipant = HashMap<Pubkey, Pubkey>;
 
 enum InfrastructureConcentrationAffectKind {
     Destake(String),
@@ -288,40 +291,7 @@ fn app_version() -> String {
     })
 }
 
-fn validator_list_of(matches: &ArgMatches, cluster: &str) -> ValidatorList {
-    match cluster {
-        "mainnet-beta" => validator_list::mainnet_beta_validators(),
-        "testnet" => validator_list::testnet_validators(),
-        "custom" => {
-            let validator_list_file =
-                File::open(value_t_or_exit!(matches, "--validator-list", PathBuf)).unwrap_or_else(
-                    |err| {
-                        error!("Unable to open validator_list: {}", err);
-                        process::exit(1);
-                    },
-                );
-
-            serde_yaml::from_reader::<_, Vec<String>>(validator_list_file)
-                .unwrap_or_else(|err| {
-                    error!("Unable to read validator_list: {}", err);
-                    process::exit(1);
-                })
-                .into_iter()
-                .map(|p| {
-                    Pubkey::from_str(&p).unwrap_or_else(|err| {
-                        error!("Invalid validator_list pubkey '{}': {}", p, err);
-                        process::exit(1);
-                    })
-                })
-                .collect()
-        }
-        _ => unreachable!(),
-    }
-    .into_iter()
-    .collect()
-}
-
-fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -359,9 +329,9 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
             Arg::with_name("cluster")
                 .long("cluster")
                 .value_name("NAME")
-                .possible_values(&["mainnet-beta", "testnet", "custom"])
+                .possible_values(&["mainnet-beta", "testnet"])
                 .takes_value(true)
-                .default_value("custom")
+                .default_value("testnet")
                 .required(true)
                 .help("Name of the cluster to operate on")
         )
@@ -574,14 +544,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                     .default_value("50000")
                     .validator(is_amount)
             )
-            .arg(
-                Arg::with_name("--validator-list")
-                    .long("validator-list")
-                    .value_name("FILE")
-                    .takes_value(true)
-                    .conflicts_with("cluster")
-                    .help("File containing an YAML array of validator pubkeys eligible for staking")
-            )
         )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
@@ -619,14 +581,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
                     .takes_value(true)
                     .default_value("5000")
                     .validator(is_amount)
-            )
-            .arg(
-                Arg::with_name("--validator-list")
-                    .long("validator-list")
-                    .value_name("FILE")
-                    .takes_value(true)
-                    .conflicts_with("cluster")
-                    .help("File containing an YAML array of validator pubkeys eligible for staking")
             )
         )
         .subcommand(
@@ -756,8 +710,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         .get_health()
         .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
-    let validator_list = validator_list_of(&matches, config.cluster.as_str());
-
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("legacy", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
@@ -805,7 +757,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, ValidatorList, Box<dyn GenericS
         _ => unreachable!(),
     };
 
-    Ok((config, rpc_client, validator_list, stake_pool))
+    Ok((config, rpc_client, stake_pool))
 }
 
 type ClassifyResult = (
@@ -1102,7 +1054,7 @@ fn classify(
     config: &Config,
     epoch: Epoch,
     validator_list: &ValidatorList,
-    validator_to_participant: &HashMap<Pubkey, Pubkey>,
+    identity_to_participant: &IdentityToParticipant,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
@@ -1264,7 +1216,7 @@ fn classify(
                 continue;
             }
 
-            let participant = validator_to_participant.get(&identity).cloned();
+            let participant = identity_to_participant.get(&identity).cloned();
 
             let current_data_center = data_centers
                 .by_identity
@@ -1457,7 +1409,51 @@ fn classify(
 
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
-    let (config, rpc_client, validator_list, mut stake_pool) = get_config()?;
+
+    let (config, rpc_client, mut stake_pool) = get_config()?;
+
+    info!("Loading participants...");
+    let participants = get_participants_with_state(
+        &RpcClient::new("https://api.mainnet-beta.solana.com".to_string()),
+        Some(ParticipantState::Approved),
+    )?;
+
+    let (mainnet_identity_to_participant, testnet_identity_to_participant): (
+        IdentityToParticipant,
+        IdentityToParticipant,
+    ) = participants
+        .iter()
+        .map(
+            |(
+                participant,
+                Participant {
+                    mainnet_identity,
+                    testnet_identity,
+                    ..
+                },
+            )| {
+                (
+                    (*mainnet_identity, *participant),
+                    (*testnet_identity, *participant),
+                )
+            },
+        )
+        .unzip();
+
+    info!("{} participants loaded", participants.len());
+    assert!(participants.len() > 450); // Hard coded sanity check...
+
+    let (validator_list, identity_to_participant) = match config.cluster.as_str() {
+        "mainnet-beta" => (
+            mainnet_identity_to_participant.keys().cloned().collect(),
+            mainnet_identity_to_participant,
+        ),
+        "testnet" => (
+            validator_list::testnet_validators().into_iter().collect(),
+            testnet_identity_to_participant,
+        ),
+        _ => unreachable!(),
+    };
 
     let notifier = if config.dry_run {
         Notifier::new("DRYRUN")
@@ -1497,7 +1493,7 @@ fn main() -> BoxResult<()> {
                     &config,
                     epoch,
                     &validator_list,
-                    &HashMap::default(), // TODO: ...
+                    &identity_to_participant,
                     previous_epoch_classification
                         .validator_classifications
                         .as_ref(),
