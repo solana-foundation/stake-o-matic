@@ -1830,7 +1830,19 @@ checksum = "7baab56125e25686df467fe470785512329883aab42696d661247aca2a2896e4"
 dependencies = [
  "console 0.14.1",
  "lazy_static",
- "number_prefix",
+ "number_prefix 0.3.0",
+ "regex",
+]
+
+[[package]]
+name = "indicatif"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "507cf157a0dab3c837bef6e2086466255d9de4a6b1af69e62b62c54cd52f6062"
+dependencies = [
+ "console 0.14.1",
+ "lazy_static",
+ "number_prefix 0.4.0",
  "regex",
 ]
 
@@ -2503,6 +2515,12 @@ name = "number_prefix"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17b02fc0ff9a9e4b35b3342880f48e896ebf69f2967921fe8646bf5b7125956a"
+
+[[package]]
+name = "number_prefix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "object"
@@ -3852,7 +3870,7 @@ dependencies = [
  "bincode",
  "bs58 0.3.1",
  "clap",
- "indicatif",
+ "indicatif 0.15.0",
  "jsonrpc-core",
  "log 0.4.14",
  "net2",
@@ -4002,7 +4020,7 @@ checksum = "c8bf5630a4b055fbb1df0306f8352376d068fd2d4ecef8e2739dd6c3d399f93d"
 dependencies = [
  "bzip2",
  "console 0.11.3",
- "indicatif",
+ "indicatif 0.15.0",
  "log 0.4.14",
  "reqwest",
  "solana-runtime",
@@ -4451,7 +4469,7 @@ dependencies = [
  "borsh 0.8.2",
  "bs58 0.4.0",
  "clap",
- "indicatif",
+ "indicatif 0.16.0",
  "log 0.4.14",
  "regex",
  "registry-cli",
@@ -4617,7 +4635,7 @@ dependencies = [
  "console 0.11.3",
  "core_affinity",
  "fd-lock",
- "indicatif",
+ "indicatif 0.15.0",
  "jsonrpc-core",
  "jsonrpc-core-client",
  "jsonrpc-derive",

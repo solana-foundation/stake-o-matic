@@ -39,7 +39,7 @@ spl-token = "3.1"
 spl-stake-pool = "0.2"
 
 [dev-dependencies]
-indicatif = "0.15.0"
+indicatif = "0.16.0"
 solana-validator = "1.6.8"
 solana-vote-program = "1.6.8"
 
