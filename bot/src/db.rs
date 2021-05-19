@@ -136,7 +136,10 @@ impl EpochClassification {
         let mut previous_epoch = epoch;
         loop {
             if previous_epoch == 0 {
-                info!("No previous EpochClassification found");
+                info!(
+                    "No previous EpochClassification found at {}",
+                    path.as_ref().display()
+                );
                 return Ok(None);
             }
             previous_epoch -= 1;
@@ -150,8 +153,9 @@ impl EpochClassification {
                     .is_some()
                 {
                     info!(
-                        "Previous EpochClassification found for epoch {}",
-                        previous_epoch
+                        "Previous EpochClassification found for epoch {} at {}",
+                        previous_epoch,
+                        path.as_ref().display()
                     );
                     return Ok(Some((
                         previous_epoch,

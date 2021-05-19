@@ -4454,6 +4454,8 @@ dependencies = [
  "indicatif",
  "log 0.4.14",
  "regex",
+ "registry-cli",
+ "registry-program",
  "reqwest",
  "semver 0.11.0",
  "serde",
