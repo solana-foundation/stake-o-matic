@@ -1127,6 +1127,16 @@ fn classify(
         too_many_poor_block_producers,
     ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
 
+    let not_in_leader_schedule: ValidatorList = validator_list
+        .difference(
+            &quality_block_producers
+                .intersection(&poor_block_producers)
+                .cloned()
+                .collect(),
+        )
+        .cloned()
+        .collect();
+
     let too_many_old_validators = cluster_nodes_with_old_version.len()
         > (poor_block_producers.len() + quality_block_producers.len())
             * config.max_old_release_version_percentage
@@ -1228,19 +1238,10 @@ fn classify(
                 .map(|p| p.get(&identity))
                 .flatten();
 
-            let mut data_center_residency = {
-                let previous_data_center_residency = previous_classification
-                    .map(|vc| vc.data_center_residency.clone())
-                    .flatten()
-                    .unwrap_or_default();
-
-                // Decay previous data center residency observations
-                previous_data_center_residency
-                    .into_iter()
-                    .map(|(dc, i)| (dc, i.saturating_sub(1)))
-                    .filter(|(_, i)| *i > 0)
-                    .collect::<HashMap<_, _>>()
-            };
+            let mut previous_data_center_residency = previous_classification
+                .map(|vc| vc.data_center_residency.clone())
+                .flatten()
+                .unwrap_or_default();
 
             let self_stake = self_stake_by_vote_account
                 .get(&vote_address)
@@ -1261,7 +1262,7 @@ fn classify(
                 .map(|concentration| {
                     config.infrastructure_concentration_affects.memo(
                         &identity,
-                        !data_center_residency.contains_key(&current_data_center),
+                        !previous_data_center_residency.contains_key(&current_data_center),
                         *concentration,
                     )
                 })
@@ -1344,15 +1345,32 @@ fn classify(
                 )
             } else {
                 assert!(!poor_voters.contains(&identity));
-                (ValidatorStakeState::Baseline, vote_credits_msg)
+                assert!(not_in_leader_schedule.contains(&identity));
+                (
+                    ValidatorStakeState::Baseline,
+                    format!("no leader slots; {}", vote_credits_msg),
+                )
             };
 
-            if stake_state == ValidatorStakeState::Bonus {
-                // Add weight to the current data center location
-                *data_center_residency
-                    .entry(current_data_center.clone())
-                    .or_default() += 1;
-            }
+            // Data center seniority increases with Bonus stake and decreases
+            // otherwise
+            previous_data_center_residency
+                .entry(current_data_center.clone())
+                .or_default();
+
+            let data_center_residency = previous_data_center_residency
+                .into_iter()
+                .map(|(data_center, seniority)| {
+                    if data_center == current_data_center
+                        && stake_state == ValidatorStakeState::Bonus
+                    {
+                        (data_center, seniority.saturating_add(1))
+                    } else {
+                        (data_center, seniority.saturating_sub(1))
+                    }
+                })
+                .filter(|(_, i)| *i > 0)
+                .collect::<HashMap<_, _>>();
 
             debug!(
                 "\nidentity: {} ({:?})\n\
