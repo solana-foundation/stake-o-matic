@@ -1243,6 +1243,10 @@ fn classify(
                 .flatten()
                 .unwrap_or_default();
 
+            let previous_stake_state = previous_classification
+                .map(|vc| vc.stake_state)
+                .unwrap_or_default();
+
             let self_stake = self_stake_by_vote_account
                 .get(&vote_address)
                 .cloned()
@@ -1347,7 +1351,18 @@ fn classify(
                 assert!(!poor_voters.contains(&identity));
                 assert!(not_in_leader_schedule.contains(&identity));
                 (
-                    ValidatorStakeState::Baseline,
+                    // If the validator is not in the leader schedule but was Bonus previously,
+                    // maintain Bonus.
+                    //
+                    // Destaking due to delinquency will not be reflected in the leader schedule
+                    // until 2 epochs later, which point the validator may have recovered and
+                    // there's no need to punish the validator further by reducing it to the
+                    // Baseline level.
+                    if previous_stake_state == ValidatorStakeState::Bonus {
+                        ValidatorStakeState::Bonus
+                    } else {
+                        ValidatorStakeState::Baseline
+                    },
                     format!("no leader slots; {}", vote_credits_msg),
                 )
             };
