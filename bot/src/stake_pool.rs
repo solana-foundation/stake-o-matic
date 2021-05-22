@@ -765,12 +765,29 @@ where
         Sol(reserve_stake_balance)
     );
 
+    // Prioritize funding smaller stake accounts to maximize the number of accounts that will be
+    // funded with the available reserve stake.
+    let mut min_stake = vec![];
+    let mut baseline_stake = vec![];
+    let mut bonus_stake = vec![];
+
+    for validator_stake in desired_validator_stake {
+        match validator_stake.stake_state {
+            ValidatorStakeState::None => min_stake.push(validator_stake),
+            ValidatorStakeState::Baseline => baseline_stake.push(validator_stake),
+            ValidatorStakeState::Bonus => bonus_stake.push(validator_stake),
+        };
+    }
+
     let mut transactions = vec![];
     for ValidatorStake {
         identity,
         stake_state,
         vote_address,
-    } in desired_validator_stake
+    } in min_stake
+        .into_iter()
+        .chain(baseline_stake)
+        .chain(bonus_stake)
     {
         let desired_balance = match stake_state {
             ValidatorStakeState::None => 0,
