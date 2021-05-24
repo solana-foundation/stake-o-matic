@@ -772,19 +772,37 @@ where
     let mut bonus_stake = vec![];
 
     for validator_stake in desired_validator_stake {
-        match validator_stake.stake_state {
-            ValidatorStakeState::None => min_stake.push(validator_stake),
-            ValidatorStakeState::Baseline => baseline_stake.push(validator_stake),
-            ValidatorStakeState::Bonus => bonus_stake.push(validator_stake),
-        };
+        match validator_list.find(&validator_stake.vote_address) {
+            None => warn!(
+                "Vote address {} found in desired validator stake, but not in stake pool",
+                &validator_stake.vote_address
+            ),
+            Some(validator_entry) => {
+                let list = match validator_stake.stake_state {
+                    ValidatorStakeState::None => &mut min_stake,
+                    ValidatorStakeState::Baseline => &mut baseline_stake,
+                    ValidatorStakeState::Bonus => &mut bonus_stake,
+                };
+
+                list.push((validator_entry.stake_lamports, validator_stake));
+            }
+        }
     }
 
+    // Sort from lowest to highest balance
+    min_stake.sort_by_key(|k| k.0);
+    baseline_stake.sort_by_key(|k| k.0);
+    bonus_stake.sort_by_key(|k| k.0);
+
     let mut transactions = vec![];
-    for ValidatorStake {
-        identity,
-        stake_state,
-        vote_address,
-    } in min_stake
+    for (
+        balance,
+        ValidatorStake {
+            identity,
+            stake_state,
+            vote_address,
+        },
+    ) in min_stake
         .into_iter()
         .chain(baseline_stake)
         .chain(bonus_stake)
@@ -794,18 +812,6 @@ where
             ValidatorStakeState::Baseline => baseline_stake_amount,
             ValidatorStakeState::Bonus => bonus_stake_amount,
         };
-
-        let maybe_validator_entry = validator_list.find(&vote_address);
-        if maybe_validator_entry.is_none() {
-            warn!(
-                "Vote address {} found in desired validator stake, but not in stake pool",
-                &vote_address
-            );
-            continue;
-        }
-        let validator_entry = maybe_validator_entry.unwrap();
-        let balance = validator_entry.stake_lamports;
-
         info!(
             "desired stake for {} ({:?}) is {}, current balance is {}",
             identity,
