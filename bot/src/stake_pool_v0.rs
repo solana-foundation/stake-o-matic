@@ -582,32 +582,12 @@ where
     let mut bonus_stake = vec![];
 
     for validator_stake in desired_validator_stake {
-        match validator_stake.stake_state {
-            ValidatorStakeState::None => min_stake.push(validator_stake),
-            ValidatorStakeState::Baseline => baseline_stake.push(validator_stake),
-            ValidatorStakeState::Bonus => bonus_stake.push(validator_stake),
-        };
-    }
-
-    let mut transactions = vec![];
-    for ValidatorStake {
-        identity,
-        stake_state,
-        vote_address,
-    } in min_stake
-        .into_iter()
-        .chain(baseline_stake)
-        .chain(bonus_stake)
-    {
-        let desired_balance = match stake_state {
-            ValidatorStakeState::None => MIN_STAKE_ACCOUNT_BALANCE,
-            ValidatorStakeState::Baseline => baseline_stake_amount,
-            ValidatorStakeState::Bonus => bonus_stake_amount,
-        };
-
-        let stake_address = validator_stake_address(authorized_staker.pubkey(), vote_address);
-        let transient_stake_address =
-            validator_transient_stake_address(authorized_staker.pubkey(), vote_address);
+        let stake_address =
+            validator_stake_address(authorized_staker.pubkey(), validator_stake.vote_address);
+        let transient_stake_address = validator_transient_stake_address(
+            authorized_staker.pubkey(),
+            validator_stake.vote_address,
+        );
 
         let balance = rpc_client.get_balance(&stake_address).map_err(|err| {
             format!(
@@ -623,6 +603,44 @@ where
                 )
             })?;
 
+        let list = match validator_stake.stake_state {
+            ValidatorStakeState::None => &mut min_stake,
+            ValidatorStakeState::Baseline => &mut baseline_stake,
+            ValidatorStakeState::Bonus => &mut bonus_stake,
+        };
+        list.push((
+            balance,
+            stake_address,
+            transient_stake_address,
+            validator_stake,
+        ));
+    }
+
+    // Sort from lowest to highest balance
+    min_stake.sort_by_key(|k| k.0);
+    baseline_stake.sort_by_key(|k| k.0);
+    bonus_stake.sort_by_key(|k| k.0);
+
+    let mut transactions = vec![];
+    for (
+        balance,
+        stake_address,
+        transient_stake_address,
+        ValidatorStake {
+            identity,
+            stake_state,
+            vote_address,
+        },
+    ) in min_stake
+        .into_iter()
+        .chain(baseline_stake)
+        .chain(bonus_stake)
+    {
+        let desired_balance = match stake_state {
+            ValidatorStakeState::None => MIN_STAKE_ACCOUNT_BALANCE,
+            ValidatorStakeState::Baseline => baseline_stake_amount,
+            ValidatorStakeState::Bonus => bonus_stake_amount,
+        };
         let transient_stake_address_seed = validator_transient_stake_address_seed(vote_address);
 
         #[allow(clippy::comparison_chain)]
