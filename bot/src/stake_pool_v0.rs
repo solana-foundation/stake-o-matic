@@ -670,41 +670,44 @@ where
             }
         } else if balance < desired_balance {
             let mut amount_to_add = desired_balance - balance;
-            if amount_to_add > reserve_stake_balance {
-                trace!(
-                    "note: amount_to_add > reserve_stake_balance: {} > {}",
-                    amount_to_add,
-                    reserve_stake_balance
-                );
-                amount_to_add = reserve_stake_balance;
-            }
 
-            if amount_to_add == 0 {
-                "reserve depleted".to_string()
-            } else if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
+            if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
                 format!("not adding {} (amount too small)", Sol(amount_to_add))
             } else {
-                reserve_stake_balance -= amount_to_add;
+                if amount_to_add > reserve_stake_balance {
+                    trace!(
+                        "note: amount_to_add > reserve_stake_balance: {} > {}",
+                        amount_to_add,
+                        reserve_stake_balance
+                    );
+                    amount_to_add = reserve_stake_balance;
+                }
 
-                let mut instructions = stake_instruction::split_with_seed(
-                    &reserve_stake_address,
-                    &authorized_staker.pubkey(),
-                    amount_to_add,
-                    &transient_stake_address,
-                    &authorized_staker.pubkey(),
-                    &transient_stake_address_seed,
-                );
-                instructions.push(stake_instruction::delegate_stake(
-                    &transient_stake_address,
-                    &authorized_staker.pubkey(),
-                    &vote_address,
-                ));
+                if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
+                    "reserve depleted".to_string()
+                } else {
+                    reserve_stake_balance -= amount_to_add;
 
-                transactions.push(Transaction::new_with_payer(
-                    &instructions,
-                    Some(&authorized_staker.pubkey()),
-                ));
-                format!("adding {}", Sol(amount_to_add))
+                    let mut instructions = stake_instruction::split_with_seed(
+                        &reserve_stake_address,
+                        &authorized_staker.pubkey(),
+                        amount_to_add,
+                        &transient_stake_address,
+                        &authorized_staker.pubkey(),
+                        &transient_stake_address_seed,
+                    );
+                    instructions.push(stake_instruction::delegate_stake(
+                        &transient_stake_address,
+                        &authorized_staker.pubkey(),
+                        &vote_address,
+                    ));
+
+                    transactions.push(Transaction::new_with_payer(
+                        &instructions,
+                        Some(&authorized_staker.pubkey()),
+                    ));
+                    format!("adding {}", Sol(amount_to_add))
+                }
             }
         } else {
             "no change".to_string()

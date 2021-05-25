@@ -841,35 +841,38 @@ where
             }
         } else if balance < desired_balance {
             let mut amount_to_add = desired_balance - balance;
-            if amount_to_add > reserve_stake_balance {
-                trace!(
-                    "note: amount_to_add > reserve_stake_balance: {} > {}",
-                    amount_to_add,
-                    reserve_stake_balance
-                );
-                amount_to_add = reserve_stake_balance;
-            }
 
-            if amount_to_add == 0 {
-                "reserve depleted".to_string()
-            } else if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
+            if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
                 format!("not adding {} (amount too small)", Sol(amount_to_add))
             } else {
-                reserve_stake_balance -= amount_to_add;
-                info!("adding {} stake", Sol(amount_to_add));
+                if amount_to_add > reserve_stake_balance {
+                    trace!(
+                        "note: amount_to_add > reserve_stake_balance: {} > {}",
+                        amount_to_add,
+                        reserve_stake_balance
+                    );
+                    amount_to_add = reserve_stake_balance;
+                }
 
-                transactions.push(Transaction::new_with_payer(
-                    &[
-                        spl_stake_pool::instruction::increase_validator_stake_with_vote(
-                            stake_pool,
-                            stake_pool_address,
-                            &vote_address,
-                            amount_to_add,
-                        ),
-                    ],
-                    Some(&authorized_staker.pubkey()),
-                ));
-                format!("adding {}", Sol(amount_to_add))
+                if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
+                    "reserve depleted".to_string()
+                } else {
+                    reserve_stake_balance -= amount_to_add;
+                    info!("adding {} stake", Sol(amount_to_add));
+
+                    transactions.push(Transaction::new_with_payer(
+                        &[
+                            spl_stake_pool::instruction::increase_validator_stake_with_vote(
+                                stake_pool,
+                                stake_pool_address,
+                                &vote_address,
+                                amount_to_add,
+                            ),
+                        ],
+                        Some(&authorized_staker.pubkey()),
+                    ));
+                    format!("adding {}", Sol(amount_to_add))
+                }
             }
         } else {
             "no change".to_string()
