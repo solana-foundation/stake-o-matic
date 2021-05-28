@@ -70,7 +70,8 @@ enum InfrastructureConcentrationAffects {
 impl InfrastructureConcentrationAffects {
     fn destake_memo(concentration: f64) -> String {
         format!(
-            "infrastructure concentration {:.1}% is too high",
+            "infrastructure concentration {:.1}% is too high; \
+            find a new data center",
             concentration
         )
     }
