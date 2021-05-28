@@ -44,7 +44,6 @@ use {
 mod data_center_info;
 mod db;
 mod generic_stake_pool;
-mod legacy_stake_pool;
 mod rpc_client_utils;
 mod stake_pool;
 mod stake_pool_v0;
@@ -514,43 +513,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                        This setting is ignored if the --cluster is not `mainnet-beta`")
         )
         .subcommand(
-            SubCommand::with_name("legacy").about("Use the legacy staking solution")
-            .arg(
-                Arg::with_name("source_stake_address")
-                    .index(1)
-                    .value_name("SOURCE_STAKE_ADDRESS")
-                    .takes_value(true)
-                    .required(true)
-                    .validator(is_pubkey_or_keypair)
-                    .help("The source stake account for splitting individual validator stake accounts from")
-            )
-            .arg(
-                Arg::with_name("authorized_staker")
-                    .index(2)
-                    .value_name("KEYPAIR")
-                    .validator(is_keypair)
-                    .required(true)
-                    .takes_value(true)
-                    .help("Keypair of the authorized staker")
-            )
-            .arg(
-                Arg::with_name("baseline_stake_amount")
-                    .long("baseline-stake-amount")
-                    .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("5000")
-                    .validator(is_amount)
-            )
-            .arg(
-                Arg::with_name("bonus_stake_amount")
-                    .long("bonus-stake-amount")
-                    .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("50000")
-                    .validator(is_amount)
-            )
-        )
-        .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
             .arg(
                 Arg::with_name("reserve_stake_address")
@@ -711,22 +673,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
-        ("legacy", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let source_stake_address = pubkey_of(&matches, "source_stake_address").unwrap();
-            let baseline_stake_amount =
-                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            let bonus_stake_amount =
-                sol_to_lamports(value_t_or_exit!(matches, "bonus_stake_amount", f64));
-
-            Box::new(legacy_stake_pool::new(
-                &rpc_client,
-                authorized_staker,
-                baseline_stake_amount,
-                bonus_stake_amount,
-                source_stake_address,
-            )?)
-        }
         ("stake-pool-v0", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
