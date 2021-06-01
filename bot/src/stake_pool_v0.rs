@@ -210,7 +210,7 @@ impl GenericStakePool for StakePool {
 
         let notes = vec![
             format!(
-                "Stake pool size: {} (inactive: {})",
+                "Stake pool size: {} (available for delegation: {})",
                 Sol(total_stake_amount),
                 Sol(reserve_stake_balance)
             ),
