@@ -265,6 +265,7 @@ impl GenericStakePool for StakePoolOMatic {
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
         let notes = vec![
+            format!("Total stake pool amount: {}", Sol(total_stake_amount)),
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
