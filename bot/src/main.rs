@@ -222,7 +222,8 @@ struct Config {
     confirmed_block_cache_path: PathBuf,
 
     /// Vote accounts sharing infrastructure with larger than this amount will not be staked
-    max_infrastructure_concentration: f64,
+    /// None: skip infrastructure concentration check
+    max_infrastructure_concentration: Option<f64>,
 
     /// How validators with infrastruction concentration above `max_infrastructure_concentration`
     /// will be affected. Accepted values are:
@@ -274,7 +275,7 @@ impl Config {
             max_old_release_version_percentage: 10,
             max_poor_voter_percentage: 20,
             confirmed_block_cache_path: default_confirmed_block_cache_path(),
-            max_infrastructure_concentration: 100.0,
+            max_infrastructure_concentration: Some(100.0),
             infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
             bad_cluster_average_skip_rate: 50,
             min_epoch_credit_percentage_of_average: 50,
@@ -452,7 +453,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 .long("max-infrastructure-concentration")
                 .takes_value(true)
                 .value_name("PERCENTAGE")
-                .default_value("100")
                 .validator(is_valid_percentage)
                 .help("Vote accounts sharing infrastructure with larger than this amount will not be staked")
         )
@@ -633,7 +633,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     let bad_cluster_average_skip_rate =
         value_t!(matches, "bad_cluster_average_skip_rate", usize).unwrap_or(50);
     let max_infrastructure_concentration =
-        value_t!(matches, "max_infrastructure_concentration", f64).unwrap();
+        value_t!(matches, "max_infrastructure_concentration", f64).ok();
     let infrastructure_concentration_affects = value_t!(
         matches,
         "infrastructure_concentration_affects",
@@ -1008,22 +1008,43 @@ fn classify(
 
     let testnet_participation = get_testnet_participation(config)?;
 
-    let data_centers = data_center_info::get(&config.cluster.to_string())
-        .map_err(|e| {
-            warn!("infrastructure concentration skipped: {}", e);
-            e
-        })
-        .unwrap_or_default();
+    let data_centers = match data_center_info::get(&config.cluster.to_string()) {
+        Ok(data_centers) => {
+            // Sanity check the infrastucture stake percent data.  More than 35% indicates there's
+            // probably a bug in the data source. Abort if so.
+            let max_infrastucture_stake_percent = data_centers
+                .info
+                .iter()
+                .map(|dci| dci.stake_percent.round() as usize)
+                .max()
+                .unwrap_or(100);
+
+            info!("Largest data center stake concentration:  ~{}%", max_infrastucture_stake_percent);
+            if max_infrastucture_stake_percent > 35 {
+                return Err("Largest data center stake concentration is too high".into());
+            }
+            data_centers
+        }
+        Err(err) => {
+            if config.max_infrastructure_concentration.is_some() {
+                return Err(err);
+            }
+            warn!("infrastructure concentration skipped: {}", err);
+            data_center_info::DataCenters::default()
+        }
+    };
 
     let infrastructure_concentration_too_high = data_centers
         .info
         .iter()
         .filter_map(|dci| {
-            if dci.stake_percent > config.max_infrastructure_concentration {
-                Some((dci.validators.clone(), dci.stake_percent))
-            } else {
-                None
+            if let Some(max_infrastructure_concentration) = config.max_infrastructure_concentration
+            {
+                if dci.stake_percent > max_infrastructure_concentration {
+                    return Some((dci.validators.clone(), dci.stake_percent));
+                }
             }
+            None
         })
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
@@ -1115,15 +1136,16 @@ fn classify(
         format!("Solana release {} or greater required", min_release_version),
         format!("Maximum commission: {}%", config.max_commission),
         format!(
-            "Maximum infrastructure concentration: {:0}%",
-            config.max_infrastructure_concentration
-        ),
-        format!(
             "Minimum required self stake: {}",
             Sol(config.min_self_stake_lamports)
         ),
     ];
-
+    if let Some(max_infrastructure_concentration) = config.max_infrastructure_concentration {
+        notes.push(format!(
+            "Maximum infrastructure concentration: {:0}%",
+            max_infrastructure_concentration
+        ));
+    }
     if let Some((n, m)) = &config.min_testnet_participation {
         notes.push(format!(
             "Participants must maintain Baseline or Bonus stake level for {} of the last {} Testnet epochs",
@@ -1290,7 +1312,7 @@ fn classify(
                 (
                     ValidatorStakeState::Baseline,
                     format!(
-                        "poor block production during epoch {}: {} ",
+                        "poor block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1620,8 +1642,8 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                             .map(|data_center| data_center.to_string())
                             .collect::<Vec<_>>();
                         validator_markdown.push(format!(
-                            "* Resident Data Center: {}",
-                            data_center_residency.join(",")
+                            "* Resident Data Center(s): {}",
+                            data_center_residency.join(", ")
                         ));
                     }
                 }
