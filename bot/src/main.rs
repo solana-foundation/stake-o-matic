@@ -1019,7 +1019,10 @@ fn classify(
                 .max()
                 .unwrap_or(100);
 
-            info!("Largest data center stake concentration:  ~{}%", max_infrastucture_stake_percent);
+            info!(
+                "Largest data center stake concentration:  ~{}%",
+                max_infrastucture_stake_percent
+            );
             if max_infrastucture_stake_percent > 35 {
                 return Err("Largest data center stake concentration is too high".into());
             }
