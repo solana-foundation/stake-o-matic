@@ -1479,9 +1479,7 @@ fn main() -> BoxResult<()> {
 
     let mut notifications = epoch_classification.notes.clone();
 
-    let success = if let Some(ref validator_classifications) =
-        epoch_classification.validator_classifications
-    {
+    if let Some(ref validator_classifications) = epoch_classification.validator_classifications {
         let previous_validator_classifications = previous_epoch_classification
             .validator_classifications
             .unwrap_or_default();
@@ -1520,7 +1518,7 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        let (stake_pool_notes, success) =
+        let stake_pool_notes =
             stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
@@ -1530,11 +1528,7 @@ fn main() -> BoxResult<()> {
 
         validator_stake_change_notes.sort();
         notifications.extend(validator_stake_change_notes);
-
-        success
-    } else {
-        true
-    };
+    }
 
     if first_time {
         EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
@@ -1547,11 +1541,7 @@ fn main() -> BoxResult<()> {
         }
     }
 
-    if success {
-        Ok(())
-    } else {
-        Err("something failed".into())
-    }
+    Ok(())
 }
 
 fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {

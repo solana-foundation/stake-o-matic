@@ -31,5 +31,5 @@ pub trait GenericStakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>>;
+    ) -> Result<Vec<String>, Box<dyn error::Error>>;
 }

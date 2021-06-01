@@ -153,11 +153,7 @@ impl GenericStakePool for StakePoolOMatic {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>> {
-        if dry_run {
-            return Err("dryrun not supported".into());
-        }
-
+    ) -> Result<Vec<String>, Box<dyn error::Error>> {
         let mut bonus_stake_node_count = 0;
         let mut baseline_stake_node_count = 0;
 
@@ -269,8 +265,7 @@ impl GenericStakePool for StakePoolOMatic {
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
-        Ok((
-            notes,
+        if !dry_run {
             distribute_validator_stake(
                 rpc_client,
                 &self.authorized_staker,
@@ -283,8 +278,9 @@ impl GenericStakePool for StakePoolOMatic {
                     .cloned(),
                 self.baseline_stake_amount,
                 bonus_stake_amount,
-            )?,
-        ))
+            )?;
+        }
+        Ok(notes)
     }
 }
 

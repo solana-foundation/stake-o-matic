@@ -94,7 +94,7 @@ impl GenericStakePool for StakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(Vec<String>, bool), Box<dyn error::Error>> {
+    ) -> Result<Vec<String>, Box<dyn error::Error>> {
         let mut inuse_stake_addresses = HashSet::new();
         inuse_stake_addresses.insert(self.reserve_stake_address);
 
@@ -197,12 +197,7 @@ impl GenericStakePool for StakePool {
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
 
-        if dry_run {
-            return Ok((notes, true));
-        }
-
-        Ok((
-            notes,
+        if !dry_run {
             distribute_validator_stake(
                 rpc_client,
                 &self.authorized_staker,
@@ -214,8 +209,9 @@ impl GenericStakePool for StakePool {
                 self.min_reserve_stake_balance,
                 self.baseline_stake_amount,
                 bonus_stake_amount,
-            )?,
-        ))
+            )?
+        }
+        Ok(notes)
     }
 }
 
@@ -558,7 +554,7 @@ fn distribute_validator_stake<V>(
     min_reserve_stake_balance: u64,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
-) -> Result<bool, Box<dyn error::Error>>
+) -> Result<(), Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
 {
@@ -733,9 +729,10 @@ where
         .is_empty();
 
     if !ok {
-        error!("One or more transactions failed to execute")
+        Err("One or more transactions failed to execute".into())
+    } else {
+        Ok(())
     }
-    Ok(ok)
 }
 
 #[cfg(test)]
