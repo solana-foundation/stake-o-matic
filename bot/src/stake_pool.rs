@@ -260,8 +260,29 @@ impl GenericStakePool for StakePoolOMatic {
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
+        let reserve_stake_balance = get_available_stake_balance(
+            rpc_client,
+            self.stake_pool.reserve_stake,
+            MIN_STAKE_RESERVE_BALANCE,
+        )
+        .map_err(|err| {
+            format!(
+                "Unable to get reserve stake account balance: {}: {}",
+                self.stake_pool.reserve_stake, err
+            )
+        })?;
+
+        info!(
+            "Reserve stake available balance before updates: {}",
+            Sol(reserve_stake_balance)
+        );
+
         let notes = vec![
-            format!("Total stake pool amount: {}", Sol(total_stake_amount)),
+            format!(
+                "Stake pool size: {} (inactive: {})",
+                Sol(total_stake_amount),
+                Sol(reserve_stake_balance)
+            ),
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
@@ -276,6 +297,7 @@ impl GenericStakePool for StakePoolOMatic {
                     .iter()
                     .filter(|vs| !busy_validators.contains(&vs.identity))
                     .cloned(),
+                reserve_stake_balance,
                 self.baseline_stake_amount,
                 bonus_stake_amount,
             )?;
@@ -739,29 +761,13 @@ fn distribute_validator_stake<V>(
     stake_pool: &StakePool,
     validator_list: &ValidatorList,
     desired_validator_stake: V,
+    mut reserve_stake_balance: u64,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
 ) -> Result<bool, Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
 {
-    let mut reserve_stake_balance = get_available_stake_balance(
-        rpc_client,
-        stake_pool.reserve_stake,
-        MIN_STAKE_RESERVE_BALANCE,
-    )
-    .map_err(|err| {
-        format!(
-            "Unable to get reserve stake account balance: {}: {}",
-            stake_pool.reserve_stake, err
-        )
-    })?;
-
-    info!(
-        "Reserve stake available balance before updates: {}",
-        Sol(reserve_stake_balance)
-    );
-
     // Prioritize funding smaller stake accounts to maximize the number of accounts that will be
     // funded with the available reserve stake.
     let mut min_stake = vec![];

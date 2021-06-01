@@ -1020,7 +1020,7 @@ fn classify(
                 .unwrap_or(100);
 
             info!(
-                "Largest data center stake concentration:  ~{}%",
+                "Largest data center stake concentration: ~{}%",
                 max_infrastucture_stake_percent
             );
             if max_infrastucture_stake_percent > 35 {
@@ -1052,7 +1052,7 @@ fn classify(
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let vote_account_info = get_vote_account_info(&rpc_client, last_epoch)?;
+    let (vote_account_info, total_active_stake) = get_vote_account_info(&rpc_client, last_epoch)?;
 
     let self_stake_by_vote_account =
         get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
@@ -1404,6 +1404,7 @@ fn classify(
 
         Some(validator_classifications)
     };
+    notes.push(format!("Active stake: {}", Sol(total_active_stake)));
 
     Ok(EpochClassificationV1 {
         data_center_info: data_centers.info,

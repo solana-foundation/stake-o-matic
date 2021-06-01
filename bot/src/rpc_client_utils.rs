@@ -218,7 +218,7 @@ pub struct VoteAccountInfo {
 pub fn get_vote_account_info(
     rpc_client: &RpcClient,
     epoch: Epoch,
-) -> Result<Vec<VoteAccountInfo>, Box<dyn error::Error>> {
+) -> Result<(Vec<VoteAccountInfo>, u64), Box<dyn error::Error>> {
     let RpcVoteAccountStatus {
         current,
         delinquent,
@@ -226,7 +226,10 @@ pub fn get_vote_account_info(
 
     let mut latest_vote_account_info = HashMap::<String, _>::new();
 
+    let mut total_active_stake = 0;
     for vote_account_info in current.into_iter().chain(delinquent.into_iter()) {
+        total_active_stake += vote_account_info.activated_stake;
+
         let entry = latest_vote_account_info
             .entry(vote_account_info.node_pubkey.clone())
             .or_insert_with(|| vote_account_info.clone());
@@ -238,35 +241,38 @@ pub fn get_vote_account_info(
         }
     }
 
-    Ok(latest_vote_account_info
-        .values()
-        .map(
-            |RpcVoteAccountInfo {
-                 commission,
-                 node_pubkey,
-                 vote_pubkey,
-                 epoch_credits,
-                 ..
-             }| {
-                let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
-                    epoch_credits.iter().find(|ec| ec.0 == epoch)
-                {
-                    credits.saturating_sub(*prev_credits)
-                } else {
-                    0
-                };
-                let identity = Pubkey::from_str(&node_pubkey).unwrap();
-                let vote_address = Pubkey::from_str(&vote_pubkey).unwrap();
+    Ok((
+        latest_vote_account_info
+            .values()
+            .map(
+                |RpcVoteAccountInfo {
+                     commission,
+                     node_pubkey,
+                     vote_pubkey,
+                     epoch_credits,
+                     ..
+                 }| {
+                    let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
+                        epoch_credits.iter().find(|ec| ec.0 == epoch)
+                    {
+                        credits.saturating_sub(*prev_credits)
+                    } else {
+                        0
+                    };
+                    let identity = Pubkey::from_str(&node_pubkey).unwrap();
+                    let vote_address = Pubkey::from_str(&vote_pubkey).unwrap();
 
-                VoteAccountInfo {
-                    identity,
-                    vote_address,
-                    commission: *commission,
-                    epoch_credits,
-                }
-            },
-        )
-        .collect())
+                    VoteAccountInfo {
+                        identity,
+                        vote_address,
+                        commission: *commission,
+                        epoch_credits,
+                    }
+                },
+            )
+            .collect(),
+        total_active_stake,
+    ))
 }
 
 pub fn get_all_stake(
