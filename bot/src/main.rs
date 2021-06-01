@@ -1440,10 +1440,6 @@ fn main() -> BoxResult<()> {
         Notifier::default()
     };
 
-    if !config.dry_run && notifier.is_empty() {
-        return Err("A notifier must be active with --confirm".into());
-    }
-
     let epoch = rpc_client.get_epoch_info()?.epoch;
     info!("Epoch: {:?}", epoch);
     if epoch == 0 {
