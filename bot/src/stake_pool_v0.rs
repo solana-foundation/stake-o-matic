@@ -536,12 +536,17 @@ fn create_validator_stake_accounts(
                 }
             }
         } else {
-            if reserve_stake_balance < MIN_STAKE_ACCOUNT_BALANCE {
+            let action = if reserve_stake_balance < MIN_STAKE_ACCOUNT_BALANCE {
                 // Try again next epoch
                 warn!(
                     "Insufficient funds in reserve stake account to create stake account: {} required, {} balance",
                     Sol(MIN_STAKE_ACCOUNT_BALANCE), Sol(reserve_stake_balance)
                 );
+
+                format!(
+                    "insufficient funds in reserve account to create stake account {}",
+                    stake_address
+                )
             } else {
                 // Create a stake account for the validator
                 reserve_stake_balance -= MIN_STAKE_ACCOUNT_BALANCE;
@@ -564,15 +569,8 @@ fn create_validator_stake_accounts(
                     &instructions,
                     Some(&authorized_staker.pubkey()),
                 ));
-                debug!(
-                    "Creating stake account for validator {} ({})",
-                    identity, stake_address
-                );
-            }
-            let action = format!(
-                "stake account busy due to no stake account: {}",
-                stake_address
-            );
+                format!("creating new stake account {}", stake_address)
+            };
             warn!("Busy validator {}: {}", *identity, action);
             validator_stake_actions.insert(*identity, action);
         }
