@@ -694,9 +694,17 @@ fn create_validator_stake_accounts(
                 })?;
 
             match stake_activation.state {
-                StakeActivationState::Activating | StakeActivationState::Deactivating => {
+                StakeActivationState::Activating => {
                     let action = format!(
-                        "stake account busy due to stake activation or deactivation of {}",
+                        "stake account busy due to stake activation of {}",
+                        stake_address
+                    );
+                    warn!("Busy validator {}: {}", *identity, action);
+                    validator_stake_actions.insert(*identity, action);
+                }
+                StakeActivationState::Deactivating => {
+                    let action = format!(
+                        "stake account busy due to stake deactivation of {}",
                         stake_address
                     );
                     warn!("Busy validator {}: {}", *identity, action);
