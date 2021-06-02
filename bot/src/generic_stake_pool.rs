@@ -2,7 +2,7 @@ use {
     serde::{Deserialize, Serialize},
     solana_client::rpc_client::RpcClient,
     solana_sdk::pubkey::Pubkey,
-    std::error,
+    std::{collections::HashMap, error},
 };
 
 #[derive(Debug, PartialEq, Clone, Copy, Deserialize, Serialize)]
@@ -25,11 +25,14 @@ pub struct ValidatorStake {
     pub stake_state: ValidatorStakeState,
 }
 
+pub type ValidatorStakeActions = HashMap<Pubkey, String>;
+pub type EpochStakeNotes = Vec<String>;
+
 pub trait GenericStakePool {
     fn apply(
         &mut self,
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<String>, Box<dyn error::Error>>;
+    ) -> Result<(EpochStakeNotes, ValidatorStakeActions), Box<dyn error::Error>>;
 }

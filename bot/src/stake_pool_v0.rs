@@ -13,7 +13,10 @@ use {
         transaction::Transaction,
     },
     solana_stake_program::{stake_instruction, stake_state::StakeState},
-    std::{collections::HashSet, error},
+    std::{
+        collections::{HashMap, HashSet},
+        error,
+    },
 };
 
 // Minimum amount of lamports in a stake pool account
@@ -94,8 +97,10 @@ impl GenericStakePool for StakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<Vec<String>, Box<dyn error::Error>> {
-        let mut inuse_stake_addresses = HashSet::new();
+    ) -> Result<(EpochStakeNotes, ValidatorStakeActions), Box<dyn error::Error>> {
+        let mut validator_stake_actions = HashMap::default();
+
+        let mut inuse_stake_addresses = HashSet::default();
         inuse_stake_addresses.insert(self.reserve_stake_address);
 
         let mut min_stake_node_count = 0;
@@ -135,13 +140,12 @@ impl GenericStakePool for StakePool {
         )?;
 
         info!("Merge transient stake back into either the reserve or validator stake");
-        let mut busy_validators = HashSet::new();
         merge_transient_stake_accounts(
             rpc_client,
             &self.authorized_staker,
             desired_validator_stake,
             self.reserve_stake_address,
-            &mut busy_validators,
+            &mut validator_stake_actions,
         )?;
 
         info!("Create validator stake accounts if needed");
@@ -151,7 +155,7 @@ impl GenericStakePool for StakePool {
             desired_validator_stake,
             self.reserve_stake_address,
             self.min_reserve_stake_balance,
-            &mut busy_validators,
+            &mut validator_stake_actions,
         )?;
 
         // `total_stake_amount` excludes the amount that always remains in the reserve account
@@ -218,6 +222,10 @@ impl GenericStakePool for StakePool {
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
 
+        let busy_validators = validator_stake_actions
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
         distribute_validator_stake(
             rpc_client,
             dry_run,
@@ -230,8 +238,9 @@ impl GenericStakePool for StakePool {
             reserve_stake_balance,
             self.baseline_stake_amount,
             bonus_stake_amount,
+            &mut validator_stake_actions,
         )?;
-        Ok(notes)
+        Ok((notes, validator_stake_actions))
     }
 }
 
@@ -249,7 +258,7 @@ fn get_available_stake_balance(
     })?;
     if balance < reserve_stake_balance {
         Err(format!(
-            "Stake account {} balance too low, {}. Minimum is {}",
+            "stake account {} balance too low, {}. Minimum is {}",
             stake_address,
             Sol(balance),
             Sol(reserve_stake_balance)
@@ -322,7 +331,7 @@ fn merge_transient_stake_accounts(
     authorized_staker: &Keypair,
     desired_validator_stake: &[ValidatorStake],
     reserve_stake_address: Pubkey,
-    busy_validators: &mut HashSet<Pubkey>,
+    validator_stake_actions: &mut ValidatorStakeActions,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     for ValidatorStake {
@@ -350,14 +359,21 @@ fn merge_transient_stake_accounts(
                 })?;
 
             match transient_stake_activation.state {
-                StakeActivationState::Activating | StakeActivationState::Deactivating => {
-                    warn!(
-                        "Validator {} busy due to transient stake activation/deactivation of {}: {:?}",
-                        identity,
+                StakeActivationState::Activating => {
+                    let action = format!(
+                        "stake account busy due to transient stake activation: {:?}",
                         transient_stake_address,
-                        transient_stake_activation,
                     );
-                    busy_validators.insert(*identity);
+                    warn!("Busy validator {}: {}", *identity, action);
+                    validator_stake_actions.insert(*identity, action);
+                }
+                StakeActivationState::Deactivating => {
+                    let action = format!(
+                        "stake account busy due to transient stake deactivation: {}",
+                        transient_stake_address,
+                    );
+                    warn!("Busy validator {}: {}", *identity, action);
+                    validator_stake_actions.insert(*identity, action);
                 }
                 StakeActivationState::Active => {
                     let stake_account = rpc_client
@@ -379,11 +395,12 @@ fn merge_transient_stake_accounts(
                         ));
                         debug!("Merging active transient stake for {}", identity);
                     } else {
-                        warn!(
-                            "Unable to merge active transient stake for {} due to credits observed mismatch",
-                            identity
+                        let action = format!(
+                            "stake account busy due to credits observed mismatch with transient stake account {}",
+                            transient_stake_address
                         );
-                        busy_validators.insert(*identity);
+                        warn!("Busy validator {}: {}", *identity, action);
+                        validator_stake_actions.insert(*identity, action);
                     }
                 }
                 StakeActivationState::Inactive => {
@@ -450,7 +467,7 @@ fn create_validator_stake_accounts(
     desired_validator_stake: &[ValidatorStake],
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
-    busy_validators: &mut HashSet<Pubkey>,
+    validator_stake_actions: &mut ValidatorStakeActions,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut reserve_stake_balance =
         get_available_stake_balance(rpc_client, reserve_stake_address, min_reserve_stake_balance)
@@ -490,18 +507,19 @@ fn create_validator_stake_accounts(
 
             match stake_activation.state {
                 StakeActivationState::Activating | StakeActivationState::Deactivating => {
-                    warn!(
-                        "Validator {} busy due to stake activation or deactivation of {}: {:?}",
-                        identity, stake_address, stake_activation
+                    let action = format!(
+                        "stake account busy due to stake activation or deactivation of {}",
+                        stake_address
                     );
-                    busy_validators.insert(*identity);
+                    warn!("Busy validator {}: {}", *identity, action);
+                    validator_stake_actions.insert(*identity, action);
                 }
                 StakeActivationState::Active => {}
                 StakeActivationState::Inactive => {
-                    warn!(
-                        "Validator {} busy due to inactive stake {}: {:?}",
-                        identity, stake_address, stake_activation
-                    );
+                    let action =
+                        format!("stake account busy due to inactive stake {}", stake_address);
+                    warn!("Busy validator {}: {}", *identity, action);
+
                     transactions.push(Transaction::new_with_payer(
                         &[stake_instruction::delegate_stake(
                             &stake_address,
@@ -514,7 +532,7 @@ fn create_validator_stake_accounts(
                         "Activating stake account for validator {} ({})",
                         identity, stake_address
                     );
-                    busy_validators.insert(*identity);
+                    validator_stake_actions.insert(*identity, action);
                 }
             }
         } else {
@@ -551,8 +569,12 @@ fn create_validator_stake_accounts(
                     identity, stake_address
                 );
             }
-            warn!("Validator {} busy due to no stake account", identity);
-            busy_validators.insert(*identity);
+            let action = format!(
+                "stake account busy due to no stake account: {}",
+                stake_address
+            );
+            warn!("Busy validator {}: {}", *identity, action);
+            validator_stake_actions.insert(*identity, action);
         }
     }
 
@@ -576,6 +598,7 @@ fn distribute_validator_stake<V>(
     mut reserve_stake_balance: u64,
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
+    validator_stake_actions: &mut ValidatorStakeActions,
 ) -> Result<(), Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
@@ -718,14 +741,14 @@ where
             "no change".to_string()
         };
 
-        debug!(
-            "{} ({:?}) target: {}, current: {}, {}",
-            identity,
-            stake_state,
+        let action = format!(
+            "target stake amount: {}, current stake amount: {} - {}",
             Sol(desired_balance),
             Sol(balance),
             op_msg,
         );
+        info!("{} ({:?}): {}", identity, stake_state, action);
+        validator_stake_actions.insert(identity, action);
     }
     info!(
         "Reserve stake available balance after updates: {}",

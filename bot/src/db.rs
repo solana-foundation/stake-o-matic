@@ -22,6 +22,9 @@ pub struct ValidatorClassification {
     pub stake_state: ValidatorStakeState,
     pub stake_state_reason: String,
 
+    // Summary of the action was taken this epoch to advance the validator's stake
+    pub stake_action: Option<String>,
+
     // History of stake states, newest first, including (`stake_state`, `stake_state_reason`) at index 0
     pub stake_states: Option<Vec<(ValidatorStakeState, String)>>,
 

@@ -1389,6 +1389,7 @@ fn classify(
                     vote_address,
                     stake_state,
                     stake_states: Some(stake_states),
+                    stake_action: None,
                     stake_state_reason: reason,
                     notes: validator_notes,
                     data_center_residency: Some(data_center_residency),
@@ -1505,7 +1506,8 @@ fn main() -> BoxResult<()> {
 
     let mut notifications = epoch_classification.notes.clone();
 
-    if let Some(ref validator_classifications) = epoch_classification.validator_classifications {
+    if let Some(ref mut validator_classifications) = epoch_classification.validator_classifications
+    {
         let previous_validator_classifications = previous_epoch_classification
             .validator_classifications
             .unwrap_or_default();
@@ -1544,10 +1546,16 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        let stake_pool_notes =
+        let (stake_pool_notes, validator_stake_actions) =
             stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
+
+        for (identity, stake_action) in validator_stake_actions {
+            validator_classifications
+                .entry(identity)
+                .and_modify(|e| e.stake_action = Some(stake_action));
+        }
 
         validator_notes.sort();
         notifications.extend(validator_notes);
@@ -1593,7 +1601,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         list.push((epoch, epoch_classification.into_current()));
     }
 
-    let mut validators_markdown: HashMap<_, Vec<_>> = HashMap::new();
+    let mut validators_markdown: HashMap<_, Vec<_>> = HashMap::default();
 
     let mut cluster_markdown = vec![];
 
@@ -1614,8 +1622,6 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     "### [[{1} Epoch {0}|{1}#Epoch-{0}]]",
                     epoch, cluster_md
                 ));
-                validator_markdown.push(classification.stake_state_reason.clone());
-
                 let stake_state_streak = classification.stake_state_streak();
                 validator_markdown.push(format!(
                     "* Stake level: **{:?}**{}",
@@ -1626,6 +1632,14 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                         "".to_string()
                     }
                 ));
+                validator_markdown.push(format!(
+                    "* Stake reason: {}",
+                    classification.stake_state_reason
+                ));
+                if let Some(stake_action) = classification.stake_action {
+                    validator_markdown.push(format!("* Staking activity: {}", stake_action));
+                }
+
                 validator_markdown.push(format!(
                     "* Vote account address: {}",
                     classification.vote_address
@@ -1695,7 +1709,7 @@ mod test {
         .iter()
         .cloned()
         .collect();
-        let mut leader_schedule = HashMap::new();
+        let mut leader_schedule = HashMap::default();
         let l1 = Pubkey::new_unique();
         let l2 = Pubkey::new_unique();
         let l3 = Pubkey::new_unique();
