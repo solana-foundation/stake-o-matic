@@ -8,15 +8,15 @@ license = "Apache-2.0"
 [dependencies]
 borsh = "0.8"
 borsh-derive = "0.8.1"
-solana-program = "1.6.8"
+solana-program = "1.7.0"
 
 [features]
 test-bpf = []
 
 [dev-dependencies]
 assert_matches = "1.4.0"
-solana-program-test = "1.6.8"
-solana-sdk = "1.6.8"
+solana-program-test = "1.7.0"
+solana-sdk = "1.7.0"
 
 [lib]
 crate-type = ["cdylib", "lib"]

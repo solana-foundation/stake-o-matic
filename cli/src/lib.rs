@@ -24,6 +24,7 @@ pub fn get_participants_with_state(
             filters: Some(vec![RpcFilterType::DataSize(
                 Participant::get_packed_len() as u64
             )]),
+            ..RpcProgramAccountsConfig::default()
         },
     )?;
 
