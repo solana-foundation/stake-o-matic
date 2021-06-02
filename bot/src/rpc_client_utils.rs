@@ -298,6 +298,7 @@ pub fn get_all_stake(
                 commitment: Some(rpc_client.commitment()),
                 ..RpcAccountInfoConfig::default()
             },
+            ..RpcProgramAccountsConfig::default()
         },
     )?;
 

@@ -564,13 +564,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             solana_cli_config::Config::default()
         };
 
-        let default_signer = DefaultSigner {
-            path: matches
+        let default_signer = DefaultSigner::new(
+            "keypair",
+            matches
                 .value_of(&"keypair")
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| cli_config.keypair_path.clone()),
-            arg_name: "keypair".to_string(),
-        };
+        );
 
         Config {
             json_rpc_url: matches.value_of("json_rpc_url").unwrap().to_string(),
