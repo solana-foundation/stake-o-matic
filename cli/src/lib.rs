@@ -1,10 +1,10 @@
 use {
-    registry_program::state::{Participant, ParticipantState},
     solana_client::{
         rpc_client::RpcClient,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
         rpc_filter::*,
     },
+    solana_foundation_delegation_program_registry::state::{Participant, ParticipantState},
     solana_sdk::{program_pack::Pack, pubkey::Pubkey},
     std::collections::HashMap,
 };
@@ -14,7 +14,7 @@ pub fn get_participants_with_state(
     state: Option<ParticipantState>,
 ) -> Result<HashMap<Pubkey, Participant>, Box<dyn std::error::Error>> {
     let accounts = rpc_client.get_program_accounts_with_config(
-        &registry_program::id(),
+        &solana_foundation_delegation_program_registry::id(),
         RpcProgramAccountsConfig {
             account_config: RpcAccountInfoConfig {
                 encoding: Some(solana_account_decoder::UiAccountEncoding::Base64Zstd),

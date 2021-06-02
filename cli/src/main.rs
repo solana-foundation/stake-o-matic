@@ -3,14 +3,14 @@ use {
         crate_description, crate_name, crate_version, value_t_or_exit, App, AppSettings, Arg,
         SubCommand,
     },
-    registry_cli::{get_participants, get_participants_with_state},
-    registry_program::state::{Participant, ParticipantState},
     solana_clap_utils::{
         input_parsers::{pubkey_of, signer_of},
         input_validators::{is_url, is_valid_pubkey, is_valid_signer},
         keypair::DefaultSigner,
     },
     solana_client::rpc_client::RpcClient,
+    solana_foundation_delegation_program_cli::{get_participants, get_participants_with_state},
+    solana_foundation_delegation_program_registry::state::{Participant, ParticipantState},
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_sdk::{
         commitment_config::CommitmentConfig,
@@ -168,9 +168,9 @@ fn process_apply(
                 &participant.pubkey(),
                 rent,
                 Participant::get_packed_len() as u64,
-                &registry_program::id(),
+                &solana_foundation_delegation_program_registry::id(),
             ),
-            registry_program::instruction::apply(
+            solana_foundation_delegation_program_registry::instruction::apply(
                 participant.pubkey(),
                 mainnet_identity.pubkey(),
                 testnet_identity.pubkey(),
@@ -213,11 +213,13 @@ fn process_withdraw(
     }
 
     let message = Message::new(
-        &[registry_program::instruction::withdraw(
-            participant_address,
-            identity.pubkey(),
-            config.default_signer.pubkey(),
-        )],
+        &[
+            solana_foundation_delegation_program_registry::instruction::withdraw(
+                participant_address,
+                identity.pubkey(),
+                config.default_signer.pubkey(),
+            ),
+        ],
         Some(&config.default_signer.pubkey()),
     );
 
@@ -263,10 +265,12 @@ fn process_admin_approve(
     println!("Approving...");
 
     let message = Message::new(
-        &[registry_program::instruction::approve(
-            participant_address,
-            admin_signer.pubkey(),
-        )],
+        &[
+            solana_foundation_delegation_program_registry::instruction::approve(
+                participant_address,
+                admin_signer.pubkey(),
+            ),
+        ],
         Some(&config.default_signer.pubkey()),
     );
 
@@ -293,10 +297,12 @@ fn process_admin_reject(
     println!("Rejecting...");
 
     let message = Message::new(
-        &[registry_program::instruction::reject(
-            participant_address,
-            admin_signer.pubkey(),
-        )],
+        &[
+            solana_foundation_delegation_program_registry::instruction::reject(
+                participant_address,
+                admin_signer.pubkey(),
+            ),
+        ],
         Some(&config.default_signer.pubkey()),
     );
 
@@ -336,9 +342,9 @@ fn process_admin_import(
                 &participant.pubkey(),
                 rent,
                 Participant::get_packed_len() as u64,
-                &registry_program::id(),
+                &solana_foundation_delegation_program_registry::id(),
             ),
-            registry_program::instruction::rewrite(
+            solana_foundation_delegation_program_registry::instruction::rewrite(
                 participant.pubkey(),
                 admin_signer.pubkey(),
                 Participant {
@@ -653,7 +659,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => unreachable!(),
             };
 
-            if admin_signer.pubkey() != registry_program::admin::id() {
+            if admin_signer.pubkey() != solana_foundation_delegation_program_registry::admin::id() {
                 eprintln!("Invalid admin authority");
                 exit(1);
             }

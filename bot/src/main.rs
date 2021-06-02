@@ -5,8 +5,6 @@ use {
         ArgMatches, SubCommand,
     },
     log::*,
-    registry_cli::get_participants_with_state,
-    registry_program::state::{Participant, ParticipantState},
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
@@ -14,6 +12,8 @@ use {
         },
     },
     solana_client::rpc_client::RpcClient,
+    solana_foundation_delegation_program_cli::get_participants_with_state,
+    solana_foundation_delegation_program_registry::state::{Participant, ParticipantState},
     solana_notifier::Notifier,
     solana_sdk::{
         account::from_account,

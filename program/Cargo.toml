@@ -1,15 +1,14 @@
 [package]
-name = "registry-program"
-version = "0.1.0"
+name = "solana-foundation-delegation-program-registry"
+version = "1.0.0"
 edition = "2018"
 authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 license = "Apache-2.0"
-publish = false
 
 [dependencies]
-solana-program = "1.6.8"
 borsh = "0.8"
 borsh-derive = "0.8.1"
+solana-program = "1.6.8"
 
 [features]
 test-bpf = []
