@@ -39,14 +39,14 @@ jobs:
 
     - run: |
         mv target/release/solana-stake-o-matic solana-stake-o-matic-${{ matrix.target }}
-        mv target/release/registry-cli registry-cli-${{ matrix.target }}
+        mv target/release/solana-foundation-delegation-program solana-foundation-delegation-program-${{ matrix.target }}
 
     - uses: actions/upload-artifact@v2
       with:
         name: ${{ matrix.target }}
         path: |
           solana-stake-o-matic-${{ matrix.target }}
-          registry-cli-${{ matrix.target }}
+          solana-foundation-delegation-program-${{ matrix.target }}
         if-no-files-found: error
 
   publish_release:
@@ -62,8 +62,8 @@ jobs:
         files: |
           x86_64-apple-darwin/solana-stake-o-matic-x86_64-apple-darwin
           x86_64-unknown-linux-gnu/solana-stake-o-matic-x86_64-unknown-linux-gnu
-          x86_64-apple-darwin/registry-cli-x86_64-apple-darwin
-          x86_64-unknown-linux-gnu/registry-cli-x86_64-unknown-linux-gnu
+          x86_64-apple-darwin/solana-foundation-delegation-program-x86_64-apple-darwin
+          x86_64-unknown-linux-gnu/solana-foundation-delegation-program-x86_64-unknown-linux-gnu
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

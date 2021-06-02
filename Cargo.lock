@@ -3211,34 +3211,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 
 [[package]]
-name = "registry-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "registry-program",
- "solana-account-decoder",
- "solana-clap-utils",
- "solana-cli-config",
- "solana-client",
- "solana-logger",
- "solana-remote-wallet",
- "solana-sdk",
- "tokio 1.4.0",
-]
-
-[[package]]
-name = "registry-program"
-version = "0.1.0"
-dependencies = [
- "assert_matches",
- "borsh 0.8.2",
- "borsh-derive 0.8.2",
- "solana-program",
- "solana-program-test",
- "solana-sdk",
-]
-
-[[package]]
 name = "remove_dir_all"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4040,6 +4012,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-foundation-delegation-program-cli"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "solana-account-decoder",
+ "solana-clap-utils",
+ "solana-cli-config",
+ "solana-client",
+ "solana-foundation-delegation-program-registry",
+ "solana-logger",
+ "solana-remote-wallet",
+ "solana-sdk",
+ "tokio 1.4.0",
+]
+
+[[package]]
+name = "solana-foundation-delegation-program-registry"
+version = "1.0.0"
+dependencies = [
+ "assert_matches",
+ "borsh 0.8.2",
+ "borsh-derive 0.8.2",
+ "solana-program",
+ "solana-program-test",
+ "solana-sdk",
+]
+
+[[package]]
 name = "solana-frozen-abi"
 version = "1.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4460,8 +4460,6 @@ dependencies = [
  "indicatif",
  "log 0.4.14",
  "regex",
- "registry-cli",
- "registry-program",
  "reqwest",
  "semver 1.0.1",
  "serde",
@@ -4471,6 +4469,8 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-config",
  "solana-client",
+ "solana-foundation-delegation-program-cli",
+ "solana-foundation-delegation-program-registry",
  "solana-logger",
  "solana-notifier",
  "solana-sdk",

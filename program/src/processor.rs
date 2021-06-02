@@ -151,7 +151,7 @@ mod test {
         let testnet_validator_identity = Keypair::new();
 
         let (mut banks_client, payer, recent_blockhash) = ProgramTest::new(
-            "registry_program",
+            "solana_foundation_delegation_program_registry",
             program_id,
             processor!(process_instruction),
         )
