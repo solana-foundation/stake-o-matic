@@ -218,20 +218,19 @@ impl GenericStakePool for StakePool {
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
 
-        if !dry_run {
-            distribute_validator_stake(
-                rpc_client,
-                &self.authorized_staker,
-                desired_validator_stake
-                    .iter()
-                    .filter(|vs| !busy_validators.contains(&vs.identity))
-                    .cloned(),
-                self.reserve_stake_address,
-                reserve_stake_balance,
-                self.baseline_stake_amount,
-                bonus_stake_amount,
-            )?
-        }
+        distribute_validator_stake(
+            rpc_client,
+            dry_run,
+            &self.authorized_staker,
+            desired_validator_stake
+                .iter()
+                .filter(|vs| !busy_validators.contains(&vs.identity))
+                .cloned(),
+            self.reserve_stake_address,
+            reserve_stake_balance,
+            self.baseline_stake_amount,
+            bonus_stake_amount,
+        )?;
         Ok(notes)
     }
 }
@@ -567,8 +566,10 @@ fn create_validator_stake_accounts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn distribute_validator_stake<V>(
     rpc_client: &RpcClient,
+    dry_run: bool,
     authorized_staker: &Keypair,
     desired_validator_stake: V,
     reserve_stake_address: Pubkey,
@@ -731,9 +732,13 @@ where
         Sol(reserve_stake_balance)
     );
 
-    let ok = send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty();
+    let ok = if dry_run {
+        true
+    } else {
+        send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+            .failed
+            .is_empty()
+    };
 
     if !ok {
         Err("One or more transactions failed to execute".into())

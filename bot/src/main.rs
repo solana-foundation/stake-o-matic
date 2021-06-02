@@ -1010,7 +1010,7 @@ fn classify(
 
     let data_centers = match data_center_info::get(&config.cluster.to_string()) {
         Ok(data_centers) => {
-            // Sanity check the infrastucture stake percent data.  More than 35% indicates there's
+            // Sanity check the infrastructure stake percent data.  More than 35% indicates there's
             // probably a bug in the data source. Abort if so.
             let max_infrastucture_stake_percent = data_centers
                 .info

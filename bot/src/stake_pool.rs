@@ -286,22 +286,21 @@ impl GenericStakePool for StakePoolOMatic {
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
         ];
-        if !dry_run {
-            distribute_validator_stake(
-                rpc_client,
-                &self.authorized_staker,
-                &self.stake_pool_address,
-                &self.stake_pool,
-                &self.validator_list,
-                desired_validator_stake
-                    .iter()
-                    .filter(|vs| !busy_validators.contains(&vs.identity))
-                    .cloned(),
-                reserve_stake_balance,
-                self.baseline_stake_amount,
-                bonus_stake_amount,
-            )?;
-        }
+        distribute_validator_stake(
+            rpc_client,
+            dry_run,
+            &self.authorized_staker,
+            &self.stake_pool_address,
+            &self.stake_pool,
+            &self.validator_list,
+            desired_validator_stake
+                .iter()
+                .filter(|vs| !busy_validators.contains(&vs.identity))
+                .cloned(),
+            reserve_stake_balance,
+            self.baseline_stake_amount,
+            bonus_stake_amount,
+        )?;
         Ok(notes)
     }
 }
@@ -756,6 +755,7 @@ fn create_validator_stake_accounts(
 #[allow(clippy::too_many_arguments)]
 fn distribute_validator_stake<V>(
     rpc_client: &RpcClient,
+    dry_run: bool,
     authorized_staker: &Keypair,
     stake_pool_address: &Pubkey,
     stake_pool: &StakePool,
@@ -895,9 +895,13 @@ where
         Sol(reserve_stake_balance)
     );
 
-    let ok = send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty();
+    let ok = if dry_run {
+        true
+    } else {
+        send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+            .failed
+            .is_empty()
+    };
 
     if !ok {
         error!("One or more transactions failed to execute")
