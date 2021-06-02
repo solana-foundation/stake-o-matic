@@ -371,6 +371,8 @@ fn process_admin_import(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let default_json_rpc_url = "https://api.mainnet-beta.solana.com";
+
     let app_matches = App::new(crate_name!())
         .about(crate_description!())
         .version(crate_version!())
@@ -415,7 +417,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .takes_value(true)
                 .global(true)
                 .validator(is_url)
-                .help("JSON RPC URL for the cluster [default: value from configuration file]"),
+                .default_value(default_json_rpc_url)
+                .help("JSON RPC URL for the cluster"),
         )
         .subcommand(
             SubCommand::with_name("apply")
@@ -570,10 +573,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         Config {
-            json_rpc_url: matches
-                .value_of("json_rpc_url")
-                .unwrap_or(&cli_config.json_rpc_url)
-                .to_string(),
+            json_rpc_url: matches.value_of("json_rpc_url").unwrap().to_string(),
             default_signer: default_signer
                 .signer_from_path(&matches, &mut wallet_manager)
                 .unwrap_or_else(|err| {
