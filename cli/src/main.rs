@@ -5,7 +5,9 @@ use {
     },
     solana_clap_utils::{
         input_parsers::{pubkey_of, signer_of},
-        input_validators::{is_url, is_valid_pubkey, is_valid_signer},
+        input_validators::{
+            is_url_or_moniker, is_valid_pubkey, is_valid_signer, normalize_to_url_if_moniker,
+        },
         keypair::DefaultSigner,
     },
     solana_client::rpc_client::RpcClient,
@@ -412,11 +414,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .arg(
             Arg::with_name("json_rpc_url")
+                .short("u")
                 .long("url")
                 .value_name("URL")
                 .takes_value(true)
                 .global(true)
-                .validator(is_url)
+                .validator(is_url_or_moniker)
                 .default_value(default_json_rpc_url)
                 .help("JSON RPC URL for the cluster"),
         )
@@ -573,7 +576,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         Config {
-            json_rpc_url: matches.value_of("json_rpc_url").unwrap().to_string(),
+            json_rpc_url: normalize_to_url_if_moniker(value_t_or_exit!(
+                matches,
+                "json_rpc_url",
+                String
+            )),
             default_signer: default_signer
                 .signer_from_path(&matches, &mut wallet_manager)
                 .unwrap_or_else(|err| {
