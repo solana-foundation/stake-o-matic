@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2018"
 authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 license = "Apache-2.0"
+description = "Solana Foundation Delegation Program Command-line Utility"
+repository = "https://github.com/solana-labs/stake-o-matic"
+readme = "README.md"
 
 [[bin]]
 name = "solana-foundation-delegation-program"
