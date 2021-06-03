@@ -206,7 +206,7 @@ fn process_withdraw(
 
     if !confirm {
         println!(
-            "\nWarning: this will delete this registration. \
+            "\nWarning: Your registration information will be deleted. \
                Add the --confirm flag to continue"
         );
         return Ok(());
