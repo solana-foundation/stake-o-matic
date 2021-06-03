@@ -6,7 +6,7 @@ This utility manages Solana Foundation Delegation Program registrations.
 Install Rust from https://rustup.rs/, then run
 ```bash
 $ cargo install solana-foundation-delegation-program-cli
-$ solana-foundation-delegation-program-cli --version
+$ solana-foundation-delegation-program --version
 ```
 
 ## Usage
