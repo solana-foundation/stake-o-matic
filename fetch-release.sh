@@ -20,7 +20,7 @@ Darwin)
   ;;
 esac
 
-for BIN in solana-stake-o-matic registry-cli; do
+for BIN in solana-stake-o-matic solana-foundation-delegation-program; do
   BIN_TARGET=$BIN-$TARGET
 
   if [[ ( -z $1 && -n $DEFAULT_TO_MASTER ) || $1 = master ]]; then
