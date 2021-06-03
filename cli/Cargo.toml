@@ -1,6 +1,6 @@
 [package]
 name = "solana-foundation-delegation-program-cli"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2018"
 authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 license = "Apache-2.0"
