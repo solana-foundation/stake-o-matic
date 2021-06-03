@@ -158,6 +158,7 @@ impl GenericStakePool for StakePoolOMatic {
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<(EpochStakeNotes, ValidatorStakeActions), Box<dyn error::Error>> {
         let mut validator_stake_actions = HashMap::default();
+        let mut no_stake_node_count = 0;
         let mut bonus_stake_node_count = 0;
         let mut baseline_stake_node_count = 0;
 
@@ -175,7 +176,7 @@ impl GenericStakePool for StakePoolOMatic {
             match stake_state {
                 ValidatorStakeState::Bonus => bonus_stake_node_count += 1,
                 ValidatorStakeState::Baseline => baseline_stake_node_count += 1,
-                ValidatorStakeState::None => (),
+                ValidatorStakeState::None => no_stake_node_count += 1,
             }
         }
 
@@ -288,6 +289,10 @@ impl GenericStakePool for StakePoolOMatic {
             ),
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
+            format!(
+                "Validators by stake level: None={}, Baseline={}, Bonus={}",
+                no_stake_node_count, baseline_stake_node_count, bonus_stake_node_count
+            ),
         ];
 
         let busy_validators = validator_stake_actions

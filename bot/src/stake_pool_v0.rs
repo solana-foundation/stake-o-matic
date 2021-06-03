@@ -220,6 +220,10 @@ impl GenericStakePool for StakePool {
             ),
             format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
             format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
+            format!(
+                "Validators by stake level: None={}, Baseline={}, Bonus={}",
+                min_stake_node_count, baseline_stake_node_count, bonus_stake_node_count
+            ),
         ];
 
         let busy_validators = validator_stake_actions
