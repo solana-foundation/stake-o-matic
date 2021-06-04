@@ -1601,19 +1601,61 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         list.push((epoch, epoch_classification.into_current()));
     }
 
+    let validator_summary_csv = {
+        let mut validator_summary_csv = vec![];
+
+        let mut csv = vec!["Identity".to_string()];
+        let mut validator_stakes: HashMap<Pubkey, HashMap<Epoch, ValidatorStakeState>> =
+            HashMap::default();
+        let mut validator_epochs = vec![];
+        for (epoch, epoch_classification) in list.iter() {
+            csv.push(format!("Epoch {}", epoch));
+            validator_epochs.push(epoch);
+            if let Some(ref validator_classifications) =
+                epoch_classification.validator_classifications
+            {
+                for (identity, classification) in validator_classifications {
+                    validator_stakes
+                        .entry(*identity)
+                        .or_default()
+                        .insert(*epoch, classification.stake_state);
+                }
+            }
+        }
+        validator_summary_csv.push(csv.join(","));
+
+        let mut validator_stakes = validator_stakes.into_iter().collect::<Vec<_>>();
+        validator_stakes.sort_by(|a, b| a.0.cmp(&b.0));
+        for (identity, epoch_stakes) in validator_stakes {
+            let mut csv = vec![identity.to_string()];
+            for epoch in &validator_epochs {
+                if let Some(stake_state) = epoch_stakes.get(epoch) {
+                    csv.push(format!("{:?}", stake_state));
+                } else {
+                    csv.push("-".to_string());
+                }
+            }
+            validator_summary_csv.push(csv.join(","));
+        }
+        validator_summary_csv.join("\n")
+    };
+    let filename = config.cluster_db_path().join("validator-summary.csv");
+    info!("Writing {}", filename.display());
+    let mut file = File::create(filename)?;
+    file.write_all(&validator_summary_csv.into_bytes())?;
+
     let mut validators_markdown: HashMap<_, Vec<_>> = HashMap::default();
-
     let mut cluster_markdown = vec![];
-
-    for (epoch, epoch_classification) in list {
+    for (epoch, epoch_classification) in list.iter() {
         cluster_markdown.push(format!("### Epoch {}", epoch));
-        for note in epoch_classification.notes {
+        for note in &epoch_classification.notes {
             cluster_markdown.push(format!("* {}", note));
         }
 
-        if let Some(validator_classifications) = epoch_classification.validator_classifications {
+        if let Some(ref validator_classifications) = epoch_classification.validator_classifications
+        {
             let mut validator_classifications =
-                validator_classifications.into_iter().collect::<Vec<_>>();
+                validator_classifications.iter().collect::<Vec<_>>();
             validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
             for (identity, classification) in validator_classifications {
                 let validator_markdown = validators_markdown.entry(identity).or_default();
@@ -1636,7 +1678,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     "* Stake reason: {}",
                     classification.stake_state_reason
                 ));
-                if let Some(stake_action) = classification.stake_action {
+                if let Some(ref stake_action) = classification.stake_action {
                     validator_markdown.push(format!("* Staking activity: {}", stake_action));
                 }
 
@@ -1645,8 +1687,8 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     classification.vote_address
                 ));
                 if let (Some(current_data_center), Some(data_center_residency)) = (
-                    classification.current_data_center,
-                    classification.data_center_residency,
+                    classification.current_data_center.as_ref(),
+                    classification.data_center_residency.as_ref(),
                 ) {
                     validator_markdown.push(format!("* Data Center: {}", current_data_center));
 
@@ -1666,7 +1708,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     }
                 }
 
-                for note in classification.notes {
+                for note in &classification.notes {
                     validator_markdown.push(format!("* {}", note));
                 }
             }
