@@ -242,6 +242,9 @@ struct Config {
     /// Minimum amount of lamports a validator must stake on itself to be eligible for a delegation
     min_self_stake_lamports: u64,
 
+    /// Validators with more than this amount of active stake are not eligible fora delegation
+    max_active_stake_lamports: u64,
+
     /// If true, enforce the `min_self_stake_lamports` limit. If false, only warn on insufficient stake
     enforce_min_self_stake: bool,
 
@@ -280,6 +283,7 @@ impl Config {
             bad_cluster_average_skip_rate: 50,
             min_epoch_credit_percentage_of_average: 50,
             min_self_stake_lamports: 0,
+            max_active_stake_lamports: u64::MAX,
             enforce_min_self_stake: false,
             enforce_testnet_participation: false,
             min_testnet_participation: None,
@@ -489,6 +493,16 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 .help("Minimum amount of SOL a validator must stake on itself to be eligible for a delegation"),
         )
         .arg(
+            Arg::with_name("max_active_stake")
+                .long("max-active-stake")
+                .value_name("AMOUNT")
+                .takes_value(true)
+                .validator(is_amount)
+                .default_value("3500000")
+                .required(true)
+                .help("Maximum amount of stake a validator may have to be eligible for a delegation"),
+        )
+        .arg(
             Arg::with_name("enforce_min_self_stake")
                 .long("enforce-min-self-stake")
                 .takes_value(false)
@@ -602,6 +616,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
 
     let enforce_min_self_stake = matches.is_present("enforce_min_self_stake");
     let min_self_stake_lamports = lamports_of_sol(&matches, "min_self_stake").unwrap();
+    let max_active_stake_lamports = lamports_of_sol(&matches, "max_active_stake").unwrap();
 
     let enforce_testnet_participation = matches.is_present("enforce_testnet_participation");
     let min_testnet_participation = values_t!(matches, "min_testnet_participation", usize)
@@ -659,6 +674,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         bad_cluster_average_skip_rate,
         min_epoch_credit_percentage_of_average,
         min_self_stake_lamports,
+        max_active_stake_lamports,
         enforce_min_self_stake,
         enforce_testnet_participation,
         min_testnet_participation,
@@ -1142,6 +1158,10 @@ fn classify(
             "Minimum required self stake: {}",
             Sol(config.min_self_stake_lamports)
         ),
+        format!(
+            "Maximum active stake allowed: {}",
+            Sol(config.max_active_stake_lamports)
+        ),
     ];
     if let Some(max_infrastructure_concentration) = config.max_infrastructure_concentration {
         notes.push(format!(
@@ -1191,6 +1211,7 @@ fn classify(
             identity,
             vote_address,
             commission,
+            active_stake,
             epoch_credits,
         } in vote_account_info
         {
@@ -1279,6 +1300,11 @@ fn classify(
                 (ValidatorStakeState::None, reason)
             } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
                 (ValidatorStakeState::None, insufficent_self_stake_msg)
+            } else if active_stake > config.max_active_stake_lamports {
+                (
+                    ValidatorStakeState::None,
+                    format!("active stake is too high: {}", Sol(active_stake)),
+                )
             } else if commission > config.max_commission {
                 (
                     ValidatorStakeState::None,

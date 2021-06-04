@@ -210,6 +210,7 @@ pub struct VoteAccountInfo {
     pub identity: Pubkey,
     pub vote_address: Pubkey,
     pub commission: u8,
+    pub active_stake: u64,
 
     /// Credits earned in the epoch
     pub epoch_credits: u64,
@@ -250,6 +251,7 @@ pub fn get_vote_account_info(
                      node_pubkey,
                      vote_pubkey,
                      epoch_credits,
+                     activated_stake,
                      ..
                  }| {
                     let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
@@ -265,6 +267,7 @@ pub fn get_vote_account_info(
                     VoteAccountInfo {
                         identity,
                         vote_address,
+                        active_stake: *activated_stake,
                         commission: *commission,
                         epoch_credits,
                     }
