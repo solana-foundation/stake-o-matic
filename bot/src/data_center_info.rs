@@ -85,7 +85,8 @@ pub fn get(cluster: &str) -> Result<DataCenters, Box<dyn error::Error>> {
         _ => return Err(format!("Unsupported cluster: {}", cluster).into()),
     };
 
-    let token = std::env::var("VALIDATORS_APP_TOKEN")?;
+    let token = std::env::var("VALIDATORS_APP_TOKEN")
+        .map_err(|err| format!("VALIDATORS_APP_TOKEN: {}", err))?;
     let client = validators_app::Client::new(token, cluster_json);
     let validators = client.validators(None, None)?;
     let mut data_center_map = HashMap::new();

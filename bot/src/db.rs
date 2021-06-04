@@ -40,6 +40,9 @@ pub struct ValidatorClassification {
     // The identity of the staking program participant, used to establish a link between
     // testnet and mainnet validator classifications
     pub participant: Option<Pubkey>,
+
+    // The validator was not funded this epoch and should be prioritized next epoch
+    pub prioritize_funding_in_next_epoch: Option<bool>,
 }
 
 impl ValidatorClassification {
