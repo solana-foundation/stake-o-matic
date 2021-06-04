@@ -15,7 +15,7 @@ $ solana-foundation-delegation-program --version
 
 To register you will need:
 1. Two validator identity keypairs; one for the Solana Testnet and another for the Solana Mainnet
-2. Approximately ◎0.002 to submit the registration
+2. Approximately ◎0.002 on your testnet validator account (on mainnet network) to submit the registration
 
 
 To begin, create your validator identity keypairs by running:
