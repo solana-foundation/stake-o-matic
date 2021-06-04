@@ -97,7 +97,8 @@ impl GenericStakePool for StakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(EpochStakeNotes, ValidatorStakeActions), Box<dyn error::Error>> {
+    ) -> Result<(EpochStakeNotes, ValidatorStakeActions, UnfundedValidators), Box<dyn error::Error>>
+    {
         let mut validator_stake_actions = HashMap::default();
 
         let mut inuse_stake_addresses = HashSet::default();
@@ -230,6 +231,7 @@ impl GenericStakePool for StakePool {
             .keys()
             .cloned()
             .collect::<HashSet<_>>();
+        let mut unfunded_validators = HashSet::default();
         distribute_validator_stake(
             rpc_client,
             dry_run,
@@ -243,8 +245,9 @@ impl GenericStakePool for StakePool {
             self.baseline_stake_amount,
             bonus_stake_amount,
             &mut validator_stake_actions,
+            &mut unfunded_validators,
         )?;
-        Ok((notes, validator_stake_actions))
+        Ok((notes, validator_stake_actions, unfunded_validators))
     }
 }
 
@@ -609,12 +612,15 @@ fn distribute_validator_stake<V>(
     baseline_stake_amount: u64,
     bonus_stake_amount: u64,
     validator_stake_actions: &mut ValidatorStakeActions,
+    unfunded_validators: &mut HashSet<Pubkey>,
 ) -> Result<(), Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
 {
     // Prioritize funding smaller stake accounts to maximize the number of accounts that will be
-    // funded with the available reserve stake.
+    // funded with the available reserve stake.  But validators with the priority flag jump the
+    // line, since they were missed previous epoch
+    let mut priority_stake = vec![];
     let mut min_stake = vec![];
     let mut baseline_stake = vec![];
     let mut bonus_stake = vec![];
@@ -641,10 +647,14 @@ where
                 )
             })?;
 
-        let list = match validator_stake.stake_state {
-            ValidatorStakeState::None => &mut min_stake,
-            ValidatorStakeState::Baseline => &mut baseline_stake,
-            ValidatorStakeState::Bonus => &mut bonus_stake,
+        let list = if validator_stake.priority {
+            &mut priority_stake
+        } else {
+            match validator_stake.stake_state {
+                ValidatorStakeState::None => &mut min_stake,
+                ValidatorStakeState::Baseline => &mut baseline_stake,
+                ValidatorStakeState::Bonus => &mut bonus_stake,
+            }
         };
         list.push((
             balance,
@@ -655,6 +665,7 @@ where
     }
 
     // Sort from lowest to highest balance
+    priority_stake.sort_by_key(|k| k.0);
     min_stake.sort_by_key(|k| k.0);
     baseline_stake.sort_by_key(|k| k.0);
     bonus_stake.sort_by_key(|k| k.0);
@@ -668,9 +679,11 @@ where
             identity,
             stake_state,
             vote_address,
+            priority,
         },
-    ) in min_stake
+    ) in priority_stake
         .into_iter()
+        .chain(min_stake)
         .chain(baseline_stake)
         .chain(bonus_stake)
     {
@@ -722,6 +735,10 @@ where
                 }
 
                 if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
+                    if priority {
+                        warn!("Failed to fund a priority node");
+                    }
+                    unfunded_validators.insert(identity);
                     "reserve depleted".to_string()
                 } else {
                     reserve_stake_balance -= amount_to_add;
@@ -757,7 +774,10 @@ where
             Sol(balance),
             op_msg,
         );
-        info!("{} ({:?}): {}", identity, stake_state, action);
+        info!(
+            "{} ({:?},priority={}) | {}",
+            identity, stake_state, priority, action
+        );
         validator_stake_actions.insert(identity, action);
     }
     info!(
@@ -824,6 +844,7 @@ mod test {
                 identity: vap.identity,
                 vote_address: vap.vote_address,
                 stake_state,
+                priority: false,
             })
             .collect::<Vec<_>>();
 
@@ -957,6 +978,7 @@ mod test {
                         identity: vap.identity,
                         vote_address: vap.vote_address,
                         stake_state: ValidatorStakeState::None,
+                        priority: false,
                     })
                     .collect::<Vec<_>>(),
             )
@@ -1019,16 +1041,19 @@ mod test {
                 identity: validators[0].identity,
                 vote_address: validators[0].vote_address,
                 stake_state: ValidatorStakeState::None,
+                priority: false,
             },
             ValidatorStake {
                 identity: validators[1].identity,
                 vote_address: validators[1].vote_address,
                 stake_state: ValidatorStakeState::Baseline,
+                priority: false,
             },
             ValidatorStake {
                 identity: validators[2].identity,
                 vote_address: validators[2].vote_address,
                 stake_state: ValidatorStakeState::Bonus,
+                priority: false,
             },
         ];
 

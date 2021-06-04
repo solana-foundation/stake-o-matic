@@ -823,7 +823,7 @@ fn classify_poor_voters(
         / vote_account_info.len() as u64;
 
     let min_epoch_credits =
-        avg_epoch_credits * (config.min_epoch_credit_percentage_of_average as u64) / 100;
+        avg_epoch_credits * (100 - config.min_epoch_credit_percentage_of_average as u64) / 100;
 
     let poor_voters = vote_account_info
         .iter()
@@ -1421,6 +1421,7 @@ fn classify(
                     data_center_residency: Some(data_center_residency),
                     current_data_center: Some(current_data_center.clone()),
                     participant,
+                    prioritize_funding_in_next_epoch: None,
                 },
             );
         }
@@ -1568,14 +1569,25 @@ fn main() -> BoxResult<()> {
                     identity: vc.identity,
                     vote_address: vc.vote_address,
                     stake_state: vc.stake_state,
+                    priority: previous_validator_classifications
+                        .get(&vc.identity)
+                        .map(|prev_vc| prev_vc.prioritize_funding_in_next_epoch)
+                        .unwrap_or_default()
+                        .unwrap_or_default(),
                 }
             })
             .collect();
 
-        let (stake_pool_notes, validator_stake_actions) =
+        let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
             stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
+
+        for identity in unfunded_validators {
+            validator_classifications
+                .entry(identity)
+                .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
+        }
 
         for (identity, stake_action) in validator_stake_actions {
             validator_classifications
