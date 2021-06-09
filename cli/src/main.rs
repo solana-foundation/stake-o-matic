@@ -502,6 +502,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("authority")
                         .long("authority")
                         .validator(is_valid_signer)
+                        .required(true)
                         .value_name("KEYPAIR")
                         .help("Administration authority"),
                 )
