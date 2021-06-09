@@ -106,7 +106,7 @@ pub fn send_and_confirm_transactions(
         lamports_to_sol(authorized_staker_balance)
     );
 
-    let (blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let (mut blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
     info!("{} transactions to send", transactions.len());
 
     let required_fee = transactions.iter().fold(0, |fee, transaction| {
@@ -117,48 +117,54 @@ pub fn send_and_confirm_transactions(
         return Err("Authorized staker has insufficient funds".into());
     }
 
-    let mut pending_signatures = HashSet::new();
+    let mut pending_transactions = vec![];
     for mut transaction in transactions {
         transaction.sign(&[authorized_staker], blockhash);
 
-        pending_signatures.insert(transaction.signatures[0]);
         if !dry_run {
             rpc_client.send_transaction(&transaction)?;
         }
+        pending_transactions.push(transaction);
     }
 
     let mut succeeded_transactions = HashSet::new();
     let mut failed_transactions = HashSet::new();
     loop {
-        if pending_signatures.is_empty() {
+        if pending_transactions.is_empty() {
             break;
         }
 
         let blockhash_expired = rpc_client
             .get_fee_calculator_for_blockhash(&blockhash)?
             .is_none();
-        if blockhash_expired {
-            error!(
+        if blockhash_expired && !dry_run {
+            warn!(
                 "Blockhash {} expired with {} pending transactions",
                 blockhash,
-                pending_signatures.len()
+                pending_transactions.len()
             );
 
-            for signature in pending_signatures.into_iter() {
-                failed_transactions.insert(signature);
+            blockhash = rpc_client.get_recent_blockhash()?.0;
+
+            warn!(
+                "Resending pending transactions with blockhash: {}",
+                blockhash
+            );
+            for transaction in pending_transactions.iter_mut() {
+                transaction.sign(&[authorized_staker], blockhash);
+                rpc_client.send_transaction(&transaction)?;
             }
-            break;
         }
 
         let mut statuses = vec![];
-        for pending_signatures_chunk in pending_signatures
+        for pending_signatures_chunk in pending_transactions
             .iter()
-            .cloned()
+            .map(|transaction| transaction.signatures[0])
             .collect::<Vec<_>>()
             .chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
         {
             trace!(
-                "checking {} pending_signatures",
+                "checking {} pending transactions",
                 pending_signatures_chunk.len()
             );
             statuses.extend(
@@ -168,10 +174,11 @@ pub fn send_and_confirm_transactions(
                     .into_iter(),
             )
         }
-        assert_eq!(statuses.len(), pending_signatures.len());
+        assert_eq!(statuses.len(), pending_transactions.len());
 
-        let mut still_pending_signatures = HashSet::new();
-        for (signature, status) in pending_signatures.into_iter().zip(statuses.into_iter()) {
+        let mut still_pending_transactions = vec![];
+        for (transaction, status) in pending_transactions.into_iter().zip(statuses.into_iter()) {
+            let signature = transaction.signatures[0];
             trace!("{}: status={:?}", signature, status);
             let completed = if dry_run {
                 Some(true)
@@ -193,11 +200,11 @@ pub fn send_and_confirm_transactions(
                     failed_transactions.insert(signature);
                 }
             } else {
-                still_pending_signatures.insert(signature);
+                still_pending_transactions.push(transaction);
             }
         }
-        pending_signatures = still_pending_signatures;
-        sleep(Duration::from_millis(250));
+        pending_transactions = still_pending_transactions;
+        sleep(Duration::from_millis(500));
     }
 
     Ok(SendAndConfirmTransactionResult {
