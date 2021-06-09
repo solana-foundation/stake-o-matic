@@ -256,12 +256,11 @@ fn process_admin_approve(
     config: &Config,
     rpc_client: &RpcClient,
     admin_signer: Box<dyn Signer>,
-    participant_address: Pubkey,
+    identity: Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let participants = get_participants(rpc_client)?;
-    let participant = participants
-        .get(&participant_address)
-        .ok_or_else(|| format!("Participant {} does not exist", participant_address))?;
+    let (participant_address, participant) =
+        get_participant_by_identity(rpc_client, identity)?
+            .ok_or_else(|| format!("Registration not found for {}", identity))?;
 
     print_participant(&participant);
     println!("Approving...");
@@ -288,12 +287,11 @@ fn process_admin_reject(
     config: &Config,
     rpc_client: &RpcClient,
     admin_signer: Box<dyn Signer>,
-    participant_address: Pubkey,
+    identity: Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let participants = get_participants(rpc_client)?;
-    let participant = participants
-        .get(&participant_address)
-        .ok_or_else(|| format!("Participant {} does not exist", participant_address))?;
+    let (participant_address, participant) =
+        get_participant_by_identity(rpc_client, identity)?
+            .ok_or_else(|| format!("Registration not found for {}", identity))?;
 
     print_participant(&participant);
     println!("Rejecting...");
