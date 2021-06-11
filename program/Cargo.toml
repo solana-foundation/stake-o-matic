@@ -11,6 +11,7 @@ repository = "https://github.com/solana-labs/stake-o-matic"
 borsh = "0.8"
 borsh-derive = "0.8.1"
 solana-program = "1.7.0"
+serde = { version = "1.0.126", features = ["derive"] }
 
 [features]
 test-bpf = []

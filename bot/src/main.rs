@@ -40,6 +40,7 @@ use {
     },
     thiserror::Error,
 };
+use crate::export::export_to_db;
 
 mod data_center_info;
 mod db;
@@ -49,6 +50,7 @@ mod stake_pool;
 mod stake_pool_v0;
 mod validator_list;
 mod validators_app;
+mod export;
 
 type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ValidatorList = HashSet<Pubkey>;
@@ -187,7 +189,8 @@ impl std::fmt::Display for Cluster {
 }
 
 #[derive(Debug)]
-struct Config {
+pub struct Config {
+    command: String,
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
@@ -261,12 +264,16 @@ struct Config {
     ///
     /// This setting is ignored if `cluster` is not `"mainnet-beta"`
     min_testnet_participation: Option<(/*n:*/ usize, /*m:*/ usize)>,
+
+    /// Epoch to export if using the `export` command
+    export_epoch: Option<u64>,
 }
 
 impl Config {
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self {
+            command: "".to_string(),
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
@@ -289,6 +296,7 @@ impl Config {
             enforce_min_self_stake: false,
             enforce_testnet_participation: false,
             min_testnet_participation: None,
+            export_epoch: None,
         }
     }
 
@@ -317,12 +325,14 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool>>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
         .to_string();
+
     let app_version = &*app_version();
+
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(app_version)
@@ -602,8 +612,20 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .validator(is_amount)
             )
         )
+        .subcommand(
+            SubCommand::with_name("export").about("Move stake data from yml files to db")
+            .arg(
+                Arg::with_name("export_epoch")
+                    .index(1)
+                    .value_name("EPOCH")
+                    .takes_value(true)
+                    .help("The epoch to export. If not set, previous epoch is exported.")
+                    .validator(is_amount)
+            )
+        )
         .get_matches();
 
+    let command = matches.subcommand_name().unwrap().to_string();
     let dry_run = !matches.is_present("confirm");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
@@ -649,6 +671,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     };
     let require_classification = matches.is_present("require_classification");
 
+    let export_epoch: Option<u64>;
+    if command == "export" {
+        let (_, subcommand_matches) = matches.subcommand();
+        let sub_matches = subcommand_matches.unwrap();
+        export_epoch = value_t!(sub_matches, "export_epoch", u64).ok();
+    } else {
+        export_epoch = None;
+    }
+
     let confirmed_block_cache_path = matches
         .value_of("confirmed_block_cache_path")
         .map(PathBuf::from)
@@ -666,6 +697,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     .unwrap();
 
     let config = Config {
+        command,
         json_rpc_url,
         cluster,
         db_path,
@@ -688,6 +720,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         enforce_min_self_stake,
         enforce_testnet_participation,
         min_testnet_participation,
+        export_epoch,
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
@@ -699,7 +732,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         .get_health()
         .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
-    let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
+    let stake_pool: Option<Box<dyn GenericStakePool>> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
@@ -707,25 +740,28 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool_v0::new(
+            Some(Box::new(stake_pool_v0::new(
                 &rpc_client,
                 authorized_staker,
                 baseline_stake_amount,
                 reserve_stake_address,
                 min_reserve_stake_balance,
-            )?)
+            )?))
         }
         ("stake-pool", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(&matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool::new(
+            Some(Box::new(stake_pool::new(
                 &rpc_client,
                 authorized_staker,
                 pool_address,
                 baseline_stake_amount,
-            )?)
+            )?))
+        }
+        ("export", Some(_matches)) => {
+            None
         }
         _ => unreachable!(),
     };
@@ -744,9 +780,11 @@ type ClassifyResult = (
     usize,
     // too_many_poor_block_producers
     bool,
+    // PK->(blocks, slots)
+    HashMap<Pubkey, (usize, usize)>
 );
 
-fn classify_producers(
+pub fn classify_producers(
     first_slot_in_epoch: Slot,
     confirmed_blocks: HashSet<u64>,
     leader_schedule: HashMap<String, Vec<usize>>,
@@ -779,7 +817,7 @@ fn classify_producers(
         }
     }
     let cluster_average_skip_rate = 100 - total_blocks * 100 / total_slots;
-    for (validator_identity, (blocks, slots)) in blocks_and_slots {
+    for (validator_identity, (blocks, slots)) in blocks_and_slots.clone() {
         let skip_rate: usize = 100 - (blocks * 100 / slots);
 
         let msg = format!(
@@ -819,6 +857,7 @@ fn classify_producers(
         reason_msg,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
+        blocks_and_slots,
     ))
 }
 
@@ -1122,6 +1161,7 @@ fn classify(
         block_producer_classification_reason,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
+        _,
     ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
 
     let not_in_leader_schedule: ValidatorList = validator_list
@@ -1455,7 +1495,11 @@ fn classify(
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
 
-    let (config, rpc_client, mut stake_pool) = get_config()?;
+    let (config, rpc_client, stake_pool) = get_config()?;
+
+    if config.command == "export" {
+        return export_to_db(&config, &rpc_client);
+    }
 
     info!("Loading participants...");
     let participants = get_participants_with_state(
@@ -1593,7 +1637,7 @@ fn main() -> BoxResult<()> {
             .collect();
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
-            stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+            stake_pool.unwrap().apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
 
