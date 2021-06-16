@@ -258,9 +258,8 @@ fn process_admin_approve(
     admin_signer: Box<dyn Signer>,
     identity: Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (participant_address, participant) =
-        get_participant_by_identity(rpc_client, identity)?
-            .ok_or_else(|| format!("Registration not found for {}", identity))?;
+    let (participant_address, participant) = get_participant_by_identity(rpc_client, identity)?
+        .ok_or_else(|| format!("Registration not found for {}", identity))?;
 
     print_participant(&participant);
     println!("Approving...");
@@ -289,9 +288,8 @@ fn process_admin_reject(
     admin_signer: Box<dyn Signer>,
     identity: Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (participant_address, participant) =
-        get_participant_by_identity(rpc_client, identity)?
-            .ok_or_else(|| format!("Registration not found for {}", identity))?;
+    let (participant_address, participant) = get_participant_by_identity(rpc_client, identity)?
+        .ok_or_else(|| format!("Registration not found for {}", identity))?;
 
     print_participant(&participant);
     println!("Rejecting...");
