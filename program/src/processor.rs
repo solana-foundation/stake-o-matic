@@ -94,7 +94,6 @@ pub fn process_instruction(
 
             **refundee_info.lamports.borrow_mut() += participant_info.lamports();
             **participant_info.lamports.borrow_mut() = 0;
-            participant = Participant::default()
         }
         RegistryInstruction::Approve => {
             msg!("Approve");
@@ -112,9 +111,14 @@ pub fn process_instruction(
             participant = new_participant;
         }
     }
-    participant.pack_into_slice(&mut participant_info.data.borrow_mut());
 
-    Ok(())
+    if participant.testnet_identity == participant.mainnet_identity {
+        msg!("Error: mainnet and testnet identities must be unique",);
+        Err(ProgramError::InvalidAccountData)
+    } else {
+        participant.pack_into_slice(&mut participant_info.data.borrow_mut());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +280,22 @@ mod test {
             Some(&payer.pubkey()),
         );
         transaction.sign(&[&payer, &testnet_validator_identity], recent_blockhash);
+        assert_matches!(banks_client.process_transaction(transaction).await, Err(_));
+
+        // Rewrite with duplicate identities, failure...
+        let mut transaction = Transaction::new_with_payer(
+            &[rewrite(
+                participant.pubkey(),
+                test_admin::id(),
+                Participant {
+                    state: ParticipantState::Pending,
+                    testnet_identity: testnet_validator_identity.pubkey(),
+                    mainnet_identity: testnet_validator_identity.pubkey(),
+                },
+            )],
+            Some(&payer.pubkey()),
+        );
+        transaction.sign(&[&payer, &test_admin_keypair()], recent_blockhash);
         assert_matches!(banks_client.process_transaction(transaction).await, Err(_));
 
         // Rewrite...
