@@ -116,12 +116,15 @@ fn print_participant(participant: &Participant) {
 }
 
 fn process_status(
-    _config: &Config,
+    config: &Config,
     rpc_client: &RpcClient,
     identity: Pubkey,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match get_participant_by_identity(rpc_client, identity)? {
-        Some((_, participant)) => {
+        Some((participant_address, participant)) => {
+            if config.verbose {
+                println!("Participant: {}", participant_address);
+            }
             print_participant(&participant);
         }
         None => {
@@ -240,9 +243,9 @@ fn process_list(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let participants = get_participants_with_state(rpc_client, state)?;
 
-    for (address, participant) in &participants {
+    for (participant_address, participant) in &participants {
         if config.verbose {
-            println!("Participant: {}", address);
+            println!("Participant: {}", participant_address);
         }
         print_participant(participant);
         println!();
@@ -364,6 +367,32 @@ fn process_admin_import(
             config.default_signer.deref(),
         ],
         Some(rent),
+    )
+}
+
+fn process_admin_rewrite(
+    config: &Config,
+    rpc_client: &RpcClient,
+    admin_signer: Box<dyn Signer>,
+    participant_address: Pubkey,
+    participant: Participant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let message = Message::new(
+        &[
+            solana_foundation_delegation_program_registry::instruction::rewrite(
+                participant_address,
+                admin_signer.pubkey(),
+                participant,
+            ),
+        ],
+        Some(&config.default_signer.pubkey()),
+    );
+
+    send_and_confirm_message(
+        rpc_client,
+        message,
+        [admin_signer.deref(), config.default_signer.deref()],
+        None,
     )
 }
 
@@ -512,7 +541,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .index(1)
                                 .required(true)
-                                .help("Participant address"),
+                                .help("Testnet or Mainnet validator identity"),
                         ),
                 )
                 .subcommand(
@@ -525,12 +554,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .index(1)
                                 .required(true)
-                                .help("Participant address"),
+                                .help("Testnet or Mainnet validator identity"),
                         ),
                 )
                 .subcommand(
                     SubCommand::with_name("import")
-                        .about("Import an existing participant")
+                        .about("Create and approve a participant")
                         .arg(
                             Arg::with_name("testnet")
                                 .long("testnet")
@@ -548,6 +577,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .help("Mainnet validator identity"),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("rewrite")
+                        .about("Rewrite an existing participant")
+                        .arg(
+                            Arg::with_name("participant")
+                                .validator(is_valid_pubkey)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .index(1)
+                                .required(true)
+                                .help("Testnet or Mainnet validator identity"),
+                        )
+                        .arg(
+                            Arg::with_name("testnet")
+                                .long("testnet")
+                                .validator(is_valid_pubkey)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .help("New testnet validator identity"),
+                        )
+                        .arg(
+                            Arg::with_name("mainnet")
+                                .long("mainnet")
+                                .validator(is_valid_pubkey)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .required(true)
+                                .help("New mainnet validator identity"),
+                        )
+                        .arg(
+                            Arg::with_name("state")
+                                .long("state")
+                                .value_name("STATE")
+                                .takes_value(true)
+                                .required(true)
+                                .possible_values(&["pending", "rejected", "approved"])
+                                .help("New participant state"),
                         ),
                 ),
         )
@@ -686,6 +755,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         admin_signer,
                         mainnet_identity,
                         testnet_identity,
+                    )?;
+                }
+                ("rewrite", Some(arg_matches)) => {
+                    let participant = pubkey_of(arg_matches, "participant").unwrap();
+                    let testnet_identity = pubkey_of(arg_matches, "testnet").unwrap();
+                    let mainnet_identity = pubkey_of(arg_matches, "mainnet").unwrap();
+                    let state = match arg_matches.value_of("state").unwrap() {
+                        "pending" => ParticipantState::Pending,
+                        "rejected" => ParticipantState::Rejected,
+                        "approved" => ParticipantState::Approved,
+                        _ => unreachable!(),
+                    };
+                    process_admin_rewrite(
+                        &config,
+                        &rpc_client,
+                        admin_signer,
+                        participant,
+                        Participant {
+                            testnet_identity,
+                            mainnet_identity,
+                            state,
+                        },
                     )?;
                 }
                 _ => unreachable!(),
