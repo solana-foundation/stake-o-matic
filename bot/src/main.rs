@@ -195,6 +195,9 @@ struct Config {
 
     dry_run: bool,
 
+    /// compute score foll all validators in the cluster
+    score_all: bool,
+
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
     quality_block_producer_percentage: usize,
@@ -315,7 +318,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool>>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -594,9 +597,13 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .validator(is_amount)
             )
         )
+        .subcommand(
+            SubCommand::with_name("score-all").about("Score all validators in the cluster")
+        )
         .get_matches();
 
     let dry_run = !matches.is_present("confirm");
+    let score_all = !matches.is_present("score-all");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
         "testnet" => Cluster::Testnet,
@@ -631,7 +638,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         Cluster::MainnetBeta => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
         Cluster::Testnet => value_t!(matches, "json_rpc_url", String)
-            .unwrap_or_else(|_| "http://testnet.solana.com".into()),
+            .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let markdown_path = if matches.is_present("markdown") {
@@ -662,6 +669,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         db_path,
         markdown_path,
         dry_run,
+        score_all,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -689,7 +697,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         .get_health()
         .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
-    let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
+    let stake_pool: Option<Box<dyn GenericStakePool>> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
@@ -697,27 +705,27 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool_v0::new(
+            Some(Box::new(stake_pool_v0::new(
                 &rpc_client,
                 authorized_staker,
                 baseline_stake_amount,
                 reserve_stake_address,
                 min_reserve_stake_balance,
-            )?)
+            )?))
         }
         ("stake-pool", Some(matches)) => {
             let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(&matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool::new(
+            Some(Box::new(stake_pool::new(
                 &rpc_client,
                 authorized_staker,
                 pool_address,
                 baseline_stake_amount,
-            )?)
+            )?))
         }
-        _ => unreachable!(),
+        _ => None,
     };
 
     Ok((config, rpc_client, stake_pool))
@@ -1444,7 +1452,7 @@ fn classify(
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
 
-    let (config, rpc_client, mut stake_pool) = get_config()?;
+    let (config, rpc_client, optional_stake_pool) = get_config()?;
 
     info!("Loading participants...");
     let participants = get_participants_with_state(
@@ -1578,21 +1586,22 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
-            stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
-        notifications.extend(stake_pool_notes.clone());
-        epoch_classification.notes.extend(stake_pool_notes);
+        if let Some(mut stake_pool) = optional_stake_pool {
+            let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
+                stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+            notifications.extend(stake_pool_notes.clone());
+            epoch_classification.notes.extend(stake_pool_notes);
+            for identity in unfunded_validators {
+                validator_classifications
+                    .entry(identity)
+                    .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
+            }
 
-        for identity in unfunded_validators {
-            validator_classifications
-                .entry(identity)
-                .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
-        }
-
-        for (identity, stake_action) in validator_stake_actions {
-            validator_classifications
-                .entry(identity)
-                .and_modify(|e| e.stake_action = Some(stake_action));
+            for (identity, stake_action) in validator_stake_actions {
+                validator_classifications
+                    .entry(identity)
+                    .and_modify(|e| e.stake_action = Some(stake_action));
+            }
         }
 
         validator_notes.sort();
