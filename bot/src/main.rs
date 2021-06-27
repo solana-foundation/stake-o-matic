@@ -602,8 +602,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         )
         .get_matches();
 
+    let score_all = matches.is_present("score-all");
     let dry_run = !matches.is_present("confirm");
-    let score_all = !matches.is_present("score-all");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
         "testnet" => Cluster::Testnet,
@@ -944,6 +944,7 @@ fn get_self_stake_by_vote_account(
 
     info!("Fetching stake accounts...");
     let all_stake_accounts = rpc_client.get_program_accounts(&solana_stake_program::id())?;
+    info!("{} stake accounts", all_stake_accounts.len());
 
     let stake_history_account = rpc_client
         .get_account_with_commitment(&sysvar::stake_history::id(), CommitmentConfig::finalized())?
@@ -1077,9 +1078,19 @@ fn classify(
         .collect::<HashMap<_, _>>();
 
     let (vote_account_info, total_active_stake) = get_vote_account_info(&rpc_client, last_epoch)?;
+    info!(
+        "validators:{} total_active_stake:{}",
+        vote_account_info.len(),
+        total_active_stake
+    );
 
-    let self_stake_by_vote_account =
-        get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
+    // Note: get_self_stake_by_vote_account is expensive because it does a RPC call for each validator
+    // we skip this data gathering if config.min_self_stake_lamports==0
+    let self_stake_by_vote_account = if config.min_self_stake_lamports > 0 {
+        get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?
+    } else {
+        HashMap::new()
+    };
 
     let (cluster_nodes_with_old_version, min_release_version): (HashMap<String, _>, _) =
         match config.min_release_version {
@@ -1089,7 +1100,7 @@ fn classify(
                     .into_iter()
                     .filter_map(|rpc_contact_info| {
                         if let Ok(identity) = Pubkey::from_str(&rpc_contact_info.pubkey) {
-                            if validator_list.contains(&identity) {
+                            if config.score_all || validator_list.contains(&identity) {
                                 if let Some(ref version) = rpc_contact_info.version {
                                     if let Ok(semver) = semver::Version::parse(version) {
                                         if semver < *min_release_version {
@@ -1214,6 +1225,7 @@ fn classify(
         None
     } else {
         let mut validator_classifications = HashMap::new();
+        let mut total_skipped: u32 = 0;
 
         for VoteAccountInfo {
             identity,
@@ -1223,7 +1235,8 @@ fn classify(
             epoch_credits,
         } in vote_account_info
         {
-            if !validator_list.contains(&identity) {
+            if !config.score_all && !validator_list.contains(&identity) {
+                total_skipped += 1;
                 continue;
             }
 
@@ -1281,7 +1294,10 @@ fn classify(
 
             let insufficent_self_stake_msg =
                 format!("insufficient self stake: {}", Sol(self_stake));
-            if !config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
+            if config.min_self_stake_lamports > 0
+                && !config.enforce_min_self_stake
+                && self_stake < config.min_self_stake_lamports
+            {
                 validator_notes.push(insufficent_self_stake_msg.clone());
             }
 
@@ -1355,7 +1371,7 @@ fn classify(
                 )
             } else {
                 assert!(!poor_voters.contains(&identity));
-                assert!(not_in_leader_schedule.contains(&identity));
+                assert!(config.score_all || not_in_leader_schedule.contains(&identity));
                 (
                     // If the validator is not in the leader schedule but was Bonus previously,
                     // maintain Bonus.
@@ -1443,6 +1459,11 @@ fn classify(
             "{} validators processed",
             validator_classifications.len()
         ));
+        info!(
+            "{} validators, {} skipped",
+            &validator_classifications.len(),
+            total_skipped
+        );
 
         Some(validator_classifications)
     };
@@ -1710,17 +1731,12 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
             let mut validator_detail_csv = vec![];
-            validator_detail_csv.push("identity, stake_state, stake_state_reason, score, commission, active_stake, epoch_credits".into());
+            validator_detail_csv.push("identity,score,commission,active_stake,epoch_credits,stake_state,stake_state_reason".into());
 
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
             validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
             for (identity, classification) in validator_classifications {
-                let mut csv = vec![
-                    identity.to_string(),
-                    format!("\"{:?}\"", classification.stake_state),
-                ];
-
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 
                 validator_markdown.push(format!(
@@ -1741,14 +1757,18 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     "* Stake reason: {}",
                     classification.stake_state_reason
                 ));
-                csv.push(format!(
-                    r#""{}",{},{},{},{}"#,
-                    classification.stake_state_reason,
+
+                let csv_line = format!(
+                    r#""{}",{},{},{},{},"{:?}","{}""#,
+                    identity.to_string(),
                     classification.score,
                     classification.commission,
                     classification.active_stake,
-                    classification.epoch_credits
-                ));
+                    classification.epoch_credits,
+                    classification.stake_state,
+                    classification.stake_state_reason,
+                );
+                validator_detail_csv.push(csv_line);
 
                 if let Some(ref stake_action) = classification.stake_action {
                     validator_markdown.push(format!("* Staking activity: {}", stake_action));
@@ -1783,8 +1803,6 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 for note in &classification.notes {
                     validator_markdown.push(format!("* {}", note));
                 }
-
-                validator_detail_csv.push(csv.join(","));
             }
             // save validator-detail.csv
             let filename = config.cluster_db_path().join("validator-detail.csv");
