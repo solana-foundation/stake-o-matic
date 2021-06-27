@@ -22,6 +22,12 @@ pub struct ValidatorClassification {
     pub stake_state: ValidatorStakeState,
     pub stake_state_reason: String,
 
+    /// computed score (more granular than ValidatorStakeState)
+    pub score: u32,
+    pub commission: u8,
+    pub active_stake: u64,
+    pub epoch_credits: u64,
+
     // Summary of the action was taken this epoch to advance the validator's stake
     pub stake_action: Option<String>,
 

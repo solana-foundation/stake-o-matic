@@ -1416,12 +1416,18 @@ fn classify(
                 .unwrap_or_default();
             stake_states.insert(0, (stake_state, reason.clone()));
 
+            let score: u32 = 0;
+
             validator_classifications.insert(
                 identity,
                 ValidatorClassification {
                     identity,
                     vote_address,
                     stake_state,
+                    score,
+                    commission,
+                    epoch_credits,
+                    active_stake,
                     stake_states: Some(stake_states),
                     stake_action: None,
                     stake_state_reason: reason,
@@ -1613,7 +1619,6 @@ fn main() -> BoxResult<()> {
 
     if first_time {
         EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
-        generate_markdown(epoch, &config)?;
 
         // Only notify the user if this is the first run for this epoch
         for notification in notifications {
@@ -1621,6 +1626,9 @@ fn main() -> BoxResult<()> {
             notifier.send(&notification);
         }
     }
+
+    //conditional to: matches.is_present("markdown")
+    generate_markdown(epoch, &config)?;
 
     Ok(())
 }
@@ -1701,10 +1709,18 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
 
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
+            let mut validator_detail_csv = vec![];
+            validator_detail_csv.push("identity, stake_state, stake_state_reason, score, commission, active_stake, epoch_credits".into());
+
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
             validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
             for (identity, classification) in validator_classifications {
+                let mut csv = vec![
+                    identity.to_string(),
+                    format!("\"{:?}\"", classification.stake_state),
+                ];
+
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 
                 validator_markdown.push(format!(
@@ -1725,6 +1741,15 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     "* Stake reason: {}",
                     classification.stake_state_reason
                 ));
+                csv.push(format!(
+                    r#""{}",{},{},{},{}"#,
+                    classification.stake_state_reason,
+                    classification.score,
+                    classification.commission,
+                    classification.active_stake,
+                    classification.epoch_credits
+                ));
+
                 if let Some(ref stake_action) = classification.stake_action {
                     validator_markdown.push(format!("* Staking activity: {}", stake_action));
                 }
@@ -1758,7 +1783,14 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 for note in &classification.notes {
                     validator_markdown.push(format!("* {}", note));
                 }
+
+                validator_detail_csv.push(csv.join(","));
             }
+            // save validator-detail.csv
+            let filename = config.cluster_db_path().join("validator-detail.csv");
+            info!("Writing {}", filename.display());
+            let mut file = File::create(filename)?;
+            file.write_all(&validator_detail_csv.join("\n").into_bytes())?;
         }
     }
 
