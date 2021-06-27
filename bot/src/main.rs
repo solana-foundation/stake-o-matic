@@ -1306,7 +1306,7 @@ fn classify(
                 .map(|testnet_participation| {
                     if let Some(participant) = participant {
                         if !testnet_participation.get(&participant).unwrap_or(&true) {
-                            let note = "insufficient testnet participation".to_string();
+                            let note = "Insufficient testnet participation".to_string();
                             if config.enforce_testnet_participation {
                                 return Some(note);
                             } else {
@@ -1412,7 +1412,7 @@ fn classify(
             debug!(
                 "\nidentity: {} ({:?})\n\
                     - vote address: {}\n\
-                    - stake state: {:?} - data center: {:?} (seniority: {})\n\
+                    - stake state: {:?}, data center: {:?} (seniority: {}), self stake: {}\n\
                     - {}",
                 identity,
                 participant,
@@ -1423,6 +1423,7 @@ fn classify(
                     .get(&current_data_center)
                     .cloned()
                     .unwrap_or_default(),
+                Sol(self_stake),
                 reason
             );
 
