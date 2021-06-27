@@ -637,7 +637,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         .get_matches();
 
     let dry_run = !matches.is_present("confirm");
-    let score_all = !matches.is_present("score-all");
+    let score_all = matches.is_present("score-all");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
         "testnet" => Cluster::Testnet,
