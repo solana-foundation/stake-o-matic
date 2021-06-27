@@ -274,6 +274,7 @@ impl Config {
             db_path: PathBuf::default(),
             markdown_path: None,
             dry_run: true,
+            score_all: false,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -1077,11 +1078,31 @@ fn classify(
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let (vote_account_info, total_active_stake) = get_vote_account_info(&rpc_client, last_epoch)?;
+    let (mut vote_account_info, total_active_stake) =
+        get_vote_account_info(&rpc_client, last_epoch)?;
+
+    // compute cumulative_stake_limit => active_stake of the last validator inside the can-halt-the-network group
+    // we later set score=0 to all validators whose stake >= concentrated_validators_stake_limit
+    // sort by active_stake
+    vote_account_info.sort_by(|a, b| a.active_stake.cmp(&b.active_stake));
+    let mut accumulated: u64 = 0;
+    let mut count_halt_group: u32 = 0;
+    let limit: u64 = total_active_stake / 100 * 34;
+    let mut concentrated_validators_stake_limit = limit;
+    for info in &vote_account_info {
+        accumulated += info.active_stake;
+        count_halt_group += 1;
+        if accumulated > limit {
+            concentrated_validators_stake_limit = info.active_stake;
+            break;
+        }
+    }
     info!(
-        "validators:{} total_active_stake:{}",
-        vote_account_info.len(),
-        total_active_stake
+        "validators:{} total_active_stake:{}, can_halt_the_network:top {}, pro-decentralization-stake-limit: less than {}",
+        &vote_account_info.len(),
+        total_active_stake,
+        count_halt_group,
+        lamports_to_sol(concentrated_validators_stake_limit),
     );
 
     // Note: get_self_stake_by_vote_account is expensive because it does a RPC call for each validator
@@ -1240,6 +1261,21 @@ fn classify(
                 continue;
             }
 
+            /* -- ------------------
+               -- heuristic data, epoch 196
+               -- ------------------
+            select max(epoch_credits), min(epoch_credits)
+            from mainnet
+            where epoch_credits > (select max(epoch_credits)*0.50 from mainnet)
+            order by epoch_credits desc;
+            --max(epoch_credits),min(epoch_credits)
+            --242503,134403
+            --so delta max-min epoch_credits ~= 100k
+            */
+            // we start score with epoch_credits
+            // let mut score = epoch_credits;
+            let mut score_discounts = db::ScoreDiscounts::default();
+
             let participant = identity_to_participant.get(&identity).cloned();
 
             let current_data_center = data_centers
@@ -1247,6 +1283,13 @@ fn classify(
                 .get(&identity)
                 .cloned()
                 .unwrap_or_default();
+
+            // score: check data center concentration
+            let data_center_info = data_centers
+                .info
+                .iter()
+                .find(|x| x.id == current_data_center)
+                .unwrap();
 
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
@@ -1299,6 +1342,7 @@ fn classify(
                 && self_stake < config.min_self_stake_lamports
             {
                 validator_notes.push(insufficent_self_stake_msg.clone());
+                score_discounts.insufficient_self_stake = true; //discount all
             }
 
             let insufficent_testnet_participation = testnet_participation
@@ -1317,6 +1361,13 @@ fn classify(
                     None
                 })
                 .flatten();
+
+            // no score if below 50% from avg credits
+            score_discounts.low_credits = epoch_credits < min_epoch_credits;
+
+            // no score if in the can-halt-the-network group
+            score_discounts.can_halt_the_network_group =
+                active_stake >= concentrated_validators_stake_limit;
 
             let (stake_state, reason) = if let Some(reason) =
                 infrastructure_concentration_destake_reason
@@ -1433,18 +1484,17 @@ fn classify(
                 .unwrap_or_default();
             stake_states.insert(0, (stake_state, reason.clone()));
 
-            let score: u32 = 0;
-
             validator_classifications.insert(
                 identity,
                 ValidatorClassification {
                     identity,
                     vote_address,
                     stake_state,
-                    score,
-                    commission,
                     epoch_credits,
+                    score_discounts,
+                    commission,
                     active_stake,
+                    data_center_concentration: data_center_info.stake_percent,
                     stake_states: Some(stake_states),
                     stake_action: None,
                     stake_state_reason: reason,
@@ -1732,7 +1782,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
             let mut validator_detail_csv = vec![];
-            validator_detail_csv.push("identity,score,commission,active_stake,epoch_credits,stake_state,stake_state_reason".into());
+            validator_detail_csv.push("identity,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason".into());
 
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
@@ -1759,13 +1809,18 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     classification.stake_state_reason
                 ));
 
+                //identity,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
                 let csv_line = format!(
-                    r#""{}",{},{},{},{},"{:?}","{}""#,
+                    r#""{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
                     identity.to_string(),
-                    classification.score,
+                    classification.score(),
                     classification.commission,
-                    classification.active_stake,
+                    lamports_to_sol(classification.active_stake),
                     classification.epoch_credits,
+                    classification.data_center_concentration,
+                    classification.score_discounts.can_halt_the_network_group,
+                    classification.score_discounts.low_credits,
+                    classification.score_discounts.insufficient_self_stake,
                     classification.stake_state,
                     classification.stake_state_reason,
                 );

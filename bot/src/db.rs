@@ -15,6 +15,13 @@ use {
 };
 
 #[derive(Default, Clone, Deserialize, Serialize)]
+pub struct ScoreDiscounts {
+    pub low_credits: bool,
+    pub insufficient_self_stake: bool,
+    pub can_halt_the_network_group: bool,
+}
+
+#[derive(Default, Clone, Deserialize, Serialize)]
 pub struct ValidatorClassification {
     pub identity: Pubkey, // Validator identity
     pub vote_address: Pubkey,
@@ -23,10 +30,11 @@ pub struct ValidatorClassification {
     pub stake_state_reason: String,
 
     /// computed score (more granular than ValidatorStakeState)
-    pub score: u32,
+    pub epoch_credits: u64, // epoch_credits is the base score
+    pub score_discounts: ScoreDiscounts,
     pub commission: u8,
     pub active_stake: u64,
-    pub epoch_credits: u64,
+    pub data_center_concentration: f64,
 
     // Summary of the action was taken this epoch to advance the validator's stake
     pub stake_action: Option<String>,
@@ -52,6 +60,42 @@ pub struct ValidatorClassification {
 }
 
 impl ValidatorClassification {
+    pub fn score(&self) -> u64 {
+        if self.score_discounts.can_halt_the_network_group
+            || self.score_discounts.insufficient_self_stake
+            || self.score_discounts.low_credits
+        {
+            0
+        } else {
+            // if data_center_concentration = 100%, lose all score,
+            // data_center_concentration = 30%, lose 30% (rounded)
+            let discount_because_data_center_concentration =
+                self.epoch_credits * (self.data_center_concentration as u64) / 100;
+
+            // score discounts according to commission
+            const SCORE_MIN_COMMISSION: u8 = 2;
+            const SCORE_MAX_COMMISSION: u8 = 12;
+            const SCORE_DISCOUNT_PER_COMMISSION_POINT: u32 = 10_000;
+            let discount_because_commission = if self.commission < SCORE_MIN_COMMISSION
+                || self.commission > SCORE_MAX_COMMISSION
+            {
+                // we discourage 0% & 1% commission, because we don't want to incentivize a race-to-the-bottom
+                // where we promote validators subsidizing/working below cost/"dumping"
+                // we also discard validators with commission > SCORE_MAX_COMMISSION
+                self.epoch_credits // discount all
+            } else {
+                // discount according to commission
+                (SCORE_DISCOUNT_PER_COMMISSION_POINT
+                    * (self.commission - SCORE_MIN_COMMISSION) as u32) as u64
+            };
+
+            //result
+            self.epoch_credits
+                .saturating_sub(discount_because_commission)
+                .saturating_sub(discount_because_data_center_concentration)
+        }
+    }
+
     pub fn stake_state_streak(&self) -> usize {
         let mut streak = 1;
 
