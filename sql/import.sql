@@ -24,7 +24,7 @@ UPDATE mainnet set pct = round(score * 100.0 / (select sum(score) from mainnet),
 select 'validators',count(*),'total staked',sum(active_stake) from mainnet;
 select 'avg epoch_credits',avg(epoch_credits) from mainnet;
 select 'below half avg epoch_credits',count(*),
-        "stake",sum(active_stake)/1e9
+        "stake",sum(active_stake)
    from mainnet
    where epoch_credits < (select avg(epoch_credits)/2 from mainnet)
    ;
