@@ -232,16 +232,16 @@ mod test {
     fn test_staked_for() {
         let mut vc = ValidatorClassification::default();
 
-        assert_eq!(vc.staked_for(0, 0), false);
-        assert_eq!(vc.staked_for(1, 0), false);
-        assert_eq!(vc.staked_for(0, 1), false);
+        assert!(!vc.staked_for(0, 0));
+        assert!(!vc.staked_for(1, 0));
+        assert!(!vc.staked_for(0, 1));
 
         vc.stake_states = Some(vec![
             (ValidatorStakeState::None, String::new()),
             (ValidatorStakeState::Baseline, String::new()),
             (ValidatorStakeState::Bonus, String::new()),
         ]);
-        assert_eq!(vc.staked_for(3, 3), false);
-        assert_eq!(vc.staked_for(2, 3), true);
+        assert!(!vc.staked_for(3, 3));
+        assert!(vc.staked_for(2, 3));
     }
 }
