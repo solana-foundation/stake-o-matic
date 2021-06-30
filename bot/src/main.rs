@@ -191,6 +191,7 @@ struct Config {
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
+    require_classification: bool,
     markdown_path: Option<PathBuf>,
 
     dry_run: bool,
@@ -269,6 +270,7 @@ impl Config {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
+            require_classification: false,
             markdown_path: None,
             dry_run: true,
             quality_block_producer_percentage: 15,
@@ -364,6 +366,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 .takes_value(true)
                 .default_value("db")
                 .help("Location for storing staking history")
+        )
+        .arg(
+            Arg::with_name("require_classification")
+                .long("require-classification")
+                .takes_value(false)
+                .help("Fail if the classification for the previous epoch does not exist")
         )
         .arg(
             Arg::with_name("quality_block_producer_percentage")
@@ -639,6 +647,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     } else {
         None
     };
+    let require_classification = matches.is_present("require_classification");
 
     let confirmed_block_cache_path = matches
         .value_of("confirmed_block_cache_path")
@@ -660,6 +669,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         json_rpc_url,
         cluster,
         db_path,
+        require_classification,
         markdown_path,
         dry_run,
         quality_block_producer_percentage,
@@ -1511,12 +1521,15 @@ fn main() -> BoxResult<()> {
 
     let (mut epoch_classification, first_time) =
         if EpochClassification::exists(epoch, &config.cluster_db_path()) {
-            info!("Classification for {} already exists", epoch);
+            info!("Classification for epoch {} already exists", epoch);
             (
                 EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
                 false,
             )
         } else {
+            if config.require_classification {
+                return Err(format!("Classification for epoch {} does not exist", epoch).into());
+            }
             (
                 classify(
                     &rpc_client,
