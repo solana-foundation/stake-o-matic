@@ -187,7 +187,7 @@ impl std::fmt::Display for Cluster {
 }
 
 #[derive(Debug)]
-struct Config {
+pub struct Config {
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
@@ -197,6 +197,12 @@ struct Config {
 
     /// compute score foll all validators in the cluster
     score_all: bool,
+    /// max commission accepted to score (0-100)
+    score_max_commission: u8,
+    /// score discount per commission point
+    score_commission_discount: u32,
+    /// score min stake required
+    score_min_stake: u64,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
@@ -275,6 +281,9 @@ impl Config {
             markdown_path: None,
             dry_run: true,
             score_all: false,
+            score_max_commission: 8,
+            score_commission_discount: 12_000,
+            score_min_stake: sol_to_lamports(75.0),
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -600,10 +609,29 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         )
         .subcommand(
             SubCommand::with_name("score-all").about("Score all validators in the cluster")
+            .arg(
+                Arg::with_name("score_max_commission")
+                    .index(1)
+                    .takes_value(true)
+                    .required(false)
+                    .help("scoring max accepted commission")
+            )
+            .arg(
+                Arg::with_name("commission_point_discount")
+                    .index(2)
+                    .takes_value(true)
+                    .required(false)
+                    .help("score to discount for each commission point")
+            )
         )
         .get_matches();
 
     let score_all = matches.is_present("score-all");
+    let score_max_commission = value_t!(matches, "score_max_commission", u8).unwrap_or(8);
+    let score_commission_discount =
+        value_t!(matches, "commission_point_discount", u32).unwrap_or(12_000);
+    let score_min_stake = value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(75.0));
+
     let dry_run = !matches.is_present("confirm");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
@@ -671,6 +699,9 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         markdown_path,
         dry_run,
         score_all,
+        score_max_commission,
+        score_commission_discount,
+        score_min_stake,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -728,6 +759,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         }
         _ => None,
     };
+
+    // guard - let's make sure score-all can not be set for distribution
+    if score_all && (stake_pool.is_some() || !dry_run) {
+        error!("DO NOT combine score-all with `--confirm` or `stake-pool`");
+        process::exit(1);
+    }
 
     Ok((config, rpc_client, stake_pool))
 }
@@ -1813,7 +1850,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 let csv_line = format!(
                     r#""{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
                     identity.to_string(),
-                    classification.score(),
+                    classification.score(config),
                     classification.commission,
                     lamports_to_sol(classification.active_stake),
                     classification.epoch_credits,

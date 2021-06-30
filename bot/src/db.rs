@@ -1,5 +1,6 @@
 use {
     crate::{
+        Config,
         data_center_info::{DataCenterId, DataCenterInfo},
         generic_stake_pool::ValidatorStakeState,
     },
@@ -60,10 +61,12 @@ pub struct ValidatorClassification {
 }
 
 impl ValidatorClassification {
-    pub fn score(&self) -> u64 {
+    pub fn score(&self, config:&Config) -> u64 {
         if self.score_discounts.can_halt_the_network_group
             || self.score_discounts.insufficient_self_stake
             || self.score_discounts.low_credits
+            || self.commission > config.score_max_commission
+            || self.active_stake < config.score_min_stake
         {
             0
         } else {
@@ -73,21 +76,7 @@ impl ValidatorClassification {
                 self.epoch_credits * (self.data_center_concentration as u64) / 100;
 
             // score discounts according to commission
-            const SCORE_MIN_COMMISSION: u8 = 2;
-            const SCORE_MAX_COMMISSION: u8 = 12;
-            const SCORE_DISCOUNT_PER_COMMISSION_POINT: u32 = 10_000;
-            let discount_because_commission = if self.commission < SCORE_MIN_COMMISSION
-                || self.commission > SCORE_MAX_COMMISSION
-            {
-                // we discourage 0% & 1% commission, because we don't want to incentivize a race-to-the-bottom
-                // where we promote validators subsidizing/working below cost/"dumping"
-                // we also discard validators with commission > SCORE_MAX_COMMISSION
-                self.epoch_credits // discount all
-            } else {
-                // discount according to commission
-                (SCORE_DISCOUNT_PER_COMMISSION_POINT
-                    * (self.commission - SCORE_MIN_COMMISSION) as u32) as u64
-            };
+            let discount_because_commission = (self.commission as u32 * config.score_commission_discount) as u64;
 
             //result
             self.epoch_credits
