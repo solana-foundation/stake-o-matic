@@ -4597,6 +4597,7 @@ dependencies = [
  "solana-clap-utils",
  "solana-cli-config",
  "solana-client",
+ "solana-config-program",
  "solana-foundation-delegation-program-cli",
  "solana-foundation-delegation-program-registry",
  "solana-logger",

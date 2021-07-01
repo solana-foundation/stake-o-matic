@@ -1,6 +1,6 @@
 //! Program state
 use borsh::{BorshDeserialize, BorshSchema, BorshSerialize};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use solana_program::{
     msg,
     program_error::ProgramError,
@@ -8,7 +8,9 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize, BorshSchema, PartialEq, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, BorshSerialize, BorshDeserialize, BorshSchema, PartialEq, Deserialize, Serialize,
+)]
 pub enum ParticipantState {
     /// Default account state after creating it
     Uninitialized,

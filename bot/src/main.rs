@@ -1,3 +1,4 @@
+use crate::export::export_to_db;
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
     clap::{
@@ -40,17 +41,16 @@ use {
     },
     thiserror::Error,
 };
-use crate::export::export_to_db;
 
 mod data_center_info;
 mod db;
+mod export;
 mod generic_stake_pool;
 mod rpc_client_utils;
 mod stake_pool;
 mod stake_pool_v0;
 mod validator_list;
 mod validators_app;
-mod export;
 
 type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ValidatorList = HashSet<Pubkey>;
@@ -188,9 +188,14 @@ impl std::fmt::Display for Cluster {
     }
 }
 
+// #[derive(PartialEq, Clone, Copy)]
+enum Command {
+    Export(Epoch),
+    Stake(Box<dyn GenericStakePool>),
+}
+
 #[derive(Debug)]
 pub struct Config {
-    command: String,
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
@@ -264,16 +269,12 @@ pub struct Config {
     ///
     /// This setting is ignored if `cluster` is not `"mainnet-beta"`
     min_testnet_participation: Option<(/*n:*/ usize, /*m:*/ usize)>,
-
-    /// Epoch to export if using the `export` command
-    export_epoch: Option<u64>,
 }
 
 impl Config {
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self {
-            command: "".to_string(),
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
@@ -296,7 +297,6 @@ impl Config {
             enforce_min_self_stake: false,
             enforce_testnet_participation: false,
             min_testnet_participation: None,
-            export_epoch: None,
         }
     }
 
@@ -325,7 +325,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool>>)> {
+fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -625,7 +625,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         )
         .get_matches();
 
-    let command = matches.subcommand_name().unwrap().to_string();
+    let command_match = matches.subcommand_name().unwrap().to_string();
     let dry_run = !matches.is_present("confirm");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
@@ -671,15 +671,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
     };
     let require_classification = matches.is_present("require_classification");
 
-    let export_epoch: Option<u64>;
-    if command == "export" {
-        let (_, subcommand_matches) = matches.subcommand();
-        let sub_matches = subcommand_matches.unwrap();
-        export_epoch = value_t!(sub_matches, "export_epoch", u64).ok();
-    } else {
-        export_epoch = None;
-    }
-
     let confirmed_block_cache_path = matches
         .value_of("confirmed_block_cache_path")
         .map(PathBuf::from)
@@ -696,8 +687,58 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
     )
     .unwrap();
 
+    info!("RPC URL: {}", json_rpc_url);
+    let rpc_client = RpcClient::new_with_timeout(json_rpc_url.clone(), Duration::from_secs(180));
+
+    // Sanity check that the RPC endpoint is healthy before performing too much work
+    rpc_client
+        .get_health()
+        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
+
+    let command;
+    if command_match == "export" {
+        let (_, subcommand_matches) = matches.subcommand();
+        let sub_matches = subcommand_matches.unwrap();
+        // if export_epoch is not set, use the previous epoch
+        let export_epoch = value_t!(sub_matches, "export_epoch", u64)
+            .unwrap_or(rpc_client.get_epoch_info()?.epoch - 1);
+
+        command = Command::Export(export_epoch);
+    } else {
+        let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
+            ("stake-pool-v0", Some(matches)) => {
+                let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
+                let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
+                let min_reserve_stake_balance =
+                    sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
+                let baseline_stake_amount =
+                    sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+                Box::new(stake_pool_v0::new(
+                    &rpc_client,
+                    authorized_staker,
+                    baseline_stake_amount,
+                    reserve_stake_address,
+                    min_reserve_stake_balance,
+                )?)
+            }
+            ("stake-pool", Some(matches)) => {
+                let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
+                let pool_address = pubkey_of(&matches, "pool_address").unwrap();
+                let baseline_stake_amount =
+                    sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+                Box::new(stake_pool::new(
+                    &rpc_client,
+                    authorized_staker,
+                    pool_address,
+                    baseline_stake_amount,
+                )?)
+            }
+            _ => unreachable!(),
+        };
+        command = Command::Stake(stake_pool);
+    }
+
     let config = Config {
-        command,
         json_rpc_url,
         cluster,
         db_path,
@@ -720,53 +761,9 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         enforce_min_self_stake,
         enforce_testnet_participation,
         min_testnet_participation,
-        export_epoch,
     };
 
-    info!("RPC URL: {}", config.json_rpc_url);
-    let rpc_client =
-        RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(180));
-
-    // Sanity check that the RPC endpoint is healthy before performing too much work
-    rpc_client
-        .get_health()
-        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
-
-    let stake_pool: Option<Box<dyn GenericStakePool>> = match matches.subcommand() {
-        ("stake-pool-v0", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
-            let min_reserve_stake_balance =
-                sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
-            let baseline_stake_amount =
-                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Some(Box::new(stake_pool_v0::new(
-                &rpc_client,
-                authorized_staker,
-                baseline_stake_amount,
-                reserve_stake_address,
-                min_reserve_stake_balance,
-            )?))
-        }
-        ("stake-pool", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let pool_address = pubkey_of(&matches, "pool_address").unwrap();
-            let baseline_stake_amount =
-                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Some(Box::new(stake_pool::new(
-                &rpc_client,
-                authorized_staker,
-                pool_address,
-                baseline_stake_amount,
-            )?))
-        }
-        ("export", Some(_matches)) => {
-            None
-        }
-        _ => unreachable!(),
-    };
-
-    Ok((config, rpc_client, stake_pool))
+    Ok((command, config, rpc_client))
 }
 
 type ClassifyResult = (
@@ -781,7 +778,7 @@ type ClassifyResult = (
     // too_many_poor_block_producers
     bool,
     // PK->(blocks, slots)
-    HashMap<Pubkey, (usize, usize)>
+    HashMap<Pubkey, (usize, usize)>,
 );
 
 pub fn classify_producers(
@@ -790,8 +787,8 @@ pub fn classify_producers(
     leader_schedule: HashMap<String, Vec<usize>>,
     config: &Config,
 ) -> BoxResult<ClassifyResult> {
-    let mut poor_block_producers = HashSet::new();
-    let mut quality_block_producers = HashSet::new();
+    let mut poor_block_producers: ValidatorList = HashSet::new();
+    let mut quality_block_producers: ValidatorList = HashSet::new();
     let mut blocks_and_slots = HashMap::new();
     let mut reason_msg = HashMap::new();
 
@@ -817,7 +814,7 @@ pub fn classify_producers(
         }
     }
     let cluster_average_skip_rate = 100 - total_blocks * 100 / total_slots;
-    for (validator_identity, (blocks, slots)) in blocks_and_slots.clone() {
+    for (validator_identity, (blocks, slots)) in &blocks_and_slots {
         let skip_rate: usize = 100 - (blocks * 100 / slots);
 
         let msg = format!(
@@ -825,14 +822,14 @@ pub fn classify_producers(
             blocks, slots, skip_rate
         );
         trace!("Validator {} produced {}", validator_identity, msg);
-        reason_msg.insert(validator_identity, msg);
+        reason_msg.insert(*validator_identity, msg);
 
         if skip_rate.saturating_sub(config.quality_block_producer_percentage)
             > cluster_average_skip_rate
         {
-            poor_block_producers.insert(validator_identity);
+            poor_block_producers.insert(*validator_identity);
         } else {
-            quality_block_producers.insert(validator_identity);
+            quality_block_producers.insert(*validator_identity);
         }
     }
 
@@ -1495,179 +1492,186 @@ fn classify(
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
 
-    let (config, rpc_client, stake_pool) = get_config()?;
+    let (command, config, rpc_client) = get_config()?;
 
-    if config.command == "export" {
-        return export_to_db(&config, &rpc_client);
-    }
+    match command {
+        Command::Export(epoch) => {
+            return export_to_db(epoch, &config, &rpc_client);
+        }
+        Command::Stake(mut stake_pool) => {
+            info!("Loading participants...");
+            let participants = get_participants_with_state(
+                &RpcClient::new("https://api.mainnet-beta.solana.com".to_string()),
+                Some(ParticipantState::Approved),
+            )?;
 
-    info!("Loading participants...");
-    let participants = get_participants_with_state(
-        &RpcClient::new("https://api.mainnet-beta.solana.com".to_string()),
-        Some(ParticipantState::Approved),
-    )?;
-
-    let (mainnet_identity_to_participant, testnet_identity_to_participant): (
-        IdentityToParticipant,
-        IdentityToParticipant,
-    ) = participants
-        .iter()
-        .map(
-            |(
-                participant,
-                Participant {
-                    mainnet_identity,
-                    testnet_identity,
-                    ..
-                },
-            )| {
-                (
-                    (*mainnet_identity, *participant),
-                    (*testnet_identity, *participant),
+            let (mainnet_identity_to_participant, testnet_identity_to_participant): (
+                IdentityToParticipant,
+                IdentityToParticipant,
+            ) = participants
+                .iter()
+                .map(
+                    |(
+                        participant,
+                        Participant {
+                            mainnet_identity,
+                            testnet_identity,
+                            ..
+                        },
+                    )| {
+                        (
+                            (*mainnet_identity, *participant),
+                            (*testnet_identity, *participant),
+                        )
+                    },
                 )
-            },
-        )
-        .unzip();
+                .unzip();
 
-    info!("{} participants loaded", participants.len());
-    assert!(participants.len() > 450); // Hard coded sanity check...
+            info!("{} participants loaded", participants.len());
+            assert!(participants.len() > 450); // Hard coded sanity check...
 
-    let (validator_list, identity_to_participant) = match config.cluster {
-        Cluster::MainnetBeta => (
-            mainnet_identity_to_participant.keys().cloned().collect(),
-            mainnet_identity_to_participant,
-        ),
-        Cluster::Testnet => (
-            validator_list::testnet_validators().into_iter().collect(),
-            testnet_identity_to_participant,
-        ),
-    };
+            let (validator_list, identity_to_participant) = match config.cluster {
+                Cluster::MainnetBeta => (
+                    mainnet_identity_to_participant.keys().cloned().collect(),
+                    mainnet_identity_to_participant,
+                ),
+                Cluster::Testnet => (
+                    validator_list::testnet_validators().into_iter().collect(),
+                    testnet_identity_to_participant,
+                ),
+            };
 
-    let notifier = if config.dry_run {
-        Notifier::new("DRYRUN")
-    } else {
-        Notifier::default()
-    };
+            let notifier = if config.dry_run {
+                Notifier::new("DRYRUN")
+            } else {
+                Notifier::default()
+            };
 
-    let epoch = rpc_client.get_epoch_info()?.epoch;
-    info!("Epoch: {:?}", epoch);
-    if epoch == 0 {
-        return Ok(());
-    }
-
-    info!("Data directory: {}", config.cluster_db_path().display());
-
-    let previous_epoch_classification =
-        EpochClassification::load_previous(epoch, &config.cluster_db_path())?
-            .map(|p| p.1)
-            .unwrap_or_default()
-            .into_current();
-
-    let (mut epoch_classification, first_time) =
-        if EpochClassification::exists(epoch, &config.cluster_db_path()) {
-            info!("Classification for epoch {} already exists", epoch);
-            (
-                EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
-                false,
-            )
-        } else {
-            if config.require_classification {
-                return Err(format!("Classification for epoch {} does not exist", epoch).into());
+            let epoch = rpc_client.get_epoch_info()?.epoch;
+            info!("Epoch: {:?}", epoch);
+            if epoch == 0 {
+                return Ok(());
             }
-            (
-                classify(
-                    &rpc_client,
-                    &config,
-                    epoch,
-                    &validator_list,
-                    &identity_to_participant,
-                    previous_epoch_classification
-                        .validator_classifications
-                        .as_ref(),
-                )?,
-                true,
-            )
-        };
 
-    let mut notifications = epoch_classification.notes.clone();
+            info!("Data directory: {}", config.cluster_db_path().display());
 
-    if let Some(ref mut validator_classifications) = epoch_classification.validator_classifications
-    {
-        let previous_validator_classifications = previous_epoch_classification
-            .validator_classifications
-            .unwrap_or_default();
+            let previous_epoch_classification =
+                EpochClassification::load_previous(epoch, &config.cluster_db_path())?
+                    .map(|p| p.1)
+                    .unwrap_or_default()
+                    .into_current();
 
-        let mut validator_stake_change_notes = vec![];
-        let mut validator_notes = vec![];
-        let desired_validator_stake: Vec<_> = validator_classifications
-            .values()
-            .map(|vc| {
-                validator_notes.extend(
-                    vc.notes
-                        .iter()
-                        .map(|note| format!("Note: {}: {}", vc.identity, note)),
-                );
-
-                let stake_state_changed = match previous_validator_classifications
-                    .get(&vc.identity)
-                    .map(|prev_vc| prev_vc.stake_state)
-                {
-                    Some(previous_stake_state) => previous_stake_state != vc.stake_state,
-                    None => true,
+            let (mut epoch_classification, first_time) =
+                if EpochClassification::exists(epoch, &config.cluster_db_path()) {
+                    info!("Classification for epoch {} already exists", epoch);
+                    (
+                        EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
+                        false,
+                    )
+                } else {
+                    if config.require_classification {
+                        return Err(
+                            format!("Classification for epoch {} does not exist", epoch).into()
+                        );
+                    }
+                    (
+                        classify(
+                            &rpc_client,
+                            &config,
+                            epoch,
+                            &validator_list,
+                            &identity_to_participant,
+                            previous_epoch_classification
+                                .validator_classifications
+                                .as_ref(),
+                        )?,
+                        true,
+                    )
                 };
 
-                if stake_state_changed {
-                    validator_stake_change_notes.push(format!(
-                        "* {:?} stake: {}: {}",
-                        vc.stake_state, vc.identity, vc.stake_state_reason
-                    ));
+            let mut notifications = epoch_classification.notes.clone();
+
+            if let Some(ref mut validator_classifications) =
+                epoch_classification.validator_classifications
+            {
+                let previous_validator_classifications = previous_epoch_classification
+                    .validator_classifications
+                    .unwrap_or_default();
+
+                let mut validator_stake_change_notes = vec![];
+                let mut validator_notes = vec![];
+                let desired_validator_stake: Vec<_> = validator_classifications
+                    .values()
+                    .map(|vc| {
+                        validator_notes.extend(
+                            vc.notes
+                                .iter()
+                                .map(|note| format!("Note: {}: {}", vc.identity, note)),
+                        );
+
+                        let stake_state_changed = match previous_validator_classifications
+                            .get(&vc.identity)
+                            .map(|prev_vc| prev_vc.stake_state)
+                        {
+                            Some(previous_stake_state) => previous_stake_state != vc.stake_state,
+                            None => true,
+                        };
+
+                        if stake_state_changed {
+                            validator_stake_change_notes.push(format!(
+                                "* {:?} stake: {}: {}",
+                                vc.stake_state, vc.identity, vc.stake_state_reason
+                            ));
+                        }
+
+                        ValidatorStake {
+                            identity: vc.identity,
+                            vote_address: vc.vote_address,
+                            stake_state: vc.stake_state,
+                            priority: previous_validator_classifications
+                                .get(&vc.identity)
+                                .map(|prev_vc| prev_vc.prioritize_funding_in_next_epoch)
+                                .unwrap_or_default()
+                                .unwrap_or_default(),
+                        }
+                    })
+                    .collect();
+
+                let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
+                    stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+                notifications.extend(stake_pool_notes.clone());
+                epoch_classification.notes.extend(stake_pool_notes);
+
+                for identity in unfunded_validators {
+                    validator_classifications
+                        .entry(identity)
+                        .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
                 }
 
-                ValidatorStake {
-                    identity: vc.identity,
-                    vote_address: vc.vote_address,
-                    stake_state: vc.stake_state,
-                    priority: previous_validator_classifications
-                        .get(&vc.identity)
-                        .map(|prev_vc| prev_vc.prioritize_funding_in_next_epoch)
-                        .unwrap_or_default()
-                        .unwrap_or_default(),
+                for (identity, stake_action) in validator_stake_actions {
+                    validator_classifications
+                        .entry(identity)
+                        .and_modify(|e| e.stake_action = Some(stake_action));
                 }
-            })
-            .collect();
 
-        let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
-            stake_pool.unwrap().apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
-        notifications.extend(stake_pool_notes.clone());
-        epoch_classification.notes.extend(stake_pool_notes);
+                validator_notes.sort();
+                notifications.extend(validator_notes);
 
-        for identity in unfunded_validators {
-            validator_classifications
-                .entry(identity)
-                .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
-        }
+                validator_stake_change_notes.sort();
+                notifications.extend(validator_stake_change_notes);
+            }
 
-        for (identity, stake_action) in validator_stake_actions {
-            validator_classifications
-                .entry(identity)
-                .and_modify(|e| e.stake_action = Some(stake_action));
-        }
+            if first_time {
+                EpochClassification::new(epoch_classification)
+                    .save(epoch, &config.cluster_db_path())?;
+                generate_markdown(epoch, &config)?;
 
-        validator_notes.sort();
-        notifications.extend(validator_notes);
-
-        validator_stake_change_notes.sort();
-        notifications.extend(validator_stake_change_notes);
-    }
-
-    if first_time {
-        EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
-        generate_markdown(epoch, &config)?;
-
-        // Only notify the user if this is the first run for this epoch
-        for notification in notifications {
-            info!("notification: {}", notification);
-            notifier.send(&notification);
+                // Only notify the user if this is the first run for this epoch
+                for notification in notifications {
+                    info!("notification: {}", notification);
+                    notifier.send(&notification);
+                }
+            }
         }
     }
 
