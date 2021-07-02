@@ -5,7 +5,7 @@ use {
         classify_producers, db::*, get_confirmed_blocks, get_self_stake_by_vote_account, BoxResult,
         Config,
     },
-    bincode::{deserialize, serialized_size},
+    bincode::deserialize,
     lazy_static::lazy_static,
     log::*,
     postgres::types::Json,
@@ -14,27 +14,14 @@ use {
     serde::{Deserialize, Serialize},
     serde_json::{Map, Number, Value},
     solana_client::rpc_client::RpcClient,
+    solana_config_program::{get_config_data, ConfigKeys},
     solana_foundation_delegation_program_cli::get_participants_with_state,
     solana_sdk::pubkey::Pubkey,
-    solana_sdk::{clock::Epoch, commitment_config::CommitmentConfig, short_vec},
+    solana_sdk::{clock::Epoch, commitment_config::CommitmentConfig},
     std::collections::HashMap,
     std::convert::TryFrom,
     thiserror::private::DisplayAsDisplay,
 };
-
-// cut-and-paste from from solana/programs/config/src/lib.rs
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct ConfigKeys {
-    #[serde(with = "short_vec")]
-    pub keys: Vec<(Pubkey, bool)>,
-}
-
-fn get_config_data(bytes: &[u8]) -> Result<&[u8], bincode::Error> {
-    deserialize::<ConfigKeys>(bytes)
-        .and_then(|keys| serialized_size(&keys))
-        .map(|offset| &bytes[offset as usize..])
-}
-// end cut-and-paste from from solana/programs/config/src/lib.rs
 
 /// Exports data for the epoch specified in config.epoch to a postgres database
 pub fn export_to_db(epoch: Epoch, config: &Config, rpc_client: &RpcClient) -> BoxResult<()> {

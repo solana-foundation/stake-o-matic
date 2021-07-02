@@ -188,7 +188,6 @@ impl std::fmt::Display for Cluster {
     }
 }
 
-// #[derive(PartialEq, Clone, Copy)]
 enum Command {
     Export(Epoch),
     Stake(Box<dyn GenericStakePool>),
@@ -625,7 +624,6 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         )
         .get_matches();
 
-    let command_match = matches.subcommand_name().unwrap().to_string();
     let dry_run = !matches.is_present("confirm");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
@@ -695,15 +693,14 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         .get_health()
         .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
 
-    let command;
-    if command_match == "export" {
+    let command = if matches.subcommand_name().unwrap() == "export" {
         let (_, subcommand_matches) = matches.subcommand();
         let sub_matches = subcommand_matches.unwrap();
         // if export_epoch is not set, use the previous epoch
         let export_epoch = value_t!(sub_matches, "export_epoch", u64)
             .unwrap_or(rpc_client.get_epoch_info()?.epoch - 1);
 
-        command = Command::Export(export_epoch);
+        Command::Export(export_epoch)
     } else {
         let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
             ("stake-pool-v0", Some(matches)) => {
@@ -735,8 +732,8 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
             }
             _ => unreachable!(),
         };
-        command = Command::Stake(stake_pool);
-    }
+        Command::Stake(stake_pool)
+    };
 
     let config = Config {
         json_rpc_url,
