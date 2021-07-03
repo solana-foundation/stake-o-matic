@@ -304,7 +304,9 @@ impl Config {
     }
 
     fn cluster_db_path_for(&self, cluster: Cluster) -> PathBuf {
-        self.db_path.join(format!("data-{}", cluster))
+        // store db on different dir for score-all to not mess with SPL-stake-pool distribution usage
+        let dir = if self.score_all { "score-all" } else { "data" };
+        self.db_path.join(format!("{}-{}", dir, cluster))
     }
 
     fn cluster_db_path(&self) -> PathBuf {
@@ -611,26 +613,20 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
             SubCommand::with_name("score-all").about("Score all validators in the cluster")
             .arg(
                 Arg::with_name("score_max_commission")
-                    .index(1)
+                    .long("score-max-commission")
                     .takes_value(true)
                     .required(false)
                     .help("scoring max accepted commission")
             )
             .arg(
                 Arg::with_name("commission_point_discount")
-                    .index(2)
+                    .long ("commission-point-discount")
                     .takes_value(true)
                     .required(false)
                     .help("score to discount for each commission point")
             )
         )
         .get_matches();
-
-    let score_all = matches.is_present("score-all");
-    let score_max_commission = value_t!(matches, "score_max_commission", u8).unwrap_or(8);
-    let score_commission_discount =
-        value_t!(matches, "commission_point_discount", u32).unwrap_or(12_000);
-    let score_min_stake = value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(75.0));
 
     let dry_run = !matches.is_present("confirm");
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
@@ -691,6 +687,18 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         InfrastructureConcentrationAffects
     )
     .unwrap();
+
+    // score-all command and arguments
+    let (score_all, score_max_commission, score_commission_discount, score_min_stake) =
+        match matches.subcommand() {
+            ("score-all", Some(matches)) => (
+                true,
+                value_t!(matches, "score_max_commission", u8).unwrap_or(10),
+                value_t!(matches, "commission_point_discount", u32).unwrap_or(16_000),
+                value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
+            ),
+            _ => (false, 0, 0, 0),
+        };
 
     let config = Config {
         json_rpc_url,
@@ -1745,7 +1753,7 @@ fn main() -> BoxResult<()> {
 fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     let markdown_path = match config.markdown_path.as_ref() {
         Some(d) => d,
-        None => return Ok(()),
+        None => return Ok(()), // exit if !matches.is_present("markdown")
     };
     fs::create_dir_all(&markdown_path)?;
 
@@ -1908,7 +1916,9 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     for (identity, validator_markdown) in validators_markdown {
         let markdown = validator_markdown.join("\n");
         let filename = markdown_path.join(format!("Validator-{}.md", identity));
-        info!("Writing {}", filename.display());
+        if !config.score_all {
+            info!("Writing {}", filename.display())
+        }
         let mut file = File::create(filename)?;
         file.write_all(&markdown.into_bytes())?;
     }

@@ -1,8 +1,8 @@
 use {
     crate::{
-        Config,
         data_center_info::{DataCenterId, DataCenterInfo},
         generic_stake_pool::ValidatorStakeState,
+        Config,
     },
     log::*,
     serde::{Deserialize, Serialize},
@@ -61,7 +61,7 @@ pub struct ValidatorClassification {
 }
 
 impl ValidatorClassification {
-    pub fn score(&self, config:&Config) -> u64 {
+    pub fn score(&self, config: &Config) -> u64 {
         if self.score_discounts.can_halt_the_network_group
             || self.score_discounts.insufficient_self_stake
             || self.score_discounts.low_credits
@@ -70,13 +70,14 @@ impl ValidatorClassification {
         {
             0
         } else {
-            // if data_center_concentration = 100%, lose all score,
-            // data_center_concentration = 30%, lose 30% (rounded)
+            // if data_center_concentration = 25%, lose all score,
+            // data_center_concentration = 10%, lose 40% (rounded)
             let discount_because_data_center_concentration =
-                self.epoch_credits * (self.data_center_concentration as u64) / 100;
+                self.epoch_credits * (self.data_center_concentration as u64 * 4) / 100;
 
             // score discounts according to commission
-            let discount_because_commission = (self.commission as u32 * config.score_commission_discount) as u64;
+            let discount_because_commission =
+                (self.commission as u32 * config.score_commission_discount) as u64;
 
             //result
             self.epoch_credits
