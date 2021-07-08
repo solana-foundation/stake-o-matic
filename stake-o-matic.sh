@@ -56,10 +56,10 @@ fi
 
 if [[ $CLUSTER == "testnet" ]]; then
   ./solana-stake-o-matic "${TESTNET_ARGS[@]}"
-elif [[ $CLUSTER == "mainnet beta" ]]; then
+elif [[ $CLUSTER == "mainnet-beta" ]]; then
   ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}"
 else
-  echo "CLUSTER must be set to testnet or mainnet beta"
+  echo "CLUSTER must be set to testnet or mainnet-beta"
   exit 1
 fi
 
