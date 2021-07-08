@@ -1313,12 +1313,12 @@ fn classify(
             } else if active_stake > config.max_active_stake_lamports {
                 (
                     ValidatorStakeState::None,
-                    format!("active stake is too high: {}", Sol(active_stake)),
+                    format!("Active stake is too high: {}", Sol(active_stake)),
                 )
             } else if commission > config.max_commission {
                 (
                     ValidatorStakeState::None,
-                    format!("commission is too high: {}% commission", commission),
+                    format!("Commission is too high: {}% commission", commission),
                 )
             } else if let Some(insufficent_testnet_participation) =
                 insufficent_testnet_participation
@@ -1327,13 +1327,13 @@ fn classify(
             } else if poor_voters.contains(&identity) {
                 (
                     ValidatorStakeState::None,
-                    format!("insufficient vote credits: {}", vote_credits_msg),
+                    format!("Insufficient vote credits: {}", vote_credits_msg),
                 )
             } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
                 (
                     ValidatorStakeState::None,
                     format!(
-                        "Outdated solana release: {}",
+                        "Outdated Solana release: {}",
                         cluster_nodes_with_old_version
                             .get(&identity.to_string())
                             .unwrap()
@@ -1343,7 +1343,7 @@ fn classify(
                 (
                     ValidatorStakeState::Bonus,
                     format!(
-                        "good block production during epoch {}: {}",
+                        "Good block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1351,7 +1351,7 @@ fn classify(
                 (
                     ValidatorStakeState::Baseline,
                     format!(
-                        "poor block production during epoch {}: {}",
+                        "Poor block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1371,7 +1371,7 @@ fn classify(
                     } else {
                         ValidatorStakeState::Baseline
                     },
-                    format!("no leader slots; {}", vote_credits_msg),
+                    format!("No leader slots; {}", vote_credits_msg),
                 )
             };
 
