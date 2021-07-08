@@ -6,6 +6,16 @@ set -ex
 
 "$(dirname "$0")"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
 
+if [[ -n $FOLLOWER ]]; then
+  REQUIRE_CLASSIFICATION="--require-classification"
+else
+  MARKDOWN="--markdown"
+fi
+
+if [[ ! -d db ]]; then
+  git clone git@github.com:solana-labs/stake-o-matic.wiki.git db
+fi
+
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
   --url ${URL:?}
@@ -16,8 +26,9 @@ TESTNET_ARGS=(
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
   --min-release-version 1.7.3
-  --markdown
+  $MARKDOWN
   $CONFIRM
+  $REQUIRE_CLASSIFICATION
   stake-pool-v0
   --baseline-stake-amount 5000
   ${RESERVE_ACCOUNT_ADDRESS:?}
@@ -38,21 +49,14 @@ MAINNET_BETA_ARGS=(
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
   --min-testnet-participation 5 10
-  --markdown
+  $MARKDOWN
   $CONFIRM
+  $REQUIRE_CLASSIFICATION
   stake-pool-v0
   --baseline-stake-amount 25000
   ${RESERVE_ACCOUNT_ADDRESS:?}
   ${STAKE_AUTHORITY_KEYPAIR:?}
 )
-
-if [[ $BUILDKITE = true ]]; then
-  if [[ ! -d db ]]; then
-    git clone git@github.com:solana-labs/stake-o-matic.wiki.git db
-  fi
-  git config --global user.email maintainers@solana.foundation
-  git config --global user.name "Solana Maintainers"
-fi
 
 if [[ $CLUSTER == "testnet" ]]; then
   ./solana-stake-o-matic "${TESTNET_ARGS[@]}"
@@ -63,7 +67,9 @@ else
   exit 1
 fi
 
-if [[ $BUILDKITE = true ]]; then
+if [[ -z $FOLLOWER && $BUILDKITE = true ]]; then
+  git config --global user.email maintainers@solana.foundation
+  git config --global user.name "Solana Maintainers"
   cd db
   git add ./*
   if ! git diff-index --quiet HEAD; then
