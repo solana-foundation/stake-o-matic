@@ -8,7 +8,7 @@ set -ex
 
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
-  --url $URL
+  --url ${URL:?}
   --cluster testnet
   --quality-block-producer-percentage 30
   --max-poor-block-producer-percentage 20
@@ -20,13 +20,13 @@ TESTNET_ARGS=(
   $CONFIRM
   stake-pool-v0
   --baseline-stake-amount 5000
-  $RESERVE_ACCOUNT_ADDRESS
-  $STAKE_AUTHORITY_KEYPAIR
+  ${RESERVE_ACCOUNT_ADDRESS:?}
+  ${STAKE_AUTHORITY_KEYPAIR:?}
 )
 
 # shellcheck disable=SC2206
 MAINNET_BETA_ARGS=(
-  --url $URL
+  --url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
   --max-poor-block-producer-percentage 20
@@ -42,8 +42,8 @@ MAINNET_BETA_ARGS=(
   $CONFIRM
   stake-pool-v0
   --baseline-stake-amount 25000
-  $RESERVE_ACCOUNT_ADDRESS
-  $STAKE_AUTHORITY_KEYPAIR
+  ${RESERVE_ACCOUNT_ADDRESS:?}
+  ${STAKE_AUTHORITY_KEYPAIR:?}
 )
 
 if [[ $BUILDKITE = true ]]; then
