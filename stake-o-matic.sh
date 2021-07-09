@@ -30,7 +30,7 @@ TESTNET_ARGS=(
   $CONFIRM
   $REQUIRE_CLASSIFICATION
   stake-pool-v0
-  --baseline-stake-amount 5000
+  --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
   ${RESERVE_ACCOUNT_ADDRESS:?}
   ${STAKE_AUTHORITY_KEYPAIR:?}
 )
@@ -53,7 +53,7 @@ MAINNET_BETA_ARGS=(
   $CONFIRM
   $REQUIRE_CLASSIFICATION
   stake-pool-v0
-  --baseline-stake-amount 25000
+  --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
   ${RESERVE_ACCOUNT_ADDRESS:?}
   ${STAKE_AUTHORITY_KEYPAIR:?}
 )
