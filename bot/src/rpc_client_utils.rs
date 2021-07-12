@@ -1,8 +1,6 @@
 use {
     log::*,
-    reqwest::StatusCode,
     solana_client::{
-        client_error,
         rpc_client::RpcClient,
         rpc_config::RpcSimulateTransactionConfig,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
@@ -25,69 +23,6 @@ use {
         time::Duration,
     },
 };
-
-pub fn retry_rpc_operation<T, F>(mut retries: usize, op: F) -> client_error::Result<T>
-where
-    F: Fn() -> client_error::Result<T>,
-{
-    loop {
-        let result = op();
-
-        if let Err(client_error::ClientError {
-            kind: client_error::ClientErrorKind::Reqwest(ref reqwest_error),
-            ..
-        }) = result
-        {
-            let can_retry = reqwest_error.is_timeout()
-                || reqwest_error
-                    .status()
-                    .map(|s| s == StatusCode::BAD_GATEWAY || s == StatusCode::GATEWAY_TIMEOUT)
-                    .unwrap_or(false);
-            if can_retry && retries > 0 {
-                info!("RPC request timeout, {} retries remaining", retries);
-                retries -= 1;
-                continue;
-            }
-        }
-        return result;
-    }
-}
-
-/// Simulate a list of transactions and filter out the ones that will fail
-#[allow(dead_code)]
-pub fn simulate_transactions(
-    rpc_client: &RpcClient,
-    candidate_transactions: Vec<(Transaction, String)>,
-) -> client_error::Result<Vec<(Transaction, String)>> {
-    info!("Simulating {} transactions", candidate_transactions.len());
-    let mut simulated_transactions = vec![];
-    for (mut transaction, memo) in candidate_transactions {
-        transaction.message.recent_blockhash =
-            retry_rpc_operation(10, || rpc_client.get_recent_blockhash())?.0;
-
-        let sim_result = rpc_client.simulate_transaction_with_config(
-            &transaction,
-            RpcSimulateTransactionConfig {
-                sig_verify: false,
-                ..RpcSimulateTransactionConfig::default()
-            },
-        )?;
-
-        if sim_result.value.err.is_some() {
-            warn!(
-                "filtering out transaction due to simulation failure: {:?}: {}",
-                sim_result, memo
-            );
-        } else {
-            simulated_transactions.push((transaction, memo))
-        }
-    }
-    info!(
-        "Successfully simulating {} transactions",
-        simulated_transactions.len()
-    );
-    Ok(simulated_transactions)
-}
 
 pub struct SendAndConfirmTransactionResult {
     pub succeeded: HashSet<Signature>,
@@ -119,9 +54,16 @@ pub fn send_and_confirm_transactions(
 
     let mut pending_transactions = vec![];
     for mut transaction in transactions {
-        transaction.sign(&[authorized_staker], blockhash);
-
-        if !dry_run {
+        if dry_run {
+            rpc_client.simulate_transaction_with_config(
+                &transaction,
+                RpcSimulateTransactionConfig {
+                    sig_verify: false,
+                    ..RpcSimulateTransactionConfig::default()
+                },
+            )?;
+        } else {
+            transaction.sign(&[authorized_staker], blockhash);
             rpc_client.send_transaction(&transaction)?;
         }
         pending_transactions.push(transaction);
@@ -326,6 +268,7 @@ pub mod test {
         super::*,
         borsh::BorshSerialize,
         indicatif::{ProgressBar, ProgressStyle},
+        solana_client::client_error,
         solana_sdk::{
             borsh::get_packed_len, clock::Epoch, program_pack::Pack, pubkey::Pubkey,
             system_instruction,
