@@ -13,6 +13,7 @@ use {
         native_token::*,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
+        stake,
         transaction::Transaction,
     },
     std::{
@@ -247,7 +248,7 @@ pub fn get_all_stake(
     let mut total_stake_balance = 0;
 
     let all_stake_accounts = rpc_client.get_program_accounts_with_config(
-        &solana_stake_program::id(),
+        &stake::program::id(),
         RpcProgramAccountsConfig {
             filters: Some(vec![
                 // Filter by `Meta::authorized::staker`, which begins at byte offset 12
@@ -282,12 +283,15 @@ pub mod test {
         indicatif::{ProgressBar, ProgressStyle},
         solana_client::client_error,
         solana_sdk::{
-            borsh::get_packed_len, clock::Epoch, program_pack::Pack, pubkey::Pubkey,
+            borsh::get_packed_len,
+            clock::Epoch,
+            program_pack::Pack,
+            pubkey::Pubkey,
+            stake::{
+                instruction as stake_instruction,
+                state::{Authorized, Lockup},
+            },
             system_instruction,
-        },
-        solana_stake_program::{
-            stake_instruction,
-            stake_state::{Authorized, Lockup},
         },
         solana_vote_program::{vote_instruction, vote_state::VoteInit},
         spl_stake_pool::{
@@ -603,6 +607,7 @@ pub mod test {
                 stake_address,
                 &authorized_staker.pubkey(),
                 &validator_stake_address,
+                &stake_pool.reserve_stake,
                 pool_token_address,
                 &stake_pool.pool_mint,
                 &spl_token::id(),
