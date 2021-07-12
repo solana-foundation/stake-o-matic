@@ -1763,18 +1763,17 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 ) {
                     validator_markdown.push(format!("* Data Center: {}", current_data_center));
 
-                    if data_center_residency.len() > 1
-                        || (data_center_residency.len() == 1
-                            && !data_center_residency.contains_key(&current_data_center))
-                    {
-                        let data_center_residency = data_center_residency
-                            .keys()
-                            .cloned()
-                            .map(|data_center| data_center.to_string())
-                            .collect::<Vec<_>>();
+                    if !data_center_residency.is_empty() {
                         validator_markdown.push(format!(
                             "* Resident Data Center(s): {}",
-                            data_center_residency.join(", ")
+                            data_center_residency
+                                .iter()
+                                .map(|(data_center, seniority)| format!(
+                                    "{} (seniority: {})",
+                                    data_center, seniority
+                                ))
+                                .collect::<Vec<String>>()
+                                .join(",")
                         ));
                     }
                 }
