@@ -64,13 +64,16 @@ pub fn send_and_confirm_transactions(
             )?;
         } else {
             transaction.sign(&[authorized_staker], blockhash);
-            rpc_client.send_transaction(&transaction)?;
+            let _ = rpc_client.send_transaction(&transaction).map_err(|err| {
+                warn!("Failed to send transaction: {:?}", err);
+            });
         }
         pending_transactions.push(transaction);
     }
 
     let mut succeeded_transactions = HashSet::new();
     let mut failed_transactions = HashSet::new();
+    let mut max_expired_blockhashes = 5usize;
     loop {
         if pending_transactions.is_empty() {
             break;
@@ -80,11 +83,17 @@ pub fn send_and_confirm_transactions(
             .get_fee_calculator_for_blockhash(&blockhash)?
             .is_none();
         if blockhash_expired && !dry_run {
+            max_expired_blockhashes = max_expired_blockhashes.saturating_sub(1);
             warn!(
-                "Blockhash {} expired with {} pending transactions",
+                "Blockhash {} expired with {} pending transactions ({} retries remaining)",
                 blockhash,
-                pending_transactions.len()
+                pending_transactions.len(),
+                max_expired_blockhashes,
             );
+
+            if max_expired_blockhashes == 0 {
+                return Err("Too many expired blockhashes".into());
+            }
 
             blockhash = rpc_client.get_recent_blockhash()?.0;
 
@@ -93,8 +102,11 @@ pub fn send_and_confirm_transactions(
                 blockhash
             );
             for transaction in pending_transactions.iter_mut() {
+                assert!(!dry_run);
                 transaction.sign(&[authorized_staker], blockhash);
-                rpc_client.send_transaction(&transaction)?;
+                let _ = rpc_client.send_transaction(&transaction).map_err(|err| {
+                    warn!("Failed to resend transaction: {:?}", err);
+                });
             }
         }
 
