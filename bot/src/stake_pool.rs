@@ -3,7 +3,6 @@ use {
         generic_stake_pool::*,
         rpc_client_utils::{get_all_stake, send_and_confirm_transactions},
     },
-    borsh::BorshDeserialize,
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
@@ -11,10 +10,10 @@ use {
         native_token::{Sol, LAMPORTS_PER_SOL},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
+        stake::{self, instruction as stake_instruction, state::StakeState},
         system_instruction,
         transaction::Transaction,
     },
-    solana_stake_program::{stake_instruction, stake_state::StakeState},
     spl_stake_pool::{
         self, find_stake_program_address, find_transient_stake_program_address,
         stake_program::split_only,
@@ -67,7 +66,7 @@ fn staker_transient_stake_address(authorized_staker: Pubkey, vote_address: Pubke
     Pubkey::create_with_seed(
         &authorized_staker,
         &staker_transient_stake_address_seed(vote_address),
-        &solana_stake_program::id(),
+        &stake::program::id(),
     )
     .unwrap()
 }
@@ -96,7 +95,7 @@ pub fn new(
     }
 
     let account_data = rpc_client.get_account_data(&stake_pool_address)?;
-    let stake_pool = StakePool::try_from_slice(account_data.as_slice())
+    let stake_pool = try_from_slice_unchecked::<StakePool>(account_data.as_slice())
         .map_err(|err| format!("Invalid stake pool {}: {}", stake_pool_address, err))?;
     let account_data = rpc_client.get_account_data(&stake_pool.validator_list)?;
     let validator_list = try_from_slice_unchecked::<ValidatorList>(&account_data.as_slice())
@@ -121,6 +120,7 @@ impl StakePoolOMatic {
     /// * call into the stake pool program to update the accounting of lamports
     /// * update the StakePool and ValidatorList objects based on the accounting
     pub fn epoch_update(&mut self, rpc_client: &RpcClient) -> Result<(), Box<dyn error::Error>> {
+        self.update(rpc_client)?;
         update_stake_pool(
             rpc_client,
             &self.authorized_staker,
@@ -136,7 +136,7 @@ impl StakePoolOMatic {
     /// from the network.
     pub fn update(&mut self, rpc_client: &RpcClient) -> Result<(), Box<dyn error::Error>> {
         let account_data = rpc_client.get_account_data(&self.stake_pool_address)?;
-        self.stake_pool = StakePool::try_from_slice(account_data.as_slice())
+        self.stake_pool = try_from_slice_unchecked::<StakePool>(account_data.as_slice())
             .map_err(|err| format!("Invalid stake pool {}: {}", self.stake_pool_address, err))?;
         let account_data = rpc_client.get_account_data(&self.stake_pool.validator_list)?;
         self.validator_list = try_from_slice_unchecked::<ValidatorList>(&account_data.as_slice())
@@ -257,10 +257,32 @@ impl GenericStakePool for StakePoolOMatic {
             Sol(total_bonus_stake_amount)
         );
 
+        let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
+
         let bonus_stake_amount = if bonus_stake_node_count == 0 {
             0
         } else {
-            total_bonus_stake_amount / (bonus_stake_node_count as u64)
+            let bonus_stake_estimate = total_bonus_stake_amount / (bonus_stake_node_count as u64);
+            // each increase requires use of the rent exemption, so we get the number
+            // of increases that may be required, and be sure to leave that amount
+            // out of the bonus stake amount
+            let number_of_increases = desired_validator_stake.iter().fold(0, |mut acc, x| {
+                if let Some(validator_list_entry) = self.validator_list.find(&x.vote_address) {
+                    if x.stake_state == ValidatorStakeState::Bonus
+                        && validator_list_entry.stake_lamports() < bonus_stake_estimate
+                    {
+                        acc += 1;
+                    }
+                    if x.stake_state == ValidatorStakeState::Baseline
+                        && validator_list_entry.stake_lamports() < self.baseline_stake_amount
+                    {
+                        acc += 1;
+                    }
+                }
+                acc
+            });
+            total_bonus_stake_amount.saturating_sub(number_of_increases * stake_rent_exemption)
+                / (bonus_stake_node_count as u64)
         };
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
@@ -268,7 +290,7 @@ impl GenericStakePool for StakePoolOMatic {
         let reserve_stake_balance = get_available_stake_balance(
             rpc_client,
             self.stake_pool.reserve_stake,
-            MIN_STAKE_RESERVE_BALANCE,
+            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
         )
         .map_err(|err| {
             format!(
@@ -454,18 +476,19 @@ fn update_stake_pool(
     stake_pool: &StakePool,
     validator_list: &ValidatorList,
 ) -> Result<(), Box<dyn error::Error>> {
-    let instructions = spl_stake_pool::instruction::update_stake_pool(
-        stake_pool,
-        validator_list,
-        stake_pool_address,
-        false, // no_merge
-    );
+    let (update_list_instructions, final_instructions) =
+        spl_stake_pool::instruction::update_stake_pool(
+            &spl_stake_pool::id(),
+            stake_pool,
+            validator_list,
+            stake_pool_address,
+            false, // no_merge
+        );
 
-    let mut transactions: Vec<Transaction> = instructions
+    let transactions: Vec<Transaction> = update_list_instructions
         .into_iter()
         .map(|i| Transaction::new_with_payer(&[i], Some(&payer.pubkey())))
         .collect();
-    let update_balance_transaction = transactions.split_off(transactions.len() - 1);
 
     if !send_and_confirm_transactions(rpc_client, false, transactions, payer)?
         .failed
@@ -474,7 +497,12 @@ fn update_stake_pool(
         return Err("Failed to update stake pool".into());
     }
 
-    if !send_and_confirm_transactions(rpc_client, false, update_balance_transaction, payer)?
+    let transactions: Vec<Transaction> = final_instructions
+        .into_iter()
+        .map(|i| Transaction::new_with_payer(&[i], Some(&payer.pubkey())))
+        .collect();
+
+    if !send_and_confirm_transactions(rpc_client, false, transactions, payer)?
         .failed
         .is_empty()
     {
@@ -512,19 +540,21 @@ fn remove_validators_from_pool(
                 )
                 .0;
                 let mut instructions = vec![];
-                if validator_list_entry.stake_lamports > stake_rent_exemption {
+                if validator_list_entry.active_stake_lamports > stake_rent_exemption {
                     instructions.push(
                         spl_stake_pool::instruction::decrease_validator_stake_with_vote(
+                            &spl_stake_pool::id(),
                             stake_pool,
                             stake_pool_address,
                             &vote_address,
-                            validator_list_entry.stake_lamports,
+                            validator_list_entry.active_stake_lamports,
                         ),
                     );
                 }
 
                 instructions.push(
                     spl_stake_pool::instruction::remove_validator_from_pool_with_vote(
+                        &spl_stake_pool::id(),
                         stake_pool,
                         stake_pool_address,
                         &vote_address,
@@ -602,8 +632,10 @@ fn add_validators_to_pool(
                 if stake_activation.state == StakeActivationState::Active {
                     info!("Adding validator {} to the pool", identity);
                     let mut instructions = vec![];
-                    if stake_account.lamports > min_stake_account_balance {
-                        let split_lamports = stake_account.lamports - min_stake_account_balance;
+                    let split_lamports = stake_activation
+                        .active
+                        .saturating_sub(MIN_STAKE_ACCOUNT_BALANCE);
+                    if split_lamports > 0 {
                         let transient_stake_address = staker_transient_stake_address(
                             authorized_staker.pubkey(),
                             *vote_address,
@@ -621,7 +653,7 @@ fn add_validators_to_pool(
                             &transient_stake_address_seed,
                             stake_rent_exemption,
                             mem::size_of::<StakeState>() as u64,
-                            &solana_stake_program::id(),
+                            &stake::program::id(),
                         ));
 
                         instructions.push(split_only(
@@ -635,8 +667,22 @@ fn add_validators_to_pool(
                             &authorized_staker.pubkey(),
                         ));
                     }
+                    // if any extra lamports on the account after the split, just withdraw them
+                    let additional_lamports = stake_account
+                        .lamports
+                        .saturating_sub(min_stake_account_balance + split_lamports);
+                    if additional_lamports > 0 {
+                        instructions.push(stake_instruction::withdraw(
+                            &stake_address,
+                            &authorized_staker.pubkey(),
+                            &authorized_staker.pubkey(),
+                            additional_lamports,
+                            None,
+                        ));
+                    }
                     instructions.push(
                         spl_stake_pool::instruction::add_validator_to_pool_with_vote(
+                            &spl_stake_pool::id(),
                             stake_pool,
                             stake_pool_address,
                             vote_address,
@@ -756,6 +802,7 @@ fn create_validator_stake_accounts(
 
                 let instruction =
                     spl_stake_pool::instruction::create_validator_stake_account_with_vote(
+                        &spl_stake_pool::id(),
                         stake_pool_address,
                         &authorized_staker.pubkey(),
                         &authorized_staker.pubkey(),
@@ -816,6 +863,8 @@ where
     let mut baseline_stake = vec![];
     let mut bonus_stake = vec![];
 
+    let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
+
     for validator_stake in desired_validator_stake {
         match validator_list.find(&validator_stake.vote_address) {
             None => warn!(
@@ -833,7 +882,7 @@ where
                     }
                 };
 
-                list.push((validator_entry.stake_lamports, validator_stake));
+                list.push((validator_entry.stake_lamports(), validator_stake));
             }
         }
     }
@@ -874,6 +923,7 @@ where
                 transactions.push(Transaction::new_with_payer(
                     &[
                         spl_stake_pool::instruction::decrease_validator_stake_with_vote(
+                            &spl_stake_pool::id(),
                             stake_pool,
                             stake_pool_address,
                             &vote_address,
@@ -886,17 +936,20 @@ where
             }
         } else if balance < desired_balance {
             let mut amount_to_add = desired_balance - balance;
+            let mut amount_to_take_from_reserve = amount_to_add + stake_rent_exemption;
 
             if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
                 format!("not adding {} (amount too small)", Sol(amount_to_add))
             } else {
-                if amount_to_add > reserve_stake_balance {
+                if amount_to_take_from_reserve > reserve_stake_balance {
                     trace!(
-                        "note: amount_to_add > reserve_stake_balance: {} > {}",
-                        amount_to_add,
+                        "note: amount_to_take_from_reserve > reserve_stake_balance: {} > {}",
+                        amount_to_take_from_reserve,
                         reserve_stake_balance
                     );
-                    amount_to_add = reserve_stake_balance;
+                    amount_to_take_from_reserve = reserve_stake_balance;
+                    amount_to_add =
+                        amount_to_take_from_reserve.saturating_sub(stake_rent_exemption);
                 }
 
                 if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
@@ -906,12 +959,13 @@ where
                     unfunded_validators.insert(identity);
                     "reserve depleted".to_string()
                 } else {
-                    reserve_stake_balance -= amount_to_add;
+                    reserve_stake_balance -= amount_to_take_from_reserve;
                     info!("adding {} stake", Sol(amount_to_add));
 
                     transactions.push(Transaction::new_with_payer(
                         &[
                             spl_stake_pool::instruction::increase_validator_stake_with_vote(
+                                &spl_stake_pool::id(),
                                 stake_pool,
                                 stake_pool_address,
                                 &vote_address,
@@ -1099,6 +1153,7 @@ mod test {
             &authorized_staker.pubkey(),
         )
         .unwrap();
+        let num_validators = 3;
         let pool_reserve_stake = create_stake_account(
             &rpc_client,
             &authorized_staker,
@@ -1107,7 +1162,6 @@ mod test {
         )
         .unwrap()
         .pubkey();
-        let num_validators = 3;
         create_stake_pool(
             &rpc_client,
             &authorized_staker,
@@ -1126,8 +1180,10 @@ mod test {
             create_validators(&rpc_client, &authorized_staker, num_validators).unwrap();
 
         let baseline_stake_amount = sol_to_lamports(10.);
+        let bonus_stake_amount = sol_to_lamports(100.);
         let total_stake_amount =
-            (baseline_stake_amount + sol_to_lamports(100.)) * validators.len() as u64;
+            (baseline_stake_amount + bonus_stake_amount + stake_rent_exemption)
+                * validators.len() as u64;
         let total_stake_amount_plus_min =
             total_stake_amount + stake_rent_exemption + MIN_STAKE_RESERVE_BALANCE;
 
@@ -1308,8 +1364,8 @@ mod test {
             &rpc_client,
             &validators,
             ValidatorStakeState::Bonus,
-            total_stake_amount / validators.len() as u64,
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
+            baseline_stake_amount + bonus_stake_amount,
+            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption * (1 + validators.len() as u64),
         );
 
         // ===========================================================
@@ -1347,8 +1403,9 @@ mod test {
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
         // needs one more epoch for the additional bonus stake to arrive
         for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.]) {
+            let expected_sol_balance = sol_to_lamports(*expected_sol_balance);
             assert_eq!(
-                sol_to_lamports(*expected_sol_balance),
+                expected_sol_balance,
                 validator_stake_balance(&rpc_client, &stake_pool.pubkey(), validator),
                 "stake balance mismatch for validator {}, expected {}",
                 validator.identity,
@@ -1373,16 +1430,18 @@ mod test {
             rpc_client
                 .get_balance(&stake_o_matic.stake_pool.reserve_stake)
                 .unwrap(),
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
+            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption * 2, // additional withdrawn stake rent exemption
         );
 
         // after the second epoch, validator 2 is now has all the bonus stake
-        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 320.]) {
+        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 320.00456576]) {
+            let expected_sol_balance = sol_to_lamports(*expected_sol_balance);
             assert_eq!(
-                sol_to_lamports(*expected_sol_balance),
+                expected_sol_balance,
                 validator_stake_balance(&rpc_client, &stake_pool.pubkey(), validator),
-                "stake balance mismatch for validator {}",
-                validator.identity
+                "stake balance mismatch for validator {}, expected {}",
+                validator.identity,
+                expected_sol_balance,
             );
         }
 

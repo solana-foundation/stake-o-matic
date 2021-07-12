@@ -10,9 +10,9 @@ use {
         native_token::{Sol, LAMPORTS_PER_SOL},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
+        stake::{self, instruction as stake_instruction, state::StakeState},
         transaction::Transaction,
     },
-    solana_stake_program::{stake_instruction, stake_state::StakeState},
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -77,7 +77,7 @@ fn validator_stake_address(authorized_staker: Pubkey, vote_address: Pubkey) -> P
     Pubkey::create_with_seed(
         &authorized_staker,
         &validator_stake_address_seed(vote_address),
-        &solana_stake_program::id(),
+        &stake::program::id(),
     )
     .unwrap()
 }
@@ -86,7 +86,7 @@ fn validator_transient_stake_address(authorized_staker: Pubkey, vote_address: Pu
     Pubkey::create_with_seed(
         &authorized_staker,
         &validator_transient_stake_address_seed(vote_address),
-        &solana_stake_program::id(),
+        &stake::program::id(),
     )
     .unwrap()
 }
@@ -439,7 +439,7 @@ fn stake_accounts_have_same_credits_observed(
     stake_account1: &Account,
     stake_account2: &Account,
 ) -> Result<bool, Box<dyn error::Error>> {
-    use solana_stake_program::stake_state::Stake;
+    use solana_sdk::stake::state::Stake;
 
     let stake_state1 = bincode::deserialize(stake_account1.data.as_slice())
         .map_err(|err| format!("Invalid stake account 1: {}", err))?;

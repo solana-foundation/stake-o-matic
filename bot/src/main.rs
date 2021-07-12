@@ -23,10 +23,10 @@ use {
         native_token::*,
         pubkey::Pubkey,
         slot_history::{self, SlotHistory},
+        stake::{self, state::StakeState},
         stake_history::StakeHistory,
         sysvar,
     },
-    solana_stake_program::stake_state::StakeState,
     solana_vote_program::vote_state::VoteState,
     std::{
         collections::{HashMap, HashSet},
@@ -945,7 +945,7 @@ fn get_self_stake_by_vote_account(
     }
 
     info!("Fetching stake accounts...");
-    let all_stake_accounts = rpc_client.get_program_accounts(&solana_stake_program::id())?;
+    let all_stake_accounts = rpc_client.get_program_accounts(&stake::program::id())?;
 
     let stake_history_account = rpc_client
         .get_account_with_commitment(&sysvar::stake_history::id(), CommitmentConfig::finalized())?
