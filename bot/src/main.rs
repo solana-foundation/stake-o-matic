@@ -695,9 +695,28 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(180));
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
-    rpc_client
-        .get_health()
-        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
+    {
+        let mut retries = 12u8;
+        let retry_delay = Duration::from_secs(10);
+        loop {
+            match rpc_client.get_health() {
+                Ok(()) => break,
+                Err(err) => {
+                    warn!("RPC endpoint is unhealthy: {:?}", err);
+                }
+            }
+            if retries == 0 {
+                process::exit(1);
+            }
+            retries = retries.saturating_sub(1);
+            info!(
+                "{} retries remaining, sleeping for {} seconds",
+                retries,
+                retry_delay.as_secs()
+            );
+            std::thread::sleep(retry_delay);
+        }
+    }
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
