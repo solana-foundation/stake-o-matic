@@ -639,7 +639,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         Cluster::MainnetBeta => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
         Cluster::Testnet => value_t!(matches, "json_rpc_url", String)
-            .unwrap_or_else(|_| "http://testnet.solana.com".into()),
+            .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let markdown_path = if matches.is_present("markdown") {
@@ -700,7 +700,10 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         let retry_delay = Duration::from_secs(10);
         loop {
             match rpc_client.get_health() {
-                Ok(()) => break,
+                Ok(()) => {
+                    info!("RPC endpoint healthy");
+                    break;
+                }
                 Err(err) => {
                     warn!("RPC endpoint is unhealthy: {:?}", err);
                 }
