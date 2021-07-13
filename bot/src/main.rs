@@ -598,7 +598,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .long("baseline-stake-amount")
                     .value_name("SOL")
                     .takes_value(true)
-                    .default_value("5000")
+                    .default_value("5")
                     .validator(is_amount)
             )
         )
