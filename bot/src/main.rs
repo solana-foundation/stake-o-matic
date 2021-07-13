@@ -723,8 +723,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
+            let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
+            let reserve_stake_address = pubkey_of(matches, "reserve_stake_address").unwrap();
             let min_reserve_stake_balance =
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
@@ -738,8 +738,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             )?)
         }
         ("stake-pool", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let pool_address = pubkey_of(&matches, "pool_address").unwrap();
+            let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
+            let pool_address = pubkey_of(matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
             Box::new(stake_pool::new(
@@ -1100,7 +1100,7 @@ fn classify(
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let (vote_account_info, total_active_stake) = get_vote_account_info(&rpc_client, last_epoch)?;
+    let (vote_account_info, total_active_stake) = get_vote_account_info(rpc_client, last_epoch)?;
 
     let self_stake_by_vote_account =
         get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
@@ -1144,7 +1144,7 @@ fn classify(
         block_producer_classification_reason,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
-    ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
+    ) = classify_block_producers(rpc_client, config, last_epoch)?;
 
     let not_in_leader_schedule: ValidatorList = validator_list
         .difference(
@@ -1167,7 +1167,7 @@ fn classify(
         min_epoch_credits,
         avg_epoch_credits,
         too_many_poor_voters,
-    ) = classify_poor_voters(&config, &vote_account_info);
+    ) = classify_poor_voters(config, &vote_account_info);
 
     let mut notes = vec![
         format!(
@@ -1730,7 +1730,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         {
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
-            validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
+            validator_classifications.sort_by(|a, b| a.0.cmp(b.0));
             for (identity, classification) in validator_classifications {
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 

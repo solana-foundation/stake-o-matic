@@ -415,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .global(true)
                 .help("Configuration file to use");
             if let Some(ref config_file) = *solana_cli_config::CONFIG_FILE {
-                arg.default_value(&config_file)
+                arg.default_value(config_file)
             } else {
                 arg
             }
@@ -648,7 +648,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 String
             )),
             default_signer: default_signer
-                .signer_from_path(&matches, &mut wallet_manager)
+                .signer_from_path(matches, &mut wallet_manager)
                 .unwrap_or_else(|err| {
                     eprintln!("error: {}", err);
                     exit(1);
