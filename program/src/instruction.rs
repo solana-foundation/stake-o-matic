@@ -70,7 +70,7 @@ impl Pack for RegistryInstruction {
         let mut mut_src: &[u8] = src;
         Self::deserialize(&mut mut_src).map_err(|err| {
             msg!(
-                "Error: failed to deserialize feature proposal instruction: {}",
+                "Error: failed to deserialize instruction: {}",
                 err
             );
             ProgramError::InvalidInstructionData
