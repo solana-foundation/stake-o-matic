@@ -589,7 +589,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .index(1)
                                 .required(true)
-                                .help("Testnet or Mainnet validator identity"),
+                                .help("Address of account to rewrite"),
                         )
                         .arg(
                             Arg::with_name("testnet")
