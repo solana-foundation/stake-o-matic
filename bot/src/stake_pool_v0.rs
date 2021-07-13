@@ -815,7 +815,7 @@ mod test {
     };
 
     fn num_stake_accounts(rpc_client: &RpcClient, authorized_staker: &Keypair) -> usize {
-        get_all_stake(&rpc_client, authorized_staker.pubkey())
+        get_all_stake(rpc_client, authorized_staker.pubkey())
             .unwrap()
             .0
             .len()
@@ -856,7 +856,7 @@ mod test {
             num_stake_accounts(rpc_client, &stake_pool.authorized_staker),
             1 + 2 * validators.len()
         );
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
+        let _epoch = wait_for_next_epoch(rpc_client).unwrap();
         stake_pool
             .apply(rpc_client, false, &desired_validator_stake)
             .unwrap();

@@ -105,7 +105,7 @@ pub fn send_and_confirm_transactions(
             for transaction in pending_transactions.iter_mut() {
                 assert!(!dry_run);
                 transaction.sign(&[authorized_staker], blockhash);
-                let _ = rpc_client.send_transaction(&transaction).map_err(|err| {
+                let _ = rpc_client.send_transaction(transaction).map_err(|err| {
                     warn!("Failed to resend transaction: {:?}", err);
                 });
             }
@@ -223,8 +223,8 @@ pub fn get_vote_account_info(
                     } else {
                         0
                     };
-                    let identity = Pubkey::from_str(&node_pubkey).unwrap();
-                    let vote_address = Pubkey::from_str(&vote_pubkey).unwrap();
+                    let identity = Pubkey::from_str(node_pubkey).unwrap();
+                    let vote_address = Pubkey::from_str(vote_pubkey).unwrap();
 
                     VoteAccountInfo {
                         identity,
@@ -395,7 +395,7 @@ pub mod test {
     ) -> client_error::Result<()> {
         let transaction = Transaction::new_signed_with_payer(
             &[stake_instruction::delegate_stake(
-                &stake_address,
+                stake_address,
                 &authority.pubkey(),
                 vote_address,
             )],
@@ -425,8 +425,8 @@ pub mod test {
             let vote_keypair = Keypair::new();
 
             create_vote_account(
-                &rpc_client,
-                &authorized_staker,
+                rpc_client,
+                authorized_staker,
                 &identity_keypair,
                 &vote_keypair,
             )?;
@@ -460,7 +460,7 @@ pub mod test {
                 spl_token::instruction::initialize_mint(
                     &spl_token::id(),
                     &mint_keypair.pubkey(),
-                    &manager,
+                    manager,
                     None,
                     0,
                 )

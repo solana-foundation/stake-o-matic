@@ -98,7 +98,7 @@ pub fn new(
     let stake_pool = try_from_slice_unchecked::<StakePool>(account_data.as_slice())
         .map_err(|err| format!("Invalid stake pool {}: {}", stake_pool_address, err))?;
     let account_data = rpc_client.get_account_data(&stake_pool.validator_list)?;
-    let validator_list = try_from_slice_unchecked::<ValidatorList>(&account_data.as_slice())
+    let validator_list = try_from_slice_unchecked::<ValidatorList>(account_data.as_slice())
         .map_err(|err| {
             format!(
                 "Invalid validator list {}: {}",
@@ -139,13 +139,13 @@ impl StakePoolOMatic {
         self.stake_pool = try_from_slice_unchecked::<StakePool>(account_data.as_slice())
             .map_err(|err| format!("Invalid stake pool {}: {}", self.stake_pool_address, err))?;
         let account_data = rpc_client.get_account_data(&self.stake_pool.validator_list)?;
-        self.validator_list = try_from_slice_unchecked::<ValidatorList>(&account_data.as_slice())
+        self.validator_list = try_from_slice_unchecked::<ValidatorList>(account_data.as_slice())
             .map_err(|err| {
-            format!(
-                "Invalid validator list {}: {}",
-                self.stake_pool.validator_list, err
-            )
-        })?;
+                format!(
+                    "Invalid validator list {}: {}",
+                    self.stake_pool.validator_list, err
+                )
+            })?;
         Ok(())
     }
 }
@@ -1079,7 +1079,7 @@ mod test {
             .unwrap();
 
         assert!(num_stake_accounts(rpc_client, pool_withdraw_authority) > 1 + validators.len());
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
+        let _epoch = wait_for_next_epoch(rpc_client).unwrap();
         stake_o_matic
             .apply(rpc_client, false, &desired_validator_stake)
             .unwrap();
