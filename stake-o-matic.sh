@@ -29,11 +29,6 @@ TESTNET_ARGS=(
   $MARKDOWN
   $CONFIRM
   $REQUIRE_CLASSIFICATION
-  stake-pool-v0
-  --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
-  --min-reserve-stake-balance ${MIN_RESERVE_STAKE_BALANCE:?}
-  ${RESERVE_ACCOUNT_ADDRESS:?}
-  ${STAKE_AUTHORITY_KEYPAIR:?}
 )
 
 # shellcheck disable=SC2206
@@ -53,6 +48,10 @@ MAINNET_BETA_ARGS=(
   $MARKDOWN
   $CONFIRM
   $REQUIRE_CLASSIFICATION
+)
+
+# shellcheck disable=SC2206
+NOT_A_STAKE_POOL_ARGS=(
   stake-pool-v0
   --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
   --min-reserve-stake-balance ${MIN_RESERVE_STAKE_BALANCE:?}
@@ -60,12 +59,22 @@ MAINNET_BETA_ARGS=(
   ${STAKE_AUTHORITY_KEYPAIR:?}
 )
 
-if [[ $CLUSTER == "testnet" ]]; then
-  ./solana-stake-o-matic "${TESTNET_ARGS[@]}"
+# shellcheck disable=SC2206
+STAKE_POOL_ARGS=(
+  stake-pool
+  --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
+  ${RESERVE_ACCOUNT_ADDRESS:?}
+  ${STAKE_AUTHORITY_KEYPAIR:?}
+)
+
+if [[ $CLUSTER = "testnet-stake-pool" ]]; then
+  ./solana-stake-o-matic "${TESTNET_ARGS[@]}" "${STAKE_POOL_ARGS[@]}"
+elif [[ $CLUSTER == "testnet" ]]; then
+  ./solana-stake-o-matic "${TESTNET_ARGS[@]}" "${NOT_A_STAKE_POOL_ARGS[@]}"
 elif [[ $CLUSTER == "mainnet-beta" ]]; then
-  ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}"
+  ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}" "${NOT_A_STAKE_POOL_ARGS[@]}"
 else
-  echo "CLUSTER must be set to testnet or mainnet-beta"
+  echo "CLUSTER must be set to testnet-stake-pool, testnet, or mainnet-beta"
   exit 1
 fi
 
