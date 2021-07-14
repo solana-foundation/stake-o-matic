@@ -1643,7 +1643,6 @@ fn main() -> BoxResult<()> {
     if first_time {
         EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
         generate_markdown(epoch, &config)?;
-
     }
 
     if post_notifications {
