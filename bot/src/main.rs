@@ -1541,12 +1541,13 @@ fn main() -> BoxResult<()> {
             .unwrap_or_default()
             .into_current();
 
-    let (mut epoch_classification, first_time) =
+    let (mut epoch_classification, first_time, post_notifications) =
         if EpochClassification::exists(epoch, &config.cluster_db_path()) {
             info!("Classification for epoch {} already exists", epoch);
             (
                 EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
                 false,
+                config.require_classification,
             )
         } else {
             if config.require_classification {
@@ -1563,6 +1564,7 @@ fn main() -> BoxResult<()> {
                         .validator_classifications
                         .as_ref(),
                 )?,
+                true,
                 true,
             )
         };
@@ -1642,7 +1644,9 @@ fn main() -> BoxResult<()> {
         EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
         generate_markdown(epoch, &config)?;
 
-        // Only notify the user if this is the first run for this epoch
+    }
+
+    if post_notifications {
         for notification in notifications {
             info!("notification: {}", notification);
             notifier.send(&notification);
