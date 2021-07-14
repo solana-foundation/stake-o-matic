@@ -31,6 +31,7 @@ TESTNET_ARGS=(
   $REQUIRE_CLASSIFICATION
   stake-pool-v0
   --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
+  --min-reserve-stake-balance ${MIN_RESERVE_STAKE_BALANCE:?}
   ${RESERVE_ACCOUNT_ADDRESS:?}
   ${STAKE_AUTHORITY_KEYPAIR:?}
 )
@@ -54,6 +55,7 @@ MAINNET_BETA_ARGS=(
   $REQUIRE_CLASSIFICATION
   stake-pool-v0
   --baseline-stake-amount ${BASELINE_STAKE_AMOUNT:?}
+  --min-reserve-stake-balance ${MIN_RESERVE_STAKE_BALANCE:?}
   ${RESERVE_ACCOUNT_ADDRESS:?}
   ${STAKE_AUTHORITY_KEYPAIR:?}
 )
