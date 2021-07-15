@@ -8,8 +8,10 @@ use {
     bincode::deserialize,
     lazy_static::lazy_static,
     log::*,
+    native_tls::TlsConnector,
     postgres::types::Json,
-    postgres::{Client, NoTls, Transaction},
+    postgres::{Client, Transaction},
+    postgres_native_tls::MakeTlsConnector,
     regex::Regex,
     serde::{Deserialize, Serialize},
     serde_json::{Map, Number, Value},
@@ -47,7 +49,14 @@ pub fn export_to_db(epoch: Epoch, config: &Config, rpc_client: &RpcClient) -> Bo
             );
         }
         let db_params = &*db_url.unwrap();
-        db_transaction_client = Some(Client::connect(db_params, NoTls)?);
+        let connector = TlsConnector::builder()
+            .danger_accept_invalid_hostnames(true)
+            .danger_accept_invalid_certs(true)
+            .build()?;
+
+        let connector = MakeTlsConnector::new(connector);
+
+        db_transaction_client = Some(Client::connect(db_params, connector)?);
     }
 
     // yml files provide data that explains why validators received stake in a given epoch. So, e.g. `epoch-184.yml` provides information about what happened in epoch 183.
@@ -133,7 +142,12 @@ pub fn export_to_db(epoch: Epoch, config: &Config, rpc_client: &RpcClient) -> Bo
             .as_ref()
             .unwrap();
         let data_center_info = id_to_data_center_info.get(current_data_center).unwrap();
+        if key_to_info.get(&validator_pk).is_none() {
+            info!("No vote account info for {}; skipping", validator_pk);
+            continue;
+        }
         let vote_account_info = key_to_info.get(&validator_pk).unwrap();
+
         let vote_address = vote_account_info.vote_address;
         let self_stake = self_stake_by_vote_account.get(&vote_address).unwrap_or(&0);
 

@@ -659,7 +659,7 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         Cluster::MainnetBeta => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
         Cluster::Testnet => value_t!(matches, "json_rpc_url", String)
-            .unwrap_or_else(|_| "http://testnet.solana.com".into()),
+            .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let markdown_path = if matches.is_present("markdown") {

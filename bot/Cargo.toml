@@ -39,6 +39,9 @@ spl-stake-pool = "0.2"
 spl-token = "3.1"
 thiserror = "1.0.25"
 postgres = {version = "0.19.1" , features = ["with-serde_json-1"] }
+native-tls = "0.2.7"
+postgres-native-tls = "0.5.0"
+
 lazy_static = "1.4.0"
 
 [dev-dependencies]
