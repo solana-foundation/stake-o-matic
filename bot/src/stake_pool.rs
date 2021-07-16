@@ -463,15 +463,13 @@ fn withdraw_inactive_stakes_to_staker(
 
     if dry_run {
         Ok(())
+    } else if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
+        Err("Failed to add validators to the stake pool".into())
     } else {
-        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-            .failed
-            .is_empty()
-        {
-            Err("Failed to add validators to the stake pool".into())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
@@ -591,15 +589,13 @@ fn remove_validators_from_pool(
 
     if dry_run {
         Ok(())
+    } else if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
+        Err("Failed to add validators to the stake pool".into())
     } else {
-        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-            .failed
-            .is_empty()
-        {
-            Err("Failed to add validators to the stake pool".into())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
@@ -713,15 +709,13 @@ fn add_validators_to_pool(
 
     if dry_run {
         Ok(())
+    } else if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
+        Err("Failed to add validators to the stake pool".into())
     } else {
-        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-            .failed
-            .is_empty()
-        {
-            Err("Failed to add validators to the stake pool".into())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
@@ -848,15 +842,13 @@ fn create_validator_stake_accounts(
 
     if dry_run {
         Ok(())
+    } else if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+        .failed
+        .is_empty()
+    {
+        Err("Failed to create validator stake accounts".into())
     } else {
-        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-            .failed
-            .is_empty()
-        {
-            Err("Failed to create validator stake accounts".into())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
