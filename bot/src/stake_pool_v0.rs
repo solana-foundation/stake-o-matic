@@ -196,7 +196,7 @@ impl GenericStakePool for StakePool {
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
-        let reserve_stake_balance = get_available_stake_balance(
+        let reserve_stake_balance = get_available_reserve_stake_balance(
             rpc_client,
             self.reserve_stake_address,
             self.min_reserve_stake_balance,
@@ -251,26 +251,27 @@ impl GenericStakePool for StakePool {
     }
 }
 
-// Get the balance of a stake account excluding the reserve
-fn get_available_stake_balance(
+fn get_available_reserve_stake_balance(
     rpc_client: &RpcClient,
-    stake_address: Pubkey,
+    reserve_stake_address: Pubkey,
     reserve_stake_balance: u64,
 ) -> Result<u64, Box<dyn error::Error>> {
-    let balance = rpc_client.get_balance(&stake_address).map_err(|err| {
-        format!(
-            "Unable to get stake account balance: {}: {}",
-            stake_address, err
-        )
-    })?;
+    let balance = rpc_client
+        .get_balance(&reserve_stake_address)
+        .map_err(|err| {
+            format!(
+                "Unable to get reserve stake account balance: {}: {}",
+                reserve_stake_address, err
+            )
+        })?;
     if balance < reserve_stake_balance {
-        Err(format!(
-            "stake account {} balance too low, {}. Minimum is {}",
-            stake_address,
+        warn!(
+            "reserve stake account {} balance too low, {}. Minimum is {}",
+            reserve_stake_address,
             Sol(balance),
             Sol(reserve_stake_balance)
-        )
-        .into())
+        );
+        Ok(0)
     } else {
         Ok(balance.saturating_sub(reserve_stake_balance))
     }
@@ -476,14 +477,17 @@ fn create_validator_stake_accounts(
     min_reserve_stake_balance: u64,
     validator_stake_actions: &mut ValidatorStakeActions,
 ) -> Result<(), Box<dyn error::Error>> {
-    let mut reserve_stake_balance =
-        get_available_stake_balance(rpc_client, reserve_stake_address, min_reserve_stake_balance)
-            .map_err(|err| {
-            format!(
-                "Unable to get reserve stake account balance: {}: {}",
-                reserve_stake_address, err
-            )
-        })?;
+    let mut reserve_stake_balance = get_available_reserve_stake_balance(
+        rpc_client,
+        reserve_stake_address,
+        min_reserve_stake_balance,
+    )
+    .map_err(|err| {
+        format!(
+            "Unable to get reserve stake account balance: {}: {}",
+            reserve_stake_address, err
+        )
+    })?;
     info!(
         "Reserve stake available balance: {}",
         Sol(reserve_stake_balance)
@@ -938,7 +942,7 @@ mod test {
             );
             {
                 assert_eq!(
-                    get_available_stake_balance(
+                    get_available_reserve_stake_balance(
                         &rpc_client,
                         reserve_stake_address,
                         min_reserve_stake_balance

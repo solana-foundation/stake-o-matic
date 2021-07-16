@@ -287,7 +287,7 @@ impl GenericStakePool for StakePoolOMatic {
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
-        let reserve_stake_balance = get_available_stake_balance(
+        let reserve_stake_balance = get_available_reserve_stake_balance(
             rpc_client,
             self.stake_pool.reserve_stake,
             MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
@@ -344,26 +344,27 @@ impl GenericStakePool for StakePoolOMatic {
     }
 }
 
-// Get the balance of a stake account excluding the reserve
-fn get_available_stake_balance(
+fn get_available_reserve_stake_balance(
     rpc_client: &RpcClient,
-    stake_address: Pubkey,
+    reserve_stake_address: Pubkey,
     reserve_stake_balance: u64,
 ) -> Result<u64, Box<dyn error::Error>> {
-    let balance = rpc_client.get_balance(&stake_address).map_err(|err| {
-        format!(
-            "Unable to get stake account balance: {}: {}",
-            stake_address, err
-        )
-    })?;
+    let balance = rpc_client
+        .get_balance(&reserve_stake_address)
+        .map_err(|err| {
+            format!(
+                "Unable to get reserve stake account balance: {}: {}",
+                reserve_stake_address, err
+            )
+        })?;
     if balance < reserve_stake_balance {
-        Err(format!(
-            "Stake account {} balance too low, {}. Minimum is {}",
-            stake_address,
+        warn!(
+            "reserve stake account {} balance too low, {}. Minimum is {}",
+            reserve_stake_address,
             Sol(balance),
             Sol(reserve_stake_balance)
-        )
-        .into())
+        );
+        Ok(0)
     } else {
         Ok(balance.saturating_sub(reserve_stake_balance))
     }
