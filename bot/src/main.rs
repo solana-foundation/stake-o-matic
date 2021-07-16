@@ -281,6 +281,7 @@ impl Config {
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
             db_suffix: "".to_string(),
+            markdown_mode: Markdown::No,
             require_classification: false,
             dry_run: true,
             quality_block_producer_percentage: 15,
@@ -303,7 +304,7 @@ impl Config {
     }
 
     fn cluster_db_path_for(&self, cluster: Cluster) -> PathBuf {
-        if self.db_suffix == "" {
+        if self.db_suffix.is_empty() {
             self.db_path.join(format!("data-{}", cluster))
         } else {
             self.db_path
