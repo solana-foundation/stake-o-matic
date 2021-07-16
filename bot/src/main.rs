@@ -44,6 +44,7 @@ use {
 mod data_center_info;
 mod db;
 mod generic_stake_pool;
+mod noop_stake_pool;
 mod rpc_client_utils;
 mod stake_pool;
 mod stake_pool_v0;
@@ -173,6 +174,13 @@ pub enum Cluster {
     MainnetBeta,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Markdown {
+    Yes,
+    First,
+    No,
+}
+
 impl std::fmt::Display for Cluster {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -191,9 +199,11 @@ struct Config {
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
+    db_suffix: String,
     require_classification: bool,
-    markdown_path: Option<PathBuf>,
+    markdown_mode: Markdown,
 
+    /// Perform all stake processing, without sending transactions to the network
     dry_run: bool,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
@@ -270,8 +280,8 @@ impl Config {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
+            db_suffix: "".to_string(),
             require_classification: false,
-            markdown_path: None,
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -293,7 +303,12 @@ impl Config {
     }
 
     fn cluster_db_path_for(&self, cluster: Cluster) -> PathBuf {
-        self.db_path.join(format!("data-{}", cluster))
+        if self.db_suffix == "" {
+            self.db_path.join(format!("data-{}", cluster))
+        } else {
+            self.db_path
+                .join(format!("data-{}-{}", cluster, self.db_suffix))
+        }
     }
 
     fn cluster_db_path(&self) -> PathBuf {
@@ -356,8 +371,11 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         .arg(
             Arg::with_name("markdown")
                 .long("markdown")
-                .takes_value(false)
-                .help("Output markdown")
+                .value_name("no|yes|first")
+                .takes_value(true)
+                .default_value("no")
+                .possible_values(&["yes", "first", "no"])
+                .help("Output markdown.  If \"first\", markdown will only be generated on the first run.  If \"yes\", markdown will always be generated. If \"no\", no markdown is ever generated.")
         )
         .arg(
             Arg::with_name("db_path")
@@ -366,6 +384,14 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 .takes_value(true)
                 .default_value("db")
                 .help("Location for storing staking history")
+        )
+        .arg(
+            Arg::with_name("db_suffix")
+                .long("db-suffix")
+                .value_name("SUFFIX")
+                .takes_value(true)
+                .default_value("")
+                .help("Suffix for filename storing staking history")
         )
         .arg(
             Arg::with_name("require_classification")
@@ -566,11 +592,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             )
             .arg(
                 Arg::with_name("baseline_stake_amount")
-                    .long("baseline-stake-amount")
+                    .index(3)
                     .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("5000")
                     .validator(is_amount)
+                    .required(true)
+                    .takes_value(true)
+                    .help("The baseline SOL amount to stake to validators with adequate performance")
             )
         )
         .subcommand(
@@ -595,12 +622,16 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             )
             .arg(
                 Arg::with_name("baseline_stake_amount")
-                    .long("baseline-stake-amount")
+                    .index(3)
                     .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("5")
                     .validator(is_amount)
+                    .required(true)
+                    .takes_value(true)
+                    .help("The baseline SOL amount to stake to validators with adequate performance")
             )
+        )
+        .subcommand(
+            SubCommand::with_name("noop-stake-pool").about("Use a no-op stake pool.  Useful for testing classification and generating markdown from an existing db.")
         )
         .get_matches();
 
@@ -642,10 +673,12 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
-    let markdown_path = if matches.is_present("markdown") {
-        Some(db_path.join("md"))
-    } else {
-        None
+    let db_suffix = matches.value_of("db_suffix").unwrap().to_string();
+    let markdown_mode = match value_t_or_exit!(matches, "markdown", String).as_str() {
+        "first" => Markdown::First,
+        "yes" => Markdown::Yes,
+        "no" => Markdown::No,
+        _ => unreachable!(),
     };
     let require_classification = matches.is_present("require_classification");
 
@@ -669,8 +702,9 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         json_rpc_url,
         cluster,
         db_path,
+        db_suffix,
         require_classification,
-        markdown_path,
+        markdown_mode,
         dry_run,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
@@ -749,6 +783,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 baseline_stake_amount,
             )?)
         }
+        ("noop-stake-pool", _) => Box::new(noop_stake_pool::new()),
         _ => unreachable!(),
     };
 
@@ -1640,12 +1675,17 @@ fn main() -> BoxResult<()> {
         notifications.extend(validator_stake_change_notes);
     }
 
-    if first_time {
-        EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
-        generate_markdown(epoch, &config)?;
+    match (first_time, config.markdown_mode) {
+        (true, Markdown::First) | (_, Markdown::Yes) => {
+            EpochClassification::new(epoch_classification)
+                .save(epoch, &config.cluster_db_path())?;
+            generate_markdown(epoch, &config)?;
+        }
+        _ => {}
     }
 
-    if post_notifications {
+    if first_time && post_notifications {
+        // Only notify the user if this is the first run for this epoch
         for notification in notifications {
             info!("notification: {}", notification);
             notifier.send(&notification);
@@ -1656,10 +1696,7 @@ fn main() -> BoxResult<()> {
 }
 
 fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
-    let markdown_path = match config.markdown_path.as_ref() {
-        Some(d) => d,
-        None => return Ok(()),
-    };
+    let markdown_path = config.db_path.join("md");
     fs::create_dir_all(&markdown_path)?;
 
     let mut list = vec![(
