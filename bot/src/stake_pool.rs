@@ -182,7 +182,7 @@ impl GenericStakePool for StakePoolOMatic {
         }
 
         info!("Withdraw inactive transient stake accounts to the staker");
-        withdraw_inactive_stakes_to_staker(rpc_client, &self.authorized_staker)?;
+        withdraw_inactive_stakes_to_staker(rpc_client, &self.authorized_staker, dry_run)?;
 
         info!("Update the stake pool, merging transient stakes and orphaned accounts");
         self.epoch_update(rpc_client)?;
@@ -201,6 +201,7 @@ impl GenericStakePool for StakePoolOMatic {
             &self.stake_pool,
             &self.validator_list,
             &all_vote_addresses - &inuse_vote_addresses,
+            dry_run,
         )?;
 
         info!("Add new validators to pool if active");
@@ -211,6 +212,7 @@ impl GenericStakePool for StakePoolOMatic {
             &self.stake_pool_address,
             &self.stake_pool,
             &self.validator_list,
+            dry_run,
         )?;
         self.update(rpc_client)?;
 
@@ -229,6 +231,7 @@ impl GenericStakePool for StakePoolOMatic {
             desired_validator_stake,
             &self.stake_pool_address,
             &mut validator_stake_actions,
+            dry_run,
         )?;
 
         let total_stake_amount = self.stake_pool.total_stake_lamports;
@@ -419,6 +422,7 @@ fn add_unmerged_transient_stake_accounts(
 fn withdraw_inactive_stakes_to_staker(
     rpc_client: &RpcClient,
     authorized_staker: &Keypair,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     let (all_stake_addresses, _all_stake_total_amount) =
@@ -458,13 +462,17 @@ fn withdraw_inactive_stakes_to_staker(
         }
     }
 
-    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty()
-    {
-        Err("Failed to add validators to the stake pool".into())
-    } else {
+    if dry_run {
         Ok(())
+    } else {
+        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+            .failed
+            .is_empty()
+        {
+            Err("Failed to add validators to the stake pool".into())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -526,6 +534,7 @@ fn remove_validators_from_pool(
     stake_pool: &StakePool,
     validator_list: &ValidatorList,
     remove_vote_addresses: HashSet<Pubkey>,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
@@ -581,13 +590,17 @@ fn remove_validators_from_pool(
         }
     }
 
-    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty()
-    {
-        Err("Failed to add validators to the stake pool".into())
-    } else {
+    if dry_run {
         Ok(())
+    } else {
+        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+            .failed
+            .is_empty()
+        {
+            Err("Failed to add validators to the stake pool".into())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -600,6 +613,7 @@ fn add_validators_to_pool(
     stake_pool_address: &Pubkey,
     stake_pool: &StakePool,
     validator_list: &ValidatorList,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
@@ -698,13 +712,17 @@ fn add_validators_to_pool(
         }
     }
 
-    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty()
-    {
-        Err("Failed to add validators to the stake pool".into())
-    } else {
+    if dry_run {
         Ok(())
+    } else {
+        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+            .failed
+            .is_empty()
+        {
+            Err("Failed to add validators to the stake pool".into())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -717,6 +735,7 @@ fn create_validator_stake_accounts(
     desired_validator_stake: &[ValidatorStake],
     stake_pool_address: &Pubkey,
     validator_stake_actions: &mut ValidatorStakeActions,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut staker_balance = rpc_client.get_balance(&authorized_staker.pubkey()).unwrap();
     info!("Staker available balance: {}", Sol(staker_balance));
@@ -828,13 +847,17 @@ fn create_validator_stake_accounts(
         }
     }
 
-    if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty()
-    {
-        Err("Failed to create validator stake accounts".into())
-    } else {
+    if dry_run {
         Ok(())
+    } else {
+        if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
+            .failed
+            .is_empty()
+        {
+            Err("Failed to create validator stake accounts".into())
+        } else {
+            Ok(())
+        }
     }
 }
 
