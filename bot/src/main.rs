@@ -1339,19 +1339,6 @@ fn classify(
                 continue;
             }
 
-            /* -- ------------------
-               -- heuristic data, epoch 196
-               -- ------------------
-            select max(epoch_credits), min(epoch_credits)
-            from mainnet
-            where epoch_credits > (select max(epoch_credits)*0.50 from mainnet)
-            order by epoch_credits desc;
-            --max(epoch_credits),min(epoch_credits)
-            --242503,134403
-            --so delta max-min epoch_credits ~= 100k
-            */
-            // we start score with epoch_credits
-            // let mut score = epoch_credits;
             let mut score_discounts = db::ScoreDiscounts::default();
 
             let participant = identity_to_participant.get(&identity).cloned();
