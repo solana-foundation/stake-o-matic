@@ -187,7 +187,7 @@ impl std::fmt::Display for Cluster {
 }
 
 #[derive(Debug)]
-struct Config {
+pub struct Config {
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
@@ -195,6 +195,15 @@ struct Config {
     markdown_path: Option<PathBuf>,
 
     dry_run: bool,
+
+    /// compute score foll all validators in the cluster
+    score_all: bool,
+    /// max commission accepted to score (0-100)
+    score_max_commission: u8,
+    /// score discount per commission point
+    score_commission_discount: u32,
+    /// score min stake required
+    score_min_stake: u64,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
@@ -273,6 +282,10 @@ impl Config {
             require_classification: false,
             markdown_path: None,
             dry_run: true,
+            score_all: false,
+            score_max_commission: 8,
+            score_commission_discount: 12_000,
+            score_min_stake: sol_to_lamports(75.0),
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -293,7 +306,9 @@ impl Config {
     }
 
     fn cluster_db_path_for(&self, cluster: Cluster) -> PathBuf {
-        self.db_path.join(format!("data-{}", cluster))
+        // store db on different dir for score-all to not mess with SPL-stake-pool distribution usage
+        let dir = if self.score_all { "score-all" } else { "data" };
+        self.db_path.join(format!("{}-{}", dir, cluster))
     }
 
     fn cluster_db_path(&self) -> PathBuf {
@@ -317,7 +332,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool>>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -602,6 +617,23 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                     .validator(is_amount)
             )
         )
+        .subcommand(
+            SubCommand::with_name("score-all").about("Score all validators in the cluster")
+            .arg(
+                Arg::with_name("score_max_commission")
+                    .long("score-max-commission")
+                    .takes_value(true)
+                    .required(false)
+                    .help("scoring max accepted commission")
+            )
+            .arg(
+                Arg::with_name("commission_point_discount")
+                    .long ("commission-point-discount")
+                    .takes_value(true)
+                    .required(false)
+                    .help("score to discount for each commission point")
+            )
+        )
         .get_matches();
 
     let dry_run = !matches.is_present("confirm");
@@ -665,6 +697,18 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     )
     .unwrap();
 
+    // score-all command and arguments
+    let (score_all, score_max_commission, score_commission_discount, score_min_stake) =
+        match matches.subcommand() {
+            ("score-all", Some(matches)) => (
+                true,
+                value_t!(matches, "score_max_commission", u8).unwrap_or(10),
+                value_t!(matches, "commission_point_discount", u32).unwrap_or(16_000),
+                value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
+            ),
+            _ => (false, 0, 0, 0),
+        };
+
     let config = Config {
         json_rpc_url,
         cluster,
@@ -672,6 +716,10 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         require_classification,
         markdown_path,
         dry_run,
+        score_all,
+        score_max_commission,
+        score_commission_discount,
+        score_min_stake,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -721,7 +769,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         }
     }
 
-    let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
+    let stake_pool: Option<Box<dyn GenericStakePool>> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
             let reserve_stake_address = pubkey_of(matches, "reserve_stake_address").unwrap();
@@ -729,28 +777,34 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool_v0::new(
+            Some(Box::new(stake_pool_v0::new(
                 &rpc_client,
                 authorized_staker,
                 baseline_stake_amount,
                 reserve_stake_address,
                 min_reserve_stake_balance,
-            )?)
+            )?))
         }
         ("stake-pool", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
-            Box::new(stake_pool::new(
+            Some(Box::new(stake_pool::new(
                 &rpc_client,
                 authorized_staker,
                 pool_address,
                 baseline_stake_amount,
-            )?)
+            )?))
         }
-        _ => unreachable!(),
+        _ => None,
     };
+
+    // guard - let's make sure score-all can not be set for distribution
+    if score_all && (stake_pool.is_some() || !dry_run) {
+        error!("DO NOT combine score-all with `--confirm` or `stake-pool`");
+        process::exit(1);
+    }
 
     Ok((config, rpc_client, stake_pool))
 }
@@ -968,6 +1022,7 @@ fn get_self_stake_by_vote_account(
 
     info!("Fetching stake accounts...");
     let all_stake_accounts = rpc_client.get_program_accounts(&stake::program::id())?;
+    info!("{} stake accounts", all_stake_accounts.len());
 
     let stake_history_account = rpc_client
         .get_account_with_commitment(&sysvar::stake_history::id(), CommitmentConfig::finalized())?
@@ -1100,10 +1155,40 @@ fn classify(
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let (vote_account_info, total_active_stake) = get_vote_account_info(rpc_client, last_epoch)?;
+    let (mut vote_account_info, total_active_stake) =
+        get_vote_account_info(rpc_client, last_epoch)?;
 
-    let self_stake_by_vote_account =
-        get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
+    // compute cumulative_stake_limit => active_stake of the last validator inside the can-halt-the-network group
+    // we later set score=0 to all validators whose stake >= concentrated_validators_stake_limit
+    // sort by active_stake
+    vote_account_info.sort_by(|a, b| a.active_stake.cmp(&b.active_stake));
+    let mut accumulated: u64 = 0;
+    let mut count_halt_group: u32 = 0;
+    let limit: u64 = total_active_stake / 100 * 34;
+    let mut concentrated_validators_stake_limit = limit;
+    for info in &vote_account_info {
+        accumulated += info.active_stake;
+        count_halt_group += 1;
+        if accumulated > limit {
+            concentrated_validators_stake_limit = info.active_stake;
+            break;
+        }
+    }
+    info!(
+        "validators:{} total_active_stake:{}, can_halt_the_network:top {}, pro-decentralization-stake-limit: less than {}",
+        &vote_account_info.len(),
+        total_active_stake,
+        count_halt_group,
+        lamports_to_sol(concentrated_validators_stake_limit),
+    );
+
+    // Note: get_self_stake_by_vote_account is expensive because it does a RPC call for each validator
+    // we skip this data gathering if config.min_self_stake_lamports==0
+    let self_stake_by_vote_account = if config.min_self_stake_lamports > 0 {
+        get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?
+    } else {
+        HashMap::new()
+    };
 
     let (cluster_nodes_with_old_version, min_release_version): (HashMap<String, _>, _) =
         match config.min_release_version {
@@ -1113,7 +1198,7 @@ fn classify(
                     .into_iter()
                     .filter_map(|rpc_contact_info| {
                         if let Ok(identity) = Pubkey::from_str(&rpc_contact_info.pubkey) {
-                            if validator_list.contains(&identity) {
+                            if config.score_all || validator_list.contains(&identity) {
                                 if let Some(ref version) = rpc_contact_info.version {
                                     if let Ok(semver) = semver::Version::parse(version) {
                                         if semver < *min_release_version {
@@ -1238,6 +1323,7 @@ fn classify(
         None
     } else {
         let mut validator_classifications = HashMap::new();
+        let mut total_skipped: u32 = 0;
 
         for VoteAccountInfo {
             identity,
@@ -1247,9 +1333,25 @@ fn classify(
             epoch_credits,
         } in vote_account_info
         {
-            if !validator_list.contains(&identity) {
+            if !config.score_all && !validator_list.contains(&identity) {
+                total_skipped += 1;
                 continue;
             }
+
+            /* -- ------------------
+               -- heuristic data, epoch 196
+               -- ------------------
+            select max(epoch_credits), min(epoch_credits)
+            from mainnet
+            where epoch_credits > (select max(epoch_credits)*0.50 from mainnet)
+            order by epoch_credits desc;
+            --max(epoch_credits),min(epoch_credits)
+            --242503,134403
+            --so delta max-min epoch_credits ~= 100k
+            */
+            // we start score with epoch_credits
+            // let mut score = epoch_credits;
+            let mut score_discounts = db::ScoreDiscounts::default();
 
             let participant = identity_to_participant.get(&identity).cloned();
 
@@ -1258,6 +1360,13 @@ fn classify(
                 .get(&identity)
                 .cloned()
                 .unwrap_or_default();
+
+            // score: check data center concentration
+            let data_center_info = data_centers
+                .info
+                .iter()
+                .find(|x| x.id == current_data_center)
+                .unwrap();
 
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
@@ -1304,9 +1413,13 @@ fn classify(
                 });
 
             let insufficent_self_stake_msg =
-                format!("Insufficient self stake: {}", Sol(self_stake));
-            if !config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
+                format!("insufficient self stake: {}", Sol(self_stake));
+            if config.min_self_stake_lamports > 0
+                && !config.enforce_min_self_stake
+                && self_stake < config.min_self_stake_lamports
+            {
                 validator_notes.push(insufficent_self_stake_msg.clone());
+                score_discounts.insufficient_self_stake = true; //discount all
             }
 
             let insufficent_testnet_participation = testnet_participation
@@ -1325,6 +1438,13 @@ fn classify(
                     None
                 })
                 .flatten();
+
+            // no score if below 50% from avg credits
+            score_discounts.low_credits = epoch_credits < min_epoch_credits;
+
+            // no score if in the can-halt-the-network group
+            score_discounts.can_halt_the_network_group =
+                active_stake >= concentrated_validators_stake_limit;
 
             let (stake_state, reason) = if let Some(reason) =
                 infrastructure_concentration_destake_reason
@@ -1379,7 +1499,7 @@ fn classify(
                 )
             } else {
                 assert!(!poor_voters.contains(&identity));
-                assert!(not_in_leader_schedule.contains(&identity));
+                assert!(config.score_all || not_in_leader_schedule.contains(&identity));
                 (
                     // If the validator is not in the leader schedule but was Bonus previously,
                     // maintain Bonus.
@@ -1447,6 +1567,11 @@ fn classify(
                     identity,
                     vote_address,
                     stake_state,
+                    epoch_credits,
+                    score_discounts,
+                    commission,
+                    active_stake,
+                    data_center_concentration: data_center_info.stake_percent,
                     stake_states: Some(stake_states),
                     stake_action: None,
                     stake_state_reason: reason,
@@ -1462,6 +1587,11 @@ fn classify(
             "{} validators processed",
             validator_classifications.len()
         ));
+        info!(
+            "{} validators, {} skipped",
+            &validator_classifications.len(),
+            total_skipped
+        );
 
         Some(validator_classifications)
     };
@@ -1477,7 +1607,7 @@ fn classify(
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
 
-    let (config, rpc_client, mut stake_pool) = get_config()?;
+    let (config, rpc_client, optional_stake_pool) = get_config()?;
 
     info!("Loading participants...");
     let participants = get_participants_with_state(
@@ -1616,21 +1746,22 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
-            stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
-        notifications.extend(stake_pool_notes.clone());
-        epoch_classification.notes.extend(stake_pool_notes);
+        if let Some(mut stake_pool) = optional_stake_pool {
+            let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
+                stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+            notifications.extend(stake_pool_notes.clone());
+            epoch_classification.notes.extend(stake_pool_notes);
+            for identity in unfunded_validators {
+                validator_classifications
+                    .entry(identity)
+                    .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
+            }
 
-        for identity in unfunded_validators {
-            validator_classifications
-                .entry(identity)
-                .and_modify(|e| e.prioritize_funding_in_next_epoch = Some(true));
-        }
-
-        for (identity, stake_action) in validator_stake_actions {
-            validator_classifications
-                .entry(identity)
-                .and_modify(|e| e.stake_action = Some(stake_action));
+            for (identity, stake_action) in validator_stake_actions {
+                validator_classifications
+                    .entry(identity)
+                    .and_modify(|e| e.stake_action = Some(stake_action));
+            }
         }
 
         validator_notes.sort();
@@ -1642,7 +1773,6 @@ fn main() -> BoxResult<()> {
 
     if first_time {
         EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
-        generate_markdown(epoch, &config)?;
     }
 
     if post_notifications {
@@ -1652,13 +1782,16 @@ fn main() -> BoxResult<()> {
         }
     }
 
+    //conditional to: matches.is_present("markdown")
+    generate_markdown(epoch, &config)?;
+
     Ok(())
 }
 
 fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     let markdown_path = match config.markdown_path.as_ref() {
         Some(d) => d,
-        None => return Ok(()),
+        None => return Ok(()), // exit if !matches.is_present("markdown")
     };
     fs::create_dir_all(&markdown_path)?;
 
@@ -1731,6 +1864,9 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
 
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
+            let mut validator_detail_csv = vec![];
+            validator_detail_csv.push("identity,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason".into());
+
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
             validator_classifications.sort_by(|a, b| a.0.cmp(b.0));
@@ -1755,6 +1891,24 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     "* Stake reason: {}",
                     classification.stake_state_reason
                 ));
+
+                //identity,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
+                let csv_line = format!(
+                    r#""{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
+                    identity.to_string(),
+                    classification.score(config),
+                    classification.commission,
+                    lamports_to_sol(classification.active_stake),
+                    classification.epoch_credits,
+                    classification.data_center_concentration,
+                    classification.score_discounts.can_halt_the_network_group,
+                    classification.score_discounts.low_credits,
+                    classification.score_discounts.insufficient_self_stake,
+                    classification.stake_state,
+                    classification.stake_state_reason,
+                );
+                validator_detail_csv.push(csv_line);
+
                 if let Some(ref stake_action) = classification.stake_action {
                     validator_markdown.push(format!("* Staking activity: {}", stake_action));
                 }
@@ -1788,13 +1942,20 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     validator_markdown.push(format!("* {}", note));
                 }
             }
+            // save validator-detail.csv
+            let filename = config.cluster_db_path().join("validator-detail.csv");
+            info!("Writing {}", filename.display());
+            let mut file = File::create(filename)?;
+            file.write_all(&validator_detail_csv.join("\n").into_bytes())?;
         }
     }
 
     for (identity, validator_markdown) in validators_markdown {
         let markdown = validator_markdown.join("\n");
         let filename = markdown_path.join(format!("Validator-{}.md", identity));
-        info!("Writing {}", filename.display());
+        if !config.score_all {
+            info!("Writing {}", filename.display())
+        }
         let mut file = File::create(filename)?;
         file.write_all(&markdown.into_bytes())?;
     }

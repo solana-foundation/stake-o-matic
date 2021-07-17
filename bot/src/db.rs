@@ -2,6 +2,7 @@ use {
     crate::{
         data_center_info::{DataCenterId, DataCenterInfo},
         generic_stake_pool::ValidatorStakeState,
+        Config,
     },
     log::*,
     serde::{Deserialize, Serialize},
@@ -15,12 +16,26 @@ use {
 };
 
 #[derive(Default, Clone, Deserialize, Serialize)]
+pub struct ScoreDiscounts {
+    pub low_credits: bool,
+    pub insufficient_self_stake: bool,
+    pub can_halt_the_network_group: bool,
+}
+
+#[derive(Default, Clone, Deserialize, Serialize)]
 pub struct ValidatorClassification {
     pub identity: Pubkey, // Validator identity
     pub vote_address: Pubkey,
 
     pub stake_state: ValidatorStakeState,
     pub stake_state_reason: String,
+
+    /// computed score (more granular than ValidatorStakeState)
+    pub epoch_credits: u64, // epoch_credits is the base score
+    pub score_discounts: ScoreDiscounts,
+    pub commission: u8,
+    pub active_stake: u64,
+    pub data_center_concentration: f64,
 
     // Summary of the action was taken this epoch to advance the validator's stake
     pub stake_action: Option<String>,
@@ -46,6 +61,31 @@ pub struct ValidatorClassification {
 }
 
 impl ValidatorClassification {
+    pub fn score(&self, config: &Config) -> u64 {
+        if self.score_discounts.can_halt_the_network_group
+            || self.score_discounts.insufficient_self_stake
+            || self.score_discounts.low_credits
+            || self.commission > config.score_max_commission
+            || self.active_stake < config.score_min_stake
+        {
+            0
+        } else {
+            // if data_center_concentration = 25%, lose all score,
+            // data_center_concentration = 10%, lose 40% (rounded)
+            let discount_because_data_center_concentration =
+                self.epoch_credits * (self.data_center_concentration as u64 * 4) / 100;
+
+            // score discounts according to commission
+            let discount_because_commission =
+                (self.commission as u32 * config.score_commission_discount) as u64;
+
+            //result
+            self.epoch_credits
+                .saturating_sub(discount_because_commission)
+                .saturating_sub(discount_because_data_center_concentration)
+        }
+    }
+
     pub fn stake_state_streak(&self) -> usize {
         let mut streak = 1;
 
