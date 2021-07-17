@@ -1,8 +1,6 @@
 use {
     log::*,
-    reqwest::StatusCode,
     solana_client::{
-        client_error,
         rpc_client::RpcClient,
         rpc_config::RpcSimulateTransactionConfig,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
@@ -15,6 +13,7 @@ use {
         native_token::*,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
+        stake,
         transaction::Transaction,
     },
     std::{
@@ -25,69 +24,6 @@ use {
         time::Duration,
     },
 };
-
-pub fn retry_rpc_operation<T, F>(mut retries: usize, op: F) -> client_error::Result<T>
-where
-    F: Fn() -> client_error::Result<T>,
-{
-    loop {
-        let result = op();
-
-        if let Err(client_error::ClientError {
-            kind: client_error::ClientErrorKind::Reqwest(ref reqwest_error),
-            ..
-        }) = result
-        {
-            let can_retry = reqwest_error.is_timeout()
-                || reqwest_error
-                    .status()
-                    .map(|s| s == StatusCode::BAD_GATEWAY || s == StatusCode::GATEWAY_TIMEOUT)
-                    .unwrap_or(false);
-            if can_retry && retries > 0 {
-                info!("RPC request timeout, {} retries remaining", retries);
-                retries -= 1;
-                continue;
-            }
-        }
-        return result;
-    }
-}
-
-/// Simulate a list of transactions and filter out the ones that will fail
-#[allow(dead_code)]
-pub fn simulate_transactions(
-    rpc_client: &RpcClient,
-    candidate_transactions: Vec<(Transaction, String)>,
-) -> client_error::Result<Vec<(Transaction, String)>> {
-    info!("Simulating {} transactions", candidate_transactions.len());
-    let mut simulated_transactions = vec![];
-    for (mut transaction, memo) in candidate_transactions {
-        transaction.message.recent_blockhash =
-            retry_rpc_operation(10, || rpc_client.get_recent_blockhash())?.0;
-
-        let sim_result = rpc_client.simulate_transaction_with_config(
-            &transaction,
-            RpcSimulateTransactionConfig {
-                sig_verify: false,
-                ..RpcSimulateTransactionConfig::default()
-            },
-        )?;
-
-        if sim_result.value.err.is_some() {
-            warn!(
-                "filtering out transaction due to simulation failure: {:?}: {}",
-                sim_result, memo
-            );
-        } else {
-            simulated_transactions.push((transaction, memo))
-        }
-    }
-    info!(
-        "Successfully simulating {} transactions",
-        simulated_transactions.len()
-    );
-    Ok(simulated_transactions)
-}
 
 pub struct SendAndConfirmTransactionResult {
     pub succeeded: HashSet<Signature>,
@@ -119,16 +55,26 @@ pub fn send_and_confirm_transactions(
 
     let mut pending_transactions = vec![];
     for mut transaction in transactions {
-        transaction.sign(&[authorized_staker], blockhash);
-
-        if !dry_run {
-            rpc_client.send_transaction(&transaction)?;
+        if dry_run {
+            rpc_client.simulate_transaction_with_config(
+                &transaction,
+                RpcSimulateTransactionConfig {
+                    sig_verify: false,
+                    ..RpcSimulateTransactionConfig::default()
+                },
+            )?;
+        } else {
+            transaction.sign(&[authorized_staker], blockhash);
+            let _ = rpc_client.send_transaction(&transaction).map_err(|err| {
+                warn!("Failed to send transaction: {:?}", err);
+            });
         }
         pending_transactions.push(transaction);
     }
 
     let mut succeeded_transactions = HashSet::new();
     let mut failed_transactions = HashSet::new();
+    let mut max_expired_blockhashes = 5usize;
     loop {
         if pending_transactions.is_empty() {
             break;
@@ -138,11 +84,17 @@ pub fn send_and_confirm_transactions(
             .get_fee_calculator_for_blockhash(&blockhash)?
             .is_none();
         if blockhash_expired && !dry_run {
+            max_expired_blockhashes = max_expired_blockhashes.saturating_sub(1);
             warn!(
-                "Blockhash {} expired with {} pending transactions",
+                "Blockhash {} expired with {} pending transactions ({} retries remaining)",
                 blockhash,
-                pending_transactions.len()
+                pending_transactions.len(),
+                max_expired_blockhashes,
             );
+
+            if max_expired_blockhashes == 0 {
+                return Err("Too many expired blockhashes".into());
+            }
 
             blockhash = rpc_client.get_recent_blockhash()?.0;
 
@@ -151,8 +103,11 @@ pub fn send_and_confirm_transactions(
                 blockhash
             );
             for transaction in pending_transactions.iter_mut() {
+                assert!(!dry_run);
                 transaction.sign(&[authorized_staker], blockhash);
-                rpc_client.send_transaction(&transaction)?;
+                let _ = rpc_client.send_transaction(transaction).map_err(|err| {
+                    warn!("Failed to resend transaction: {:?}", err);
+                });
             }
         }
 
@@ -268,8 +223,8 @@ pub fn get_vote_account_info(
                     } else {
                         0
                     };
-                    let identity = Pubkey::from_str(&node_pubkey).unwrap();
-                    let vote_address = Pubkey::from_str(&vote_pubkey).unwrap();
+                    let identity = Pubkey::from_str(node_pubkey).unwrap();
+                    let vote_address = Pubkey::from_str(vote_pubkey).unwrap();
 
                     VoteAccountInfo {
                         identity,
@@ -293,7 +248,7 @@ pub fn get_all_stake(
     let mut total_stake_balance = 0;
 
     let all_stake_accounts = rpc_client.get_program_accounts_with_config(
-        &solana_stake_program::id(),
+        &stake::program::id(),
         RpcProgramAccountsConfig {
             filters: Some(vec![
                 // Filter by `Meta::authorized::staker`, which begins at byte offset 12
@@ -326,13 +281,17 @@ pub mod test {
         super::*,
         borsh::BorshSerialize,
         indicatif::{ProgressBar, ProgressStyle},
+        solana_client::client_error,
         solana_sdk::{
-            borsh::get_packed_len, clock::Epoch, program_pack::Pack, pubkey::Pubkey,
+            borsh::get_packed_len,
+            clock::Epoch,
+            program_pack::Pack,
+            pubkey::Pubkey,
+            stake::{
+                instruction as stake_instruction,
+                state::{Authorized, Lockup},
+            },
             system_instruction,
-        },
-        solana_stake_program::{
-            stake_instruction,
-            stake_state::{Authorized, Lockup},
         },
         solana_vote_program::{vote_instruction, vote_state::VoteInit},
         spl_stake_pool::{
@@ -436,7 +395,7 @@ pub mod test {
     ) -> client_error::Result<()> {
         let transaction = Transaction::new_signed_with_payer(
             &[stake_instruction::delegate_stake(
-                &stake_address,
+                stake_address,
                 &authority.pubkey(),
                 vote_address,
             )],
@@ -466,8 +425,8 @@ pub mod test {
             let vote_keypair = Keypair::new();
 
             create_vote_account(
-                &rpc_client,
-                &authorized_staker,
+                rpc_client,
+                authorized_staker,
                 &identity_keypair,
                 &vote_keypair,
             )?;
@@ -501,7 +460,7 @@ pub mod test {
                 spl_token::instruction::initialize_mint(
                     &spl_token::id(),
                     &mint_keypair.pubkey(),
-                    &manager,
+                    manager,
                     None,
                     0,
                 )
@@ -648,6 +607,7 @@ pub mod test {
                 stake_address,
                 &authorized_staker.pubkey(),
                 &validator_stake_address,
+                &stake_pool.reserve_stake,
                 pool_token_address,
                 &stake_pool.pool_mint,
                 &spl_token::id(),

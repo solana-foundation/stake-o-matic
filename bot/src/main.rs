@@ -23,10 +23,10 @@ use {
         native_token::*,
         pubkey::Pubkey,
         slot_history::{self, SlotHistory},
+        stake::{self, state::StakeState},
         stake_history::StakeHistory,
         sysvar,
     },
-    solana_stake_program::stake_state::StakeState,
     solana_vote_program::vote_state::VoteState,
     std::{
         collections::{HashMap, HashSet},
@@ -743,14 +743,36 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(180));
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
-    rpc_client
-        .get_health()
-        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
+    {
+        let mut retries = 12u8;
+        let retry_delay = Duration::from_secs(10);
+        loop {
+            match rpc_client.get_health() {
+                Ok(()) => {
+                    info!("RPC endpoint healthy");
+                    break;
+                }
+                Err(err) => {
+                    warn!("RPC endpoint is unhealthy: {:?}", err);
+                }
+            }
+            if retries == 0 {
+                process::exit(1);
+            }
+            retries = retries.saturating_sub(1);
+            info!(
+                "{} retries remaining, sleeping for {} seconds",
+                retries,
+                retry_delay.as_secs()
+            );
+            std::thread::sleep(retry_delay);
+        }
+    }
 
     let stake_pool: Option<Box<dyn GenericStakePool>> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
+            let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
+            let reserve_stake_address = pubkey_of(matches, "reserve_stake_address").unwrap();
             let min_reserve_stake_balance =
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount =
@@ -764,8 +786,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
             )?))
         }
         ("stake-pool", Some(matches)) => {
-            let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
-            let pool_address = pubkey_of(&matches, "pool_address").unwrap();
+            let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
+            let pool_address = pubkey_of(matches, "pool_address").unwrap();
             let baseline_stake_amount =
                 sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
             Some(Box::new(stake_pool::new(
@@ -999,7 +1021,7 @@ fn get_self_stake_by_vote_account(
     }
 
     info!("Fetching stake accounts...");
-    let all_stake_accounts = rpc_client.get_program_accounts(&solana_stake_program::id())?;
+    let all_stake_accounts = rpc_client.get_program_accounts(&stake::program::id())?;
     info!("{} stake accounts", all_stake_accounts.len());
 
     let stake_history_account = rpc_client
@@ -1134,7 +1156,7 @@ fn classify(
         .collect::<HashMap<_, _>>();
 
     let (mut vote_account_info, total_active_stake) =
-        get_vote_account_info(&rpc_client, last_epoch)?;
+        get_vote_account_info(rpc_client, last_epoch)?;
 
     // compute cumulative_stake_limit => active_stake of the last validator inside the can-halt-the-network group
     // we later set score=0 to all validators whose stake >= concentrated_validators_stake_limit
@@ -1207,7 +1229,7 @@ fn classify(
         block_producer_classification_reason,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
-    ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
+    ) = classify_block_producers(rpc_client, config, last_epoch)?;
 
     let not_in_leader_schedule: ValidatorList = validator_list
         .difference(
@@ -1230,7 +1252,7 @@ fn classify(
         min_epoch_credits,
         avg_epoch_credits,
         too_many_poor_voters,
-    ) = classify_poor_voters(&config, &vote_account_info);
+    ) = classify_poor_voters(config, &vote_account_info);
 
     let mut notes = vec![
         format!(
@@ -1433,12 +1455,12 @@ fn classify(
             } else if active_stake > config.max_active_stake_lamports {
                 (
                     ValidatorStakeState::None,
-                    format!("active stake is too high: {}", Sol(active_stake)),
+                    format!("Active stake is too high: {}", Sol(active_stake)),
                 )
             } else if commission > config.max_commission {
                 (
                     ValidatorStakeState::None,
-                    format!("commission is too high: {}% commission", commission),
+                    format!("Commission is too high: {}% commission", commission),
                 )
             } else if let Some(insufficent_testnet_participation) =
                 insufficent_testnet_participation
@@ -1447,13 +1469,13 @@ fn classify(
             } else if poor_voters.contains(&identity) {
                 (
                     ValidatorStakeState::None,
-                    format!("insufficient vote credits: {}", vote_credits_msg),
+                    format!("Insufficient vote credits: {}", vote_credits_msg),
                 )
             } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
                 (
                     ValidatorStakeState::None,
                     format!(
-                        "Outdated solana release: {}",
+                        "Outdated Solana release: {}",
                         cluster_nodes_with_old_version
                             .get(&identity.to_string())
                             .unwrap()
@@ -1463,7 +1485,7 @@ fn classify(
                 (
                     ValidatorStakeState::Bonus,
                     format!(
-                        "good block production during epoch {}: {}",
+                        "Good block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1471,7 +1493,7 @@ fn classify(
                 (
                     ValidatorStakeState::Baseline,
                     format!(
-                        "poor block production during epoch {}: {}",
+                        "Poor block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1491,7 +1513,7 @@ fn classify(
                     } else {
                         ValidatorStakeState::Baseline
                     },
-                    format!("no leader slots; {}", vote_credits_msg),
+                    format!("No leader slots; {}", vote_credits_msg),
                 )
             };
 
@@ -1649,12 +1671,13 @@ fn main() -> BoxResult<()> {
             .unwrap_or_default()
             .into_current();
 
-    let (mut epoch_classification, first_time) =
+    let (mut epoch_classification, first_time, post_notifications) =
         if EpochClassification::exists(epoch, &config.cluster_db_path()) {
             info!("Classification for epoch {} already exists", epoch);
             (
                 EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
                 false,
+                config.require_classification,
             )
         } else {
             if config.require_classification {
@@ -1671,6 +1694,7 @@ fn main() -> BoxResult<()> {
                         .validator_classifications
                         .as_ref(),
                 )?,
+                true,
                 true,
             )
         };
@@ -1749,8 +1773,9 @@ fn main() -> BoxResult<()> {
 
     if first_time {
         EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
+    }
 
-        // Only notify the user if this is the first run for this epoch
+    if post_notifications {
         for notification in notifications {
             info!("notification: {}", notification);
             notifier.send(&notification);
@@ -1844,7 +1869,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
 
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
-            validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
+            validator_classifications.sort_by(|a, b| a.0.cmp(b.0));
             for (identity, classification) in validator_classifications {
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 
@@ -1898,18 +1923,17 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 ) {
                     validator_markdown.push(format!("* Data Center: {}", current_data_center));
 
-                    if data_center_residency.len() > 1
-                        || (data_center_residency.len() == 1
-                            && !data_center_residency.contains_key(&current_data_center))
-                    {
-                        let data_center_residency = data_center_residency
-                            .keys()
-                            .cloned()
-                            .map(|data_center| data_center.to_string())
-                            .collect::<Vec<_>>();
+                    if !data_center_residency.is_empty() {
                         validator_markdown.push(format!(
                             "* Resident Data Center(s): {}",
-                            data_center_residency.join(", ")
+                            data_center_residency
+                                .iter()
+                                .map(|(data_center, seniority)| format!(
+                                    "{} (seniority: {})",
+                                    data_center, seniority
+                                ))
+                                .collect::<Vec<String>>()
+                                .join(",")
                         ));
                     }
                 }
