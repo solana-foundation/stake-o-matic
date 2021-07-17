@@ -1827,7 +1827,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
             let mut validator_detail_csv = vec![];
-            validator_detail_csv.push("identity,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason".into());
+            validator_detail_csv.push("identity,vote_address,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason".into());
 
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
@@ -1854,10 +1854,11 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     classification.stake_state_reason
                 ));
 
-                //identity,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
+                //identity,vote_address,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
                 let csv_line = format!(
-                    r#""{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
+                    r#""{}","{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
                     identity.to_string(),
+                    classification.vote_address,
                     classification.score(config),
                     classification.commission,
                     lamports_to_sol(classification.active_stake),
@@ -1905,8 +1906,10 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     validator_markdown.push(format!("* {}", note));
                 }
             }
-            // save validator-detail.csv
-            let filename = config.cluster_db_path().join("validator-detail.csv");
+            // save {cluster}-validator-detail.csv (repeating the cluster in the name is intentional)
+            let filename = config
+                .cluster_db_path()
+                .join(format!("{}-validator-detail.csv", config.cluster));
             info!("Writing {}", filename.display());
             let mut file = File::create(filename)?;
             file.write_all(&validator_detail_csv.join("\n").into_bytes())?;
