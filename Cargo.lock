@@ -3854,7 +3854,7 @@ dependencies = [
 
 [[package]]
 name = "solana-foundation-delegation-program-cli"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "clap",
  "solana-account-decoder",
