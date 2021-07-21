@@ -18,7 +18,7 @@ solana-account-decoder = "=1.7.4"
 solana-clap-utils = "=1.7.4"
 solana-cli-config = "=1.7.4"
 solana-client = "=1.7.4"
-solana-foundation-delegation-program-registry = { version = "1.0.0", path = "../program" }
+solana-foundation-delegation-program-registry = { version = "1.0.1", path = "../program" }
 solana-logger = "=1.7.4"
 solana-remote-wallet = "=1.7.4"
 solana-sdk = "=1.7.4"
