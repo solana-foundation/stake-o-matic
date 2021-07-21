@@ -155,6 +155,10 @@ fn process_apply(
     println!("Mainnet Validator Identity: {}", mainnet_identity.pubkey());
     println!("Testnet Validator Identity: {}", testnet_identity.pubkey());
 
+    if mainnet_identity.pubkey() == testnet_identity.pubkey() {
+        return Err("Mainnet and Testnet identities cannot be the same".into());
+    }
+
     if !confirm {
         println!(
             "\nWarning: Your mainnet and testnet identities cannot be changed after applying. \
@@ -265,6 +269,11 @@ fn process_admin_approve(
         .ok_or_else(|| format!("Registration not found for {}", identity))?;
 
     print_participant(&participant);
+
+    if participant.mainnet_identity == participant.testnet_identity {
+        return Err("Mainnet and Testnet identities cannot be the same".into());
+    }
+
     println!("Approving...");
 
     let message = Message::new(
