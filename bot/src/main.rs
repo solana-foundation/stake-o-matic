@@ -6,6 +6,8 @@ use {
         ArgMatches, SubCommand,
     },
     log::*,
+    serde::Serialize,
+    serde_yaml::Mapping,
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
@@ -57,13 +59,13 @@ type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ValidatorList = HashSet<Pubkey>;
 type IdentityToParticipant = HashMap<Pubkey, Pubkey>;
 
-enum InfrastructureConcentrationAffectKind {
+pub enum InfrastructureConcentrationAffectKind {
     Destake(String),
     Warn(String),
 }
 
-#[derive(Debug)]
-enum InfrastructureConcentrationAffects {
+#[derive(Debug, Serialize)]
+pub enum InfrastructureConcentrationAffects {
     WarnAll,
     DestakeListed(ValidatorList),
     DestakeAll,
@@ -122,7 +124,7 @@ impl InfrastructureConcentrationAffects {
 
 #[derive(Debug, Error)]
 #[error("cannot convert to InfrastructureConcentrationAffects: {0}")]
-struct InfrastructureConcentrationAffectsFromStrError(String);
+pub struct InfrastructureConcentrationAffectsFromStrError(String);
 
 impl FromStr for InfrastructureConcentrationAffects {
     type Err = InfrastructureConcentrationAffectsFromStrError;
@@ -170,13 +172,13 @@ fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Ve
         })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum Cluster {
     Testnet,
     MainnetBeta,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum Markdown {
     Yes,
     First,
@@ -201,7 +203,7 @@ enum Command {
     Stake(Box<dyn GenericStakePool>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Config {
     json_rpc_url: String,
     cluster: Cluster,
@@ -278,6 +280,9 @@ pub struct Config {
     ///
     /// This setting is ignored if `cluster` is not `"mainnet-beta"`
     min_testnet_participation: Option<(/*n:*/ usize, /*m:*/ usize)>,
+
+    /// Stake amount earned for baseline
+    baseline_stake_amount_lamports: Option<u64>,
 }
 
 impl Config {
@@ -307,6 +312,7 @@ impl Config {
             enforce_min_self_stake: false,
             enforce_testnet_participation: false,
             min_testnet_participation: None,
+            baseline_stake_amount_lamports: None,
         }
     }
 
@@ -749,6 +755,8 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         }
     }
 
+    let baseline_stake_amount_lamports: Option<u64>;
+
     let command = if matches.subcommand_name().unwrap() == "export" {
         let (_, subcommand_matches) = matches.subcommand();
         let sub_matches = subcommand_matches.unwrap();
@@ -756,20 +764,23 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         let export_epoch = value_t!(sub_matches, "export_epoch", u64)
             .unwrap_or(rpc_client.get_epoch_info()?.epoch - 1);
 
+        baseline_stake_amount_lamports = None;
         Command::Export(export_epoch)
     } else {
+        let baseline_stake =
+            sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+        baseline_stake_amount_lamports = Some(baseline_stake);
+
         let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
             ("stake-pool-v0", Some(matches)) => {
                 let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
                 let reserve_stake_address = pubkey_of(&matches, "reserve_stake_address").unwrap();
                 let min_reserve_stake_balance =
                     sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
-                let baseline_stake_amount =
-                    sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
                 Box::new(stake_pool_v0::new(
                     &rpc_client,
                     authorized_staker,
-                    baseline_stake_amount,
+                    baseline_stake,
                     reserve_stake_address,
                     min_reserve_stake_balance,
                 )?)
@@ -777,13 +788,11 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
             ("stake-pool", Some(matches)) => {
                 let authorized_staker = keypair_of(&matches, "authorized_staker").unwrap();
                 let pool_address = pubkey_of(&matches, "pool_address").unwrap();
-                let baseline_stake_amount =
-                    sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
                 Box::new(stake_pool::new(
                     &rpc_client,
                     authorized_staker,
                     pool_address,
-                    baseline_stake_amount,
+                    baseline_stake,
                 )?)
             }
             ("noop-stake-pool", _) => Box::new(noop_stake_pool::new()),
@@ -816,6 +825,7 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         enforce_min_self_stake,
         enforce_testnet_participation,
         min_testnet_participation,
+        baseline_stake_amount_lamports,
     };
 
     Ok((command, config, rpc_client))
@@ -1213,7 +1223,7 @@ fn classify(
         block_producer_classification_reason,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
-        _,
+        blocks_and_slots,
     ) = classify_block_producers(rpc_client, config, last_epoch)?;
 
     let not_in_leader_schedule: ValidatorList = validator_list
@@ -1356,12 +1366,14 @@ fn classify(
 
             let mut validator_notes = vec![];
 
+            let new_validator = !previous_data_center_residency.contains_key(&current_data_center);
+
             let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
                 .get(&identity)
                 .map(|concentration| {
                     config.infrastructure_concentration_affects.memo(
                         &identity,
-                        !previous_data_center_residency.contains_key(&current_data_center),
+                        new_validator,
                         *concentration,
                     )
                 })
@@ -1511,6 +1523,8 @@ fn classify(
                 .unwrap_or_default();
             stake_states.insert(0, (stake_state, reason.clone()));
 
+            let (blocks, slots) = blocks_and_slots.get(&identity).unwrap();
+
             validator_classifications.insert(
                 identity,
                 ValidatorClassification {
@@ -1525,6 +1539,12 @@ fn classify(
                     current_data_center: Some(current_data_center.clone()),
                     participant,
                     prioritize_funding_in_next_epoch: None,
+                    blocks: Some(*blocks),
+                    slots: Some(*slots),
+                    vote_credits: Some(epoch_credits),
+                    commission: Some(commission),
+                    self_stake: Some(*self_stake_by_vote_account.get(&identity).unwrap_or(&0)),
+                    new_data_center_residency: Some(new_validator),
                 },
             );
         }
@@ -1537,10 +1557,30 @@ fn classify(
     };
     notes.push(format!("Active stake: {}", Sol(total_active_stake)));
 
+    let mut info = Mapping::new();
+    // "min_vote_credits",
+    info.insert("min_epoch_credits".into(), min_epoch_credits.into());
+    // "avg_vote_credits",
+    info.insert("avg_epoch_credits".into(), avg_epoch_credits.into());
+    // "max_skip_rate",
+    info.insert(
+        "max_skip_rate".into(),
+        (cluster_average_skip_rate + config.quality_block_producer_percentage).into(),
+    );
+    // "avg_skip_rate"
+    info.insert(
+        "cluster_average_skip_rate".into(),
+        cluster_average_skip_rate.into(),
+    );
+    // "active_stake",
+    info.insert("total_active_stake".into(), total_active_stake.into());
+
     Ok(EpochClassificationV1 {
         data_center_info: data_centers.info,
         validator_classifications,
         notes,
+        config: Some(serde_yaml::to_value(config).unwrap()),
+        info: Some(info),
     })
 }
 
@@ -1692,8 +1732,12 @@ fn main() -> BoxResult<()> {
                     })
                     .collect();
 
-                let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
-                    stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+                let (
+                    stake_pool_notes,
+                    validator_stake_actions,
+                    unfunded_validators,
+                    bonus_stake_amount,
+                ) = stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
                 notifications.extend(stake_pool_notes.clone());
                 epoch_classification.notes.extend(stake_pool_notes);
 
@@ -1714,6 +1758,10 @@ fn main() -> BoxResult<()> {
 
                 validator_stake_change_notes.sort();
                 notifications.extend(validator_stake_change_notes);
+
+                if let Some(ref mut info) = epoch_classification.info {
+                    info.insert("bonus_stake_amount".into(), bonus_stake_amount.into());
+                }
             }
 
             match (first_time, config.markdown_mode) {

@@ -19,8 +19,15 @@ impl GenericStakePool for NoopStakePool {
         _rpc_client: &RpcClient,
         _dry_run: bool,
         _desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(EpochStakeNotes, ValidatorStakeActions, UnfundedValidators), Box<dyn error::Error>>
-    {
-        Ok((vec![], HashMap::new(), HashSet::new()))
+    ) -> Result<
+        (
+            EpochStakeNotes,
+            ValidatorStakeActions,
+            UnfundedValidators,
+            u64,
+        ),
+        Box<dyn error::Error>,
+    > {
+        Ok((vec![], HashMap::new(), HashSet::new(), 0))
     }
 }
