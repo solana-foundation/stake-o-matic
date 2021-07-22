@@ -5,6 +5,8 @@ use {
         ArgMatches, SubCommand,
     },
     log::*,
+    serde::Serialize,
+    serde_yaml::Mapping,
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
@@ -55,13 +57,13 @@ type BoxResult<T> = Result<T, Box<dyn error::Error>>;
 type ValidatorList = HashSet<Pubkey>;
 type IdentityToParticipant = HashMap<Pubkey, Pubkey>;
 
-enum InfrastructureConcentrationAffectKind {
+pub enum InfrastructureConcentrationAffectKind {
     Destake(String),
     Warn(String),
 }
 
-#[derive(Debug)]
-enum InfrastructureConcentrationAffects {
+#[derive(Debug, Serialize)]
+pub enum InfrastructureConcentrationAffects {
     WarnAll,
     DestakeListed(ValidatorList),
     DestakeAll,
@@ -120,7 +122,7 @@ impl InfrastructureConcentrationAffects {
 
 #[derive(Debug, Error)]
 #[error("cannot convert to InfrastructureConcentrationAffects: {0}")]
-struct InfrastructureConcentrationAffectsFromStrError(String);
+pub struct InfrastructureConcentrationAffectsFromStrError(String);
 
 impl FromStr for InfrastructureConcentrationAffects {
     type Err = InfrastructureConcentrationAffectsFromStrError;
@@ -168,13 +170,13 @@ fn release_version_of(matches: &ArgMatches<'_>, name: &str) -> Option<semver::Ve
         })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum Cluster {
     Testnet,
     MainnetBeta,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum Markdown {
     Yes,
     First,
@@ -194,8 +196,8 @@ impl std::fmt::Display for Cluster {
     }
 }
 
-#[derive(Debug)]
-struct Config {
+#[derive(Debug, Serialize)]
+pub struct Config {
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
@@ -271,6 +273,9 @@ struct Config {
     ///
     /// This setting is ignored if `cluster` is not `"mainnet-beta"`
     min_testnet_participation: Option<(/*n:*/ usize, /*m:*/ usize)>,
+
+    /// Stake amount earned for baseline
+    baseline_stake_amount_lamports: Option<u64>,
 }
 
 impl Config {
@@ -300,6 +305,7 @@ impl Config {
             enforce_min_self_stake: false,
             enforce_testnet_participation: false,
             min_testnet_participation: None,
+            baseline_stake_amount_lamports: None,
         }
     }
 
@@ -699,6 +705,11 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     )
     .unwrap();
 
+    let baseline_stake_amount_lamports = match value_t!(matches, "baseline_stake_amount", f64) {
+        Ok(amt) => Some(sol_to_lamports(amt)),
+        Err(_) => None,
+    };
+
     let config = Config {
         json_rpc_url,
         cluster,
@@ -723,6 +734,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         enforce_min_self_stake,
         enforce_testnet_participation,
         min_testnet_participation,
+        baseline_stake_amount_lamports,
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
@@ -762,8 +774,11 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             let reserve_stake_address = pubkey_of(matches, "reserve_stake_address").unwrap();
             let min_reserve_stake_balance =
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
-            let baseline_stake_amount =
-                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+            let baseline_stake_amount = baseline_stake_amount_lamports.unwrap_or_else(|| {
+                println!("Missing baseline_stake_amount");
+                process::exit(1)
+            });
+
             Box::new(stake_pool_v0::new(
                 &rpc_client,
                 authorized_staker,
@@ -775,8 +790,10 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         ("stake-pool", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(matches, "pool_address").unwrap();
-            let baseline_stake_amount =
-                sol_to_lamports(value_t_or_exit!(matches, "baseline_stake_amount", f64));
+            let baseline_stake_amount = baseline_stake_amount_lamports.unwrap_or_else(|| {
+                println!("Missing baseline_stake_amount");
+                process::exit(1)
+            });
             Box::new(stake_pool::new(
                 &rpc_client,
                 authorized_staker,
@@ -802,6 +819,8 @@ type ClassifyResult = (
     usize,
     // too_many_poor_block_producers
     bool,
+    // PubKey => (blocks, slots)
+    HashMap<Pubkey, (usize, usize)>,
 );
 
 fn classify_producers(
@@ -837,7 +856,7 @@ fn classify_producers(
         }
     }
     let cluster_average_skip_rate = 100 - total_blocks * 100 / total_slots;
-    for (validator_identity, (blocks, slots)) in blocks_and_slots {
+    for (validator_identity, (blocks, slots)) in blocks_and_slots.clone() {
         let skip_rate: usize = 100 - (blocks * 100 / slots);
 
         let msg = format!(
@@ -877,6 +896,7 @@ fn classify_producers(
         reason_msg,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
+        blocks_and_slots,
     ))
 }
 
@@ -1141,31 +1161,35 @@ fn classify(
     let self_stake_by_vote_account =
         get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
 
-    let (cluster_nodes_with_old_version, min_release_version): (HashMap<String, _>, _) =
-        match config.min_release_version {
-            Some(ref min_release_version) => (
-                rpc_client
-                    .get_cluster_nodes()?
-                    .into_iter()
-                    .filter_map(|rpc_contact_info| {
-                        if let Ok(identity) = Pubkey::from_str(&rpc_contact_info.pubkey) {
-                            if validator_list.contains(&identity) {
-                                if let Some(ref version) = rpc_contact_info.version {
-                                    if let Ok(semver) = semver::Version::parse(version) {
-                                        if semver < *min_release_version {
-                                            return Some((rpc_contact_info.pubkey, semver));
-                                        }
-                                    }
+    let mut cluster_nodes_with_old_version: HashMap<String, _> = HashMap::new();
+
+    let release_versions: HashMap<Pubkey, semver::Version> = rpc_client
+        .get_cluster_nodes()?
+        .into_iter()
+        .filter_map(|rpc_contact_info| {
+            if let Ok(identity) = Pubkey::from_str(&rpc_contact_info.pubkey) {
+                if validator_list.contains(&identity) {
+                    if let Some(ref version) = rpc_contact_info.version {
+                        if let Ok(semver) = semver::Version::parse(version) {
+                            if let Some(min_release_version) = &config.min_release_version {
+                                if semver < *min_release_version {
+                                    cluster_nodes_with_old_version
+                                        .insert(identity.to_string(), semver.clone());
                                 }
                             }
+                            return Some((identity, semver));
                         }
-                        None
-                    })
-                    .collect(),
-                min_release_version.to_string(),
-            ),
-            None => (HashMap::default(), "".to_string()),
-        };
+                    }
+                }
+            }
+            None
+        })
+        .collect();
+
+    let min_release_version = match &config.min_release_version {
+        Some(v) => v.to_string(),
+        None => "".to_string(),
+    };
 
     if let Some(ref min_release_version) = config.min_release_version {
         info!(
@@ -1180,6 +1204,7 @@ fn classify(
         block_producer_classification_reason,
         cluster_average_skip_rate,
         too_many_poor_block_producers,
+        blocks_and_slots,
     ) = classify_block_producers(rpc_client, config, last_epoch)?;
 
     let not_in_leader_schedule: ValidatorList = validator_list
@@ -1322,12 +1347,14 @@ fn classify(
 
             let mut validator_notes = vec![];
 
+            let new_validator = !previous_data_center_residency.contains_key(&current_data_center);
+
             let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
                 .get(&identity)
                 .map(|concentration| {
                     config.infrastructure_concentration_affects.memo(
                         &identity,
-                        !previous_data_center_residency.contains_key(&current_data_center),
+                        new_validator,
                         *concentration,
                     )
                 })
@@ -1477,6 +1504,11 @@ fn classify(
                 .unwrap_or_default();
             stake_states.insert(0, (stake_state, reason.clone()));
 
+            let (blocks, slots) = match blocks_and_slots.get(&identity) {
+                Some((b, s)) => (Some(*b), Some(*s)),
+                None => (None, None),
+            };
+
             validator_classifications.insert(
                 identity,
                 ValidatorClassification {
@@ -1491,6 +1523,13 @@ fn classify(
                     current_data_center: Some(current_data_center.clone()),
                     participant,
                     prioritize_funding_in_next_epoch: None,
+                    blocks,
+                    slots,
+                    vote_credits: Some(epoch_credits),
+                    commission: Some(commission),
+                    self_stake: Some(*self_stake_by_vote_account.get(&identity).unwrap_or(&0)),
+                    new_data_center_residency: Some(new_validator),
+                    release_version: release_versions.get(&identity).cloned(),
                 },
             );
         }
@@ -1503,10 +1542,32 @@ fn classify(
     };
     notes.push(format!("Active stake: {}", Sol(total_active_stake)));
 
+    let mut info = Mapping::new();
+    // "min_vote_credits",
+    info.insert("min_epoch_credits".into(), min_epoch_credits.into());
+    // "avg_vote_credits",
+    info.insert("avg_epoch_credits".into(), avg_epoch_credits.into());
+    // "max_skip_rate",
+    info.insert(
+        "max_skip_rate".into(),
+        (cluster_average_skip_rate + config.quality_block_producer_percentage).into(),
+    );
+    // "avg_skip_rate"
+    info.insert(
+        "cluster_average_skip_rate".into(),
+        cluster_average_skip_rate.into(),
+    );
+    // "active_stake",
+    info.insert("total_active_stake".into(), total_active_stake.into());
+
+    info.insert("min_release_version".into(), min_release_version.into());
+
     Ok(EpochClassificationV1 {
         data_center_info: data_centers.info,
         validator_classifications,
         notes,
+        config: Some(serde_yaml::to_value(config).unwrap()),
+        info: Some(info),
     })
 }
 
@@ -1652,7 +1713,7 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        let (stake_pool_notes, validator_stake_actions, unfunded_validators) =
+        let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
@@ -1674,6 +1735,10 @@ fn main() -> BoxResult<()> {
 
         validator_stake_change_notes.sort();
         notifications.extend(validator_stake_change_notes);
+
+        if let Some(ref mut info) = epoch_classification.info {
+            info.insert("bonus_stake_amount".into(), bonus_stake_amount.into());
+        }
     }
 
     match (first_time, config.markdown_mode) {

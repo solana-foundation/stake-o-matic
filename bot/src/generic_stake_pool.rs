@@ -34,10 +34,19 @@ pub type ValidatorStakeActions = HashMap<Pubkey, String>;
 pub type UnfundedValidators = HashSet<Pubkey>;
 
 pub trait GenericStakePool {
+    /// Fourth value in returned tuple is the calculated bonus stake amount
     fn apply(
         &mut self,
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(EpochStakeNotes, ValidatorStakeActions, UnfundedValidators), Box<dyn error::Error>>;
+    ) -> Result<
+        (
+            EpochStakeNotes,
+            ValidatorStakeActions,
+            UnfundedValidators,
+            u64, // bonus stake amount
+        ),
+        Box<dyn error::Error>,
+    >;
 }
