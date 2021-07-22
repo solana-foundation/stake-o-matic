@@ -170,7 +170,7 @@ dependencies = [
  "instant",
  "pin-project",
  "rand 0.8.3",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -1415,7 +1415,7 @@ dependencies = [
  "simpl",
  "smpl_jwt",
  "time 0.2.26",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -1463,7 +1463,7 @@ dependencies = [
  "http",
  "indexmap",
  "slab",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-util 0.6.5",
  "tracing",
 ]
@@ -1674,7 +1674,7 @@ dependencies = [
  "itoa",
  "pin-project",
  "socket2",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tower-service",
  "tracing",
  "want",
@@ -1690,7 +1690,7 @@ dependencies = [
  "hyper 0.14.4",
  "log 0.4.14",
  "rustls",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-rustls",
  "webpki",
 ]
@@ -1704,7 +1704,7 @@ dependencies = [
  "bytes 1.0.1",
  "hyper 0.14.4",
  "native-tls",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-native-tls",
 ]
 
@@ -3123,7 +3123,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-native-tls",
  "tokio-rustls",
  "url 2.2.1",
@@ -3586,7 +3586,7 @@ dependencies = [
  "solana-program",
  "solana-sdk",
  "tarpc",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-serde",
 ]
 
@@ -3617,7 +3617,7 @@ dependencies = [
  "solana-runtime",
  "solana-sdk",
  "tarpc",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-serde",
  "tokio-stream",
 ]
@@ -3702,7 +3702,7 @@ dependencies = [
  "solana-version",
  "solana-vote-program",
  "thiserror",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tungstenite",
  "url 2.2.1",
 ]
@@ -3849,7 +3849,7 @@ dependencies = [
  "solana-version",
  "spl-memo",
  "thiserror",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -3865,7 +3865,7 @@ dependencies = [
  "solana-logger",
  "solana-remote-wallet",
  "solana-sdk",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -4014,7 +4014,7 @@ dependencies = [
  "solana-vote-program",
  "tempfile",
  "thiserror",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-stream",
  "trees",
 ]
@@ -4084,7 +4084,7 @@ dependencies = [
  "solana-logger",
  "solana-sdk",
  "solana-version",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "url 2.2.1",
 ]
 
@@ -4195,7 +4195,7 @@ dependencies = [
  "solana-sdk",
  "solana-vote-program",
  "thiserror",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -4269,7 +4269,7 @@ dependencies = [
  "solana-vote-program",
  "spl-token",
  "tokio 0.2.25",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-util 0.3.1",
 ]
 
@@ -4889,7 +4889,7 @@ dependencies = [
  "serde",
  "static_assertions",
  "tarpc-plugins",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-serde",
  "tokio-util 0.6.5",
 ]
@@ -5107,9 +5107,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.4.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "134af885d758d645f0f0505c9a8b3f9bf8a348fd822e112ab5248138348f1722"
+checksum = "4b7b349f11a7047e6d1276853e612d152f5e8a352c61917887cc2169e2366b4c"
 dependencies = [
  "autocfg 1.0.1",
  "bytes 1.0.1",
@@ -5207,7 +5207,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7d995660bd2b7f8c1568414c1126076c13fbb725c40112dc0120b78eb9b717b"
 dependencies = [
  "native-tls",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -5236,7 +5236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc6844de72e57df1980054b38be3a9f4702aba4858be64dd700181a8a6d0e1b6"
 dependencies = [
  "rustls",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "webpki",
 ]
 
@@ -5264,7 +5264,7 @@ checksum = "e177a5d8c3bf36de9ebe6d58537d8879e964332f93fb3339e43f618c81361af0"
 dependencies = [
  "futures-core",
  "pin-project-lite 0.2.6",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -5389,7 +5389,7 @@ dependencies = [
  "futures-sink",
  "log 0.4.14",
  "pin-project-lite 0.2.6",
- "tokio 1.4.0",
+ "tokio 1.9.0",
 ]
 
 [[package]]
@@ -5421,7 +5421,7 @@ dependencies = [
  "pin-project",
  "prost",
  "prost-derive",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-rustls",
  "tokio-stream",
  "tokio-util 0.6.5",
@@ -5443,7 +5443,7 @@ dependencies = [
  "pin-project",
  "rand 0.8.3",
  "slab",
- "tokio 1.4.0",
+ "tokio 1.9.0",
  "tokio-stream",
  "tokio-util 0.6.5",
  "tower-layer",
