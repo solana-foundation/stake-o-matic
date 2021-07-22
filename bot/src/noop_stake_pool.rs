@@ -1,3 +1,4 @@
+use solana_sdk::pubkey::Pubkey;
 use {
     crate::generic_stake_pool::*,
     solana_client::rpc_client::RpcClient,
@@ -18,9 +19,26 @@ impl GenericStakePool for NoopStakePool {
         &mut self,
         _rpc_client: &RpcClient,
         _dry_run: bool,
-        _desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(EpochStakeNotes, ValidatorStakeActions, UnfundedValidators), Box<dyn error::Error>>
-    {
-        Ok((vec![], HashMap::new(), HashSet::new()))
+        desired_validator_stake: &[ValidatorStake],
+    ) -> Result<
+        (
+            EpochStakeNotes,
+            ValidatorStakeActions,
+            UnfundedValidators,
+            u64,
+        ),
+        Box<dyn error::Error>,
+    > {
+        let validator_stake_actions: HashMap<Pubkey, String> = desired_validator_stake
+            .iter()
+            .map(|vs| {
+                (
+                    vs.identity,
+                    "Test action from NoopStakePool for validator".to_string(),
+                )
+            })
+            .collect();
+
+        Ok((vec![], validator_stake_actions, HashSet::new(), 12_345))
     }
 }

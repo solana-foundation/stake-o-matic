@@ -4,7 +4,9 @@ use {
         generic_stake_pool::ValidatorStakeState,
     },
     log::*,
+    semver::Version,
     serde::{Deserialize, Serialize},
+    serde_yaml::{Mapping, Value},
     solana_sdk::{clock::Epoch, pubkey::Pubkey},
     std::{
         collections::HashMap,
@@ -43,6 +45,19 @@ pub struct ValidatorClassification {
 
     // The validator was not funded this epoch and should be prioritized next epoch
     pub prioritize_funding_in_next_epoch: Option<bool>,
+
+    pub blocks: Option<usize>,
+    pub slots: Option<usize>,
+
+    pub vote_credits: Option<u64>,
+    pub commission: Option<u8>,
+
+    pub self_stake: Option<u64>,
+
+    // Whether this is the first epoch the validator is a resident of current_data_center
+    pub new_data_center_residency: Option<bool>,
+
+    pub release_version: Option<Version>,
 }
 
 impl ValidatorClassification {
@@ -86,6 +101,12 @@ pub struct EpochClassificationV1 {
 
     // Informational notes regarding this epoch
     pub notes: Vec<String>,
+
+    // Config values from Config struct
+    pub config: Option<Value>,
+
+    // General info about the Epoch
+    pub info: Option<Mapping>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

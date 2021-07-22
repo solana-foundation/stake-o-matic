@@ -97,8 +97,15 @@ impl GenericStakePool for StakePool {
         rpc_client: &RpcClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
-    ) -> Result<(EpochStakeNotes, ValidatorStakeActions, UnfundedValidators), Box<dyn error::Error>>
-    {
+    ) -> Result<
+        (
+            EpochStakeNotes,
+            ValidatorStakeActions,
+            UnfundedValidators,
+            u64,
+        ),
+        Box<dyn error::Error>,
+    > {
         let mut validator_stake_actions = HashMap::default();
 
         let mut inuse_stake_addresses = HashSet::default();
@@ -247,7 +254,12 @@ impl GenericStakePool for StakePool {
             &mut validator_stake_actions,
             &mut unfunded_validators,
         )?;
-        Ok((notes, validator_stake_actions, unfunded_validators))
+        Ok((
+            notes,
+            validator_stake_actions,
+            unfunded_validators,
+            bonus_stake_amount,
+        ))
     }
 }
 
