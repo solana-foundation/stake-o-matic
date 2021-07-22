@@ -69,10 +69,7 @@ impl Pack for RegistryInstruction {
     fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let mut mut_src: &[u8] = src;
         Self::deserialize(&mut mut_src).map_err(|err| {
-            msg!(
-                "Error: failed to deserialize feature proposal instruction: {}",
-                err
-            );
+            msg!("Error: failed to deserialize instruction: {}", err);
             ProgramError::InvalidInstructionData
         })
     }

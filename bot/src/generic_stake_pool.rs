@@ -29,8 +29,8 @@ pub struct ValidatorStake {
     pub priority: bool,
 }
 
-pub type ValidatorStakeActions = HashMap<Pubkey, String>;
 pub type EpochStakeNotes = Vec<String>;
+pub type ValidatorStakeActions = HashMap<Pubkey, String>;
 pub type UnfundedValidators = HashSet<Pubkey>;
 
 pub trait GenericStakePool {

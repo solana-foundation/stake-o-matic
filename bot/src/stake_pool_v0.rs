@@ -10,9 +10,9 @@ use {
         native_token::{Sol, LAMPORTS_PER_SOL},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
+        stake::{self, instruction as stake_instruction, state::StakeState},
         transaction::Transaction,
     },
-    solana_stake_program::{stake_instruction, stake_state::StakeState},
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -77,7 +77,7 @@ fn validator_stake_address(authorized_staker: Pubkey, vote_address: Pubkey) -> P
     Pubkey::create_with_seed(
         &authorized_staker,
         &validator_stake_address_seed(vote_address),
-        &solana_stake_program::id(),
+        &stake::program::id(),
     )
     .unwrap()
 }
@@ -86,7 +86,7 @@ fn validator_transient_stake_address(authorized_staker: Pubkey, vote_address: Pu
     Pubkey::create_with_seed(
         &authorized_staker,
         &validator_transient_stake_address_seed(vote_address),
-        &solana_stake_program::id(),
+        &stake::program::id(),
     )
     .unwrap()
 }
@@ -196,7 +196,7 @@ impl GenericStakePool for StakePool {
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
 
-        let reserve_stake_balance = get_available_stake_balance(
+        let reserve_stake_balance = get_available_reserve_stake_balance(
             rpc_client,
             self.reserve_stake_address,
             self.min_reserve_stake_balance,
@@ -251,26 +251,27 @@ impl GenericStakePool for StakePool {
     }
 }
 
-// Get the balance of a stake account excluding the reserve
-fn get_available_stake_balance(
+fn get_available_reserve_stake_balance(
     rpc_client: &RpcClient,
-    stake_address: Pubkey,
+    reserve_stake_address: Pubkey,
     reserve_stake_balance: u64,
 ) -> Result<u64, Box<dyn error::Error>> {
-    let balance = rpc_client.get_balance(&stake_address).map_err(|err| {
-        format!(
-            "Unable to get stake account balance: {}: {}",
-            stake_address, err
-        )
-    })?;
+    let balance = rpc_client
+        .get_balance(&reserve_stake_address)
+        .map_err(|err| {
+            format!(
+                "Unable to get reserve stake account balance: {}: {}",
+                reserve_stake_address, err
+            )
+        })?;
     if balance < reserve_stake_balance {
-        Err(format!(
-            "stake account {} balance too low, {}. Minimum is {}",
-            stake_address,
+        warn!(
+            "reserve stake account {} balance too low, {}. Minimum is {}",
+            reserve_stake_address,
             Sol(balance),
             Sol(reserve_stake_balance)
-        )
-        .into())
+        );
+        Ok(0)
     } else {
         Ok(balance.saturating_sub(reserve_stake_balance))
     }
@@ -439,7 +440,7 @@ fn stake_accounts_have_same_credits_observed(
     stake_account1: &Account,
     stake_account2: &Account,
 ) -> Result<bool, Box<dyn error::Error>> {
-    use solana_stake_program::stake_state::Stake;
+    use solana_sdk::stake::state::Stake;
 
     let stake_state1 = bincode::deserialize(stake_account1.data.as_slice())
         .map_err(|err| format!("Invalid stake account 1: {}", err))?;
@@ -476,14 +477,17 @@ fn create_validator_stake_accounts(
     min_reserve_stake_balance: u64,
     validator_stake_actions: &mut ValidatorStakeActions,
 ) -> Result<(), Box<dyn error::Error>> {
-    let mut reserve_stake_balance =
-        get_available_stake_balance(rpc_client, reserve_stake_address, min_reserve_stake_balance)
-            .map_err(|err| {
-            format!(
-                "Unable to get reserve stake account balance: {}: {}",
-                reserve_stake_address, err
-            )
-        })?;
+    let mut reserve_stake_balance = get_available_reserve_stake_balance(
+        rpc_client,
+        reserve_stake_address,
+        min_reserve_stake_balance,
+    )
+    .map_err(|err| {
+        format!(
+            "Unable to get reserve stake account balance: {}: {}",
+            reserve_stake_address, err
+        )
+    })?;
     info!(
         "Reserve stake available balance: {}",
         Sol(reserve_stake_balance)
@@ -815,7 +819,7 @@ mod test {
     };
 
     fn num_stake_accounts(rpc_client: &RpcClient, authorized_staker: &Keypair) -> usize {
-        get_all_stake(&rpc_client, authorized_staker.pubkey())
+        get_all_stake(rpc_client, authorized_staker.pubkey())
             .unwrap()
             .0
             .len()
@@ -856,7 +860,7 @@ mod test {
             num_stake_accounts(rpc_client, &stake_pool.authorized_staker),
             1 + 2 * validators.len()
         );
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
+        let _epoch = wait_for_next_epoch(rpc_client).unwrap();
         stake_pool
             .apply(rpc_client, false, &desired_validator_stake)
             .unwrap();
@@ -938,7 +942,7 @@ mod test {
             );
             {
                 assert_eq!(
-                    get_available_stake_balance(
+                    get_available_reserve_stake_balance(
                         &rpc_client,
                         reserve_stake_address,
                         min_reserve_stake_balance

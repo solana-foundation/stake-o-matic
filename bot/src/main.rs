@@ -24,10 +24,10 @@ use {
         native_token::*,
         pubkey::Pubkey,
         slot_history::{self, SlotHistory},
+        stake::{self, state::StakeState},
         stake_history::StakeHistory,
         sysvar,
     },
-    solana_stake_program::stake_state::StakeState,
     solana_vote_program::vote_state::VoteState,
     std::{
         collections::{HashMap, HashSet},
@@ -46,6 +46,7 @@ mod data_center_info;
 mod db;
 mod export;
 mod generic_stake_pool;
+mod noop_stake_pool;
 mod rpc_client_utils;
 mod stake_pool;
 mod stake_pool_v0;
@@ -175,6 +176,13 @@ pub enum Cluster {
     MainnetBeta,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Markdown {
+    Yes,
+    First,
+    No,
+}
+
 impl std::fmt::Display for Cluster {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -198,9 +206,11 @@ pub struct Config {
     json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
+    db_suffix: String,
     require_classification: bool,
-    markdown_path: Option<PathBuf>,
+    markdown_mode: Markdown,
 
+    /// Perform all stake processing, without sending transactions to the network
     dry_run: bool,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
@@ -277,8 +287,9 @@ impl Config {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
+            db_suffix: "".to_string(),
+            markdown_mode: Markdown::No,
             require_classification: false,
-            markdown_path: None,
             dry_run: true,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
@@ -300,7 +311,12 @@ impl Config {
     }
 
     fn cluster_db_path_for(&self, cluster: Cluster) -> PathBuf {
-        self.db_path.join(format!("data-{}", cluster))
+        if self.db_suffix.is_empty() {
+            self.db_path.join(format!("data-{}", cluster))
+        } else {
+            self.db_path
+                .join(format!("data-{}-{}", cluster, self.db_suffix))
+        }
     }
 
     fn cluster_db_path(&self) -> PathBuf {
@@ -365,8 +381,11 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         .arg(
             Arg::with_name("markdown")
                 .long("markdown")
-                .takes_value(false)
-                .help("Output markdown")
+                .value_name("no|yes|first")
+                .takes_value(true)
+                .default_value("no")
+                .possible_values(&["yes", "first", "no"])
+                .help("Output markdown.  If \"first\", markdown will only be generated on the first run.  If \"yes\", markdown will always be generated. If \"no\", no markdown is ever generated.")
         )
         .arg(
             Arg::with_name("db_path")
@@ -375,6 +394,14 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
                 .takes_value(true)
                 .default_value("db")
                 .help("Location for storing staking history")
+        )
+        .arg(
+            Arg::with_name("db_suffix")
+                .long("db-suffix")
+                .value_name("SUFFIX")
+                .takes_value(true)
+                .default_value("")
+                .help("Suffix for filename storing staking history")
         )
         .arg(
             Arg::with_name("require_classification")
@@ -575,11 +602,12 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
             )
             .arg(
                 Arg::with_name("baseline_stake_amount")
-                    .long("baseline-stake-amount")
+                    .index(3)
                     .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("5000")
                     .validator(is_amount)
+                    .required(true)
+                    .takes_value(true)
+                    .help("The baseline SOL amount to stake to validators with adequate performance")
             )
         )
         .subcommand(
@@ -604,12 +632,16 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
             )
             .arg(
                 Arg::with_name("baseline_stake_amount")
-                    .long("baseline-stake-amount")
+                    .index(3)
                     .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("5000")
                     .validator(is_amount)
+                    .required(true)
+                    .takes_value(true)
+                    .help("The baseline SOL amount to stake to validators with adequate performance")
             )
+        )
+        .subcommand(
+            SubCommand::with_name("noop-stake-pool").about("Use a no-op stake pool.  Useful for testing classification and generating markdown from an existing db.")
         )
         .subcommand(
             SubCommand::with_name("export").about("Move stake data from yml files to db")
@@ -662,10 +694,12 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
             .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
     };
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
-    let markdown_path = if matches.is_present("markdown") {
-        Some(db_path.join("md"))
-    } else {
-        None
+    let db_suffix = matches.value_of("db_suffix").unwrap().to_string();
+    let markdown_mode = match value_t_or_exit!(matches, "markdown", String).as_str() {
+        "first" => Markdown::First,
+        "yes" => Markdown::Yes,
+        "no" => Markdown::No,
+        _ => unreachable!(),
     };
     let require_classification = matches.is_present("require_classification");
 
@@ -689,9 +723,31 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
     let rpc_client = RpcClient::new_with_timeout(json_rpc_url.clone(), Duration::from_secs(180));
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
-    rpc_client
-        .get_health()
-        .map_err(|err| format!("RPC endpoint is unhealthy: {:?}", err))?;
+    {
+        let mut retries = 12u8;
+        let retry_delay = Duration::from_secs(10);
+        loop {
+            match rpc_client.get_health() {
+                Ok(()) => {
+                    info!("RPC endpoint healthy");
+                    break;
+                }
+                Err(err) => {
+                    warn!("RPC endpoint is unhealthy: {:?}", err);
+                }
+            }
+            if retries == 0 {
+                process::exit(1);
+            }
+            retries = retries.saturating_sub(1);
+            info!(
+                "{} retries remaining, sleeping for {} seconds",
+                retries,
+                retry_delay.as_secs()
+            );
+            std::thread::sleep(retry_delay);
+        }
+    }
 
     let command = if matches.subcommand_name().unwrap() == "export" {
         let (_, subcommand_matches) = matches.subcommand();
@@ -730,6 +786,7 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
                     baseline_stake_amount,
                 )?)
             }
+            ("noop-stake-pool", _) => Box::new(noop_stake_pool::new()),
             _ => unreachable!(),
         };
         Command::Stake(stake_pool)
@@ -739,8 +796,9 @@ fn get_config() -> BoxResult<(Command, Config, RpcClient)> {
         json_rpc_url,
         cluster,
         db_path,
+        db_suffix,
         require_classification,
-        markdown_path,
+        markdown_mode,
         dry_run,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
@@ -978,7 +1036,7 @@ fn get_self_stake_by_vote_account(
     }
 
     info!("Fetching stake accounts...");
-    let all_stake_accounts = rpc_client.get_program_accounts(&solana_stake_program::id())?;
+    let all_stake_accounts = rpc_client.get_program_accounts(&stake::program::id())?;
 
     let stake_history_account = rpc_client
         .get_account_with_commitment(&sysvar::stake_history::id(), CommitmentConfig::finalized())?
@@ -1111,7 +1169,7 @@ fn classify(
         .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
         .collect::<HashMap<_, _>>();
 
-    let (vote_account_info, total_active_stake) = get_vote_account_info(&rpc_client, last_epoch)?;
+    let (vote_account_info, total_active_stake) = get_vote_account_info(rpc_client, last_epoch)?;
 
     let self_stake_by_vote_account =
         get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
@@ -1156,7 +1214,7 @@ fn classify(
         cluster_average_skip_rate,
         too_many_poor_block_producers,
         _,
-    ) = classify_block_producers(&rpc_client, &config, last_epoch)?;
+    ) = classify_block_producers(rpc_client, config, last_epoch)?;
 
     let not_in_leader_schedule: ValidatorList = validator_list
         .difference(
@@ -1179,7 +1237,7 @@ fn classify(
         min_epoch_credits,
         avg_epoch_credits,
         too_many_poor_voters,
-    ) = classify_poor_voters(&config, &vote_account_info);
+    ) = classify_poor_voters(config, &vote_account_info);
 
     let mut notes = vec![
         format!(
@@ -1347,12 +1405,12 @@ fn classify(
             } else if active_stake > config.max_active_stake_lamports {
                 (
                     ValidatorStakeState::None,
-                    format!("active stake is too high: {}", Sol(active_stake)),
+                    format!("Active stake is too high: {}", Sol(active_stake)),
                 )
             } else if commission > config.max_commission {
                 (
                     ValidatorStakeState::None,
-                    format!("commission is too high: {}% commission", commission),
+                    format!("Commission is too high: {}% commission", commission),
                 )
             } else if let Some(insufficent_testnet_participation) =
                 insufficent_testnet_participation
@@ -1361,13 +1419,13 @@ fn classify(
             } else if poor_voters.contains(&identity) {
                 (
                     ValidatorStakeState::None,
-                    format!("insufficient vote credits: {}", vote_credits_msg),
+                    format!("Insufficient vote credits: {}", vote_credits_msg),
                 )
             } else if cluster_nodes_with_old_version.contains_key(&identity.to_string()) {
                 (
                     ValidatorStakeState::None,
                     format!(
-                        "Outdated solana release: {}",
+                        "Outdated Solana release: {}",
                         cluster_nodes_with_old_version
                             .get(&identity.to_string())
                             .unwrap()
@@ -1377,7 +1435,7 @@ fn classify(
                 (
                     ValidatorStakeState::Bonus,
                     format!(
-                        "good block production during epoch {}: {}",
+                        "Good block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1385,7 +1443,7 @@ fn classify(
                 (
                     ValidatorStakeState::Baseline,
                     format!(
-                        "poor block production during epoch {}: {}",
+                        "Poor block production during epoch {}: {}",
                         last_epoch, block_producer_classification_reason_msg
                     ),
                 )
@@ -1405,7 +1463,7 @@ fn classify(
                     } else {
                         ValidatorStakeState::Baseline
                     },
-                    format!("no leader slots; {}", vote_credits_msg),
+                    format!("No leader slots; {}", vote_credits_msg),
                 )
             };
 
@@ -1492,9 +1550,7 @@ fn main() -> BoxResult<()> {
     let (command, config, rpc_client) = get_config()?;
 
     match command {
-        Command::Export(epoch) => {
-            return export_to_db(epoch, &config, &rpc_client);
-        }
+        Command::Export(epoch) => export_to_db(epoch, &config, &rpc_client),
         Command::Stake(mut stake_pool) => {
             info!("Loading participants...");
             let participants = get_participants_with_state(
@@ -1558,12 +1614,13 @@ fn main() -> BoxResult<()> {
                     .unwrap_or_default()
                     .into_current();
 
-            let (mut epoch_classification, first_time) =
+            let (mut epoch_classification, first_time, post_notifications) =
                 if EpochClassification::exists(epoch, &config.cluster_db_path()) {
                     info!("Classification for epoch {} already exists", epoch);
                     (
                         EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
                         false,
+                        config.require_classification,
                     )
                 } else {
                     if config.require_classification {
@@ -1582,6 +1639,7 @@ fn main() -> BoxResult<()> {
                                 .validator_classifications
                                 .as_ref(),
                         )?,
+                        true,
                         true,
                     )
                 };
@@ -1658,28 +1716,30 @@ fn main() -> BoxResult<()> {
                 notifications.extend(validator_stake_change_notes);
             }
 
-            if first_time {
-                EpochClassification::new(epoch_classification)
-                    .save(epoch, &config.cluster_db_path())?;
-                generate_markdown(epoch, &config)?;
+            match (first_time, config.markdown_mode) {
+                (true, Markdown::First) | (_, Markdown::Yes) => {
+                    EpochClassification::new(epoch_classification)
+                        .save(epoch, &config.cluster_db_path())?;
+                    generate_markdown(epoch, &config)?;
+                }
+                _ => {}
+            }
 
+            if first_time && post_notifications {
                 // Only notify the user if this is the first run for this epoch
                 for notification in notifications {
                     info!("notification: {}", notification);
                     notifier.send(&notification);
                 }
             }
+
+            Ok(())
         }
     }
-
-    Ok(())
 }
 
 fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
-    let markdown_path = match config.markdown_path.as_ref() {
-        Some(d) => d,
-        None => return Ok(()),
-    };
+    let markdown_path = config.db_path.join("md");
     fs::create_dir_all(&markdown_path)?;
 
     let mut list = vec![(
@@ -1753,7 +1813,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         {
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
-            validator_classifications.sort_by(|a, b| a.0.cmp(&b.0));
+            validator_classifications.sort_by(|a, b| a.0.cmp(b.0));
             for (identity, classification) in validator_classifications {
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 
@@ -1789,18 +1849,17 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 ) {
                     validator_markdown.push(format!("* Data Center: {}", current_data_center));
 
-                    if data_center_residency.len() > 1
-                        || (data_center_residency.len() == 1
-                            && !data_center_residency.contains_key(&current_data_center))
-                    {
-                        let data_center_residency = data_center_residency
-                            .keys()
-                            .cloned()
-                            .map(|data_center| data_center.to_string())
-                            .collect::<Vec<_>>();
+                    if !data_center_residency.is_empty() {
                         validator_markdown.push(format!(
                             "* Resident Data Center(s): {}",
-                            data_center_residency.join(", ")
+                            data_center_residency
+                                .iter()
+                                .map(|(data_center, seniority)| format!(
+                                    "{} (seniority: {})",
+                                    data_center, seniority
+                                ))
+                                .collect::<Vec<String>>()
+                                .join(",")
                         ));
                     }
                 }

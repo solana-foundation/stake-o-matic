@@ -51,10 +51,7 @@ impl Pack for Participant {
     fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let mut mut_src: &[u8] = src;
         Self::deserialize(&mut mut_src).map_err(|err| {
-            msg!(
-                "Error: failed to deserialize feature proposal account: {}",
-                err
-            );
+            msg!("Error: failed to deserialize account: {}", err);
             ProgramError::InvalidAccountData
         })
     }

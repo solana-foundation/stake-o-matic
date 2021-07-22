@@ -125,7 +125,7 @@ pub fn process_instruction(
 mod test {
     use {
         super::*,
-        assert_matches::*,
+        assert_matches::assert_matches,
         solana_program::{system_instruction::create_account, sysvar::rent::Rent},
         solana_program_test::*,
         solana_sdk::{

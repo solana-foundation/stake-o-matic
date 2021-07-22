@@ -155,6 +155,10 @@ fn process_apply(
     println!("Mainnet Validator Identity: {}", mainnet_identity.pubkey());
     println!("Testnet Validator Identity: {}", testnet_identity.pubkey());
 
+    if mainnet_identity.pubkey() == testnet_identity.pubkey() {
+        return Err("Mainnet and Testnet identities cannot be the same".into());
+    }
+
     if !confirm {
         println!(
             "\nWarning: Your mainnet and testnet identities cannot be changed after applying. \
@@ -265,6 +269,11 @@ fn process_admin_approve(
         .ok_or_else(|| format!("Registration not found for {}", identity))?;
 
     print_participant(&participant);
+
+    if participant.mainnet_identity == participant.testnet_identity {
+        return Err("Mainnet and Testnet identities cannot be the same".into());
+    }
+
     println!("Approving...");
 
     let message = Message::new(
@@ -415,7 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .global(true)
                 .help("Configuration file to use");
             if let Some(ref config_file) = *solana_cli_config::CONFIG_FILE {
-                arg.default_value(&config_file)
+                arg.default_value(config_file)
             } else {
                 arg
             }
@@ -589,7 +598,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .index(1)
                                 .required(true)
-                                .help("Testnet or Mainnet validator identity"),
+                                .help("Address of account to rewrite"),
                         )
                         .arg(
                             Arg::with_name("testnet")
@@ -648,7 +657,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 String
             )),
             default_signer: default_signer
-                .signer_from_path(&matches, &mut wallet_manager)
+                .signer_from_path(matches, &mut wallet_manager)
                 .unwrap_or_else(|err| {
                     eprintln!("error: {}", err);
                     exit(1);
