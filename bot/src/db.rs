@@ -21,6 +21,15 @@ pub struct ScoreDiscounts {
     pub insufficient_self_stake: bool,
     pub can_halt_the_network_group: bool,
 }
+#[derive(Default, Clone, Deserialize, Serialize)]
+pub struct ScoreData {
+    /// computed score (more granular than ValidatorStakeState)
+    pub epoch_credits: u64, // epoch_credits is the base score
+    pub score_discounts: ScoreDiscounts,
+    pub commission: u8,
+    pub active_stake: u64,
+    pub data_center_concentration: f64,
+}
 
 #[derive(Default, Clone, Deserialize, Serialize)]
 pub struct ValidatorClassification {
@@ -30,12 +39,8 @@ pub struct ValidatorClassification {
     pub stake_state: ValidatorStakeState,
     pub stake_state_reason: String,
 
-    /// computed score (more granular than ValidatorStakeState)
-    pub epoch_credits: u64, // epoch_credits is the base score
-    pub score_discounts: ScoreDiscounts,
-    pub commission: u8,
-    pub active_stake: u64,
-    pub data_center_concentration: f64,
+    // added optional validator scoring data
+    pub score_data: Option<ScoreData>,
 
     // Summary of the action was taken this epoch to advance the validator's stake
     pub stake_action: Option<String>,
@@ -60,7 +65,7 @@ pub struct ValidatorClassification {
     pub prioritize_funding_in_next_epoch: Option<bool>,
 }
 
-impl ValidatorClassification {
+impl ScoreData {
     pub fn score(&self, config: &Config) -> u64 {
         if self.score_discounts.can_halt_the_network_group
             || self.score_discounts.insufficient_self_stake
@@ -73,7 +78,7 @@ impl ValidatorClassification {
             // if data_center_concentration = 25%, lose all score,
             // data_center_concentration = 10%, lose 40% (rounded)
             let discount_because_data_center_concentration =
-                self.epoch_credits * (self.data_center_concentration as u64 * 4) / 100;
+                (self.data_center_concentration * config.score_concentration_point_discount as f64) as u64;
 
             // score discounts according to commission
             let discount_because_commission =
@@ -85,7 +90,9 @@ impl ValidatorClassification {
                 .saturating_sub(discount_because_data_center_concentration)
         }
     }
+}
 
+impl ValidatorClassification {
     pub fn stake_state_streak(&self) -> usize {
         let mut streak = 1;
 

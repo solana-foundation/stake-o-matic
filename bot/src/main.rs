@@ -204,6 +204,8 @@ pub struct Config {
     score_commission_discount: u32,
     /// score min stake required
     score_min_stake: u64,
+    /// score discount per concentration percentage point
+    score_concentration_point_discount: u32,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
@@ -286,6 +288,7 @@ impl Config {
             score_max_commission: 8,
             score_commission_discount: 12_000,
             score_min_stake: sol_to_lamports(75.0),
+            score_concentration_point_discount: 4_000,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -633,6 +636,13 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
                     .required(false)
                     .help("score to discount for each commission point")
             )
+            .arg(
+                Arg::with_name("concentration_point_discount")
+                    .long ("concentration-point-discount")
+                    .takes_value(true)
+                    .required(false)
+                    .help("score to discount for each concentration percentage point")
+            )
         )
         .get_matches();
 
@@ -698,16 +708,22 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
     .unwrap();
 
     // score-all command and arguments
-    let (score_all, score_max_commission, score_commission_discount, score_min_stake) =
-        match matches.subcommand() {
-            ("score-all", Some(matches)) => (
-                true,
-                value_t!(matches, "score_max_commission", u8).unwrap_or(10),
-                value_t!(matches, "commission_point_discount", u32).unwrap_or(16_000),
-                value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
-            ),
-            _ => (false, 0, 0, 0),
-        };
+    let (
+        score_all,
+        score_max_commission,
+        score_commission_discount,
+        score_min_stake,
+        score_concentration_point_discount,
+    ) = match matches.subcommand() {
+        ("score-all", Some(matches)) => (
+            true,
+            value_t!(matches, "score_max_commission", u8).unwrap_or(10),
+            value_t!(matches, "commission_point_discount", u32).unwrap_or(16_000),
+            value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
+            value_t!(matches, "commission_point_discount", u32).unwrap_or(4000),
+        ),
+        _ => (false, 0, 0, 0, 0),
+    };
 
     let config = Config {
         json_rpc_url,
@@ -720,6 +736,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         score_max_commission,
         score_commission_discount,
         score_min_stake,
+        score_concentration_point_discount,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -1554,11 +1571,13 @@ fn classify(
                     identity,
                     vote_address,
                     stake_state,
-                    epoch_credits,
-                    score_discounts,
-                    commission,
-                    active_stake,
-                    data_center_concentration: data_center_info.stake_percent,
+                    score_data: Some(ScoreData {
+                        epoch_credits,
+                        score_discounts,
+                        commission,
+                        active_stake,
+                        data_center_concentration: data_center_info.stake_percent,
+                    }),
                     stake_states: Some(stake_states),
                     stake_action: None,
                     stake_state_reason: reason,
@@ -1880,22 +1899,24 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 ));
 
                 //identity,vote_address,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
-                let csv_line = format!(
-                    r#""{}","{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
-                    identity.to_string(),
-                    classification.vote_address,
-                    classification.score(config),
-                    classification.commission,
-                    lamports_to_sol(classification.active_stake),
-                    classification.epoch_credits,
-                    classification.data_center_concentration,
-                    classification.score_discounts.can_halt_the_network_group,
-                    classification.score_discounts.low_credits,
-                    classification.score_discounts.insufficient_self_stake,
-                    classification.stake_state,
-                    classification.stake_state_reason,
-                );
-                validator_detail_csv.push(csv_line);
+                if let Some(score_data) = &classification.score_data {
+                    let csv_line = format!(
+                        r#""{}","{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
+                        identity.to_string(),
+                        classification.vote_address,
+                        score_data.score(config),
+                        score_data.commission,
+                        lamports_to_sol(score_data.active_stake),
+                        score_data.epoch_credits,
+                        score_data.data_center_concentration,
+                        score_data.score_discounts.can_halt_the_network_group,
+                        score_data.score_discounts.low_credits,
+                        score_data.score_discounts.insufficient_self_stake,
+                        classification.stake_state,
+                        classification.stake_state_reason,
+                    );
+                    validator_detail_csv.push(csv_line);
+                }
 
                 if let Some(ref stake_action) = classification.stake_action {
                     validator_markdown.push(format!("* Staking activity: {}", stake_action));
