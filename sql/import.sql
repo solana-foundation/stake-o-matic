@@ -4,13 +4,12 @@ CREATE TABLE mainnet(
   identity TEXT, 
   vote_address TEXT, 
   score INTEGER, 
+  avg_position INTEGER, 
   commission SHORT, 
   active_stake INTEGER, 
   epoch_credits INTEGER,
   data_center_concentration DOUBLE,
   can_halt_the_network_group BOOL,
-  low_credits BOOL,
-  insufficient_self_stake BOOL,
   stake_state TEXT, 
   stake_state_reason TEXT
 );

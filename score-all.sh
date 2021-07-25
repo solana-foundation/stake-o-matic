@@ -1,8 +1,9 @@
 ./target/debug/solana-stake-o-matic --markdown  $* \
-   --min-epoch-credit-percentage-of-average 0 \
+   --min-epoch-credit-percentage-of-average 20 \
    score-all \
    --score-max-commission 10 \
-   --commission-point-discount 2000 \
-   --concentration-point-discount 2000
+   --score-min-stake 100 \
+   --commission-point-discount 5000 \
+   --concentration-point-discount 1000
    
 # --cluster mainnet-beta

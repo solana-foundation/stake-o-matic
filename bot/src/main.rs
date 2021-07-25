@@ -630,6 +630,13 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
                     .help("scoring max accepted commission")
             )
             .arg(
+                Arg::with_name("score_min_stake")
+                    .long("score-min-stake")
+                    .takes_value(true)
+                    .required(false)
+                    .help("scoring min stake required")
+            )
+            .arg(
                 Arg::with_name("commission_point_discount")
                     .long ("commission-point-discount")
                     .takes_value(true)
@@ -1423,7 +1430,6 @@ fn classify(
                 && self_stake < config.min_self_stake_lamports
             {
                 validator_notes.push(insufficent_self_stake_msg.clone());
-                score_discounts.insufficient_self_stake = true; //discount all
             }
 
             let insufficent_testnet_participation = testnet_participation
@@ -1442,9 +1448,6 @@ fn classify(
                     None
                 })
                 .flatten();
-
-            // no score if below 50% from avg credits
-            score_discounts.low_credits = epoch_credits < min_epoch_credits;
 
             // no score if in the can-halt-the-network group
             score_discounts.can_halt_the_network_group =
@@ -1573,6 +1576,9 @@ fn classify(
                     stake_state,
                     score_data: Some(ScoreData {
                         epoch_credits,
+                        average_position: ((epoch_credits as u128 * 50_u128)
+                            / avg_epoch_credits as u128)
+                            as u32,
                         score_discounts,
                         commission,
                         active_stake,
@@ -1901,17 +1907,16 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                 //identity,vote_address,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
                 if let Some(score_data) = &classification.score_data {
                     let csv_line = format!(
-                        r#""{}","{}",{},{},{},{},{:.4},{},{},{},"{:?}","{}""#,
+                        r#""{}","{}",{},{},{},{},{},{:.4},{},"{:?}","{}""#,
                         identity.to_string(),
                         classification.vote_address,
                         score_data.score(config),
+                        score_data.average_position,
                         score_data.commission,
                         lamports_to_sol(score_data.active_stake),
                         score_data.epoch_credits,
                         score_data.data_center_concentration,
                         score_data.score_discounts.can_halt_the_network_group,
-                        score_data.score_discounts.low_credits,
-                        score_data.score_discounts.insufficient_self_stake,
                         classification.stake_state,
                         classification.stake_state_reason,
                     );

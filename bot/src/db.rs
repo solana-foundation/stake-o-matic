@@ -17,14 +17,15 @@ use {
 
 #[derive(Default, Clone, Deserialize, Serialize)]
 pub struct ScoreDiscounts {
-    pub low_credits: bool,
-    pub insufficient_self_stake: bool,
     pub can_halt_the_network_group: bool,
 }
 #[derive(Default, Clone, Deserialize, Serialize)]
+/// computed score (more granular than ValidatorStakeState)
 pub struct ScoreData {
-    /// computed score (more granular than ValidatorStakeState)
-    pub epoch_credits: u64, // epoch_credits is the base score
+    /// epoch_credits is the base score
+    pub epoch_credits: u64,
+    /// 50 => Average, 0=>worst, 100=twice the average
+    pub average_position: u32,
     pub score_discounts: ScoreDiscounts,
     pub commission: u8,
     pub active_stake: u64,
@@ -68,17 +69,20 @@ pub struct ValidatorClassification {
 impl ScoreData {
     pub fn score(&self, config: &Config) -> u64 {
         if self.score_discounts.can_halt_the_network_group
-            || self.score_discounts.insufficient_self_stake
-            || self.score_discounts.low_credits
-            || self.commission > config.score_max_commission
             || self.active_stake < config.score_min_stake
+            || self.average_position
+                < 50_u32.saturating_sub(config.min_epoch_credit_percentage_of_average as u32 / 2)
+            // if min_epoch_credit_percentage_of_average=100 => everybody passes
+            // if min_epoch_credit_percentage_of_average=25 => only validators above avg-25% pass
+            || self.commission > config.score_max_commission
         {
             0
         } else {
             // if data_center_concentration = 25%, lose all score,
             // data_center_concentration = 10%, lose 40% (rounded)
-            let discount_because_data_center_concentration =
-                (self.data_center_concentration * config.score_concentration_point_discount as f64) as u64;
+            let discount_because_data_center_concentration = (self.data_center_concentration
+                * config.score_concentration_point_discount as f64)
+                as u64;
 
             // score discounts according to commission
             let discount_because_commission =
