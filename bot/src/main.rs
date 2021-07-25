@@ -1877,7 +1877,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
             let mut validator_detail_csv = vec![];
-            validator_detail_csv.push("identity,vote_address,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason".into());
+            validator_detail_csv.push("identity,vote_address,score,average_position,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,stake_state,stake_state_reason".into());
 
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
