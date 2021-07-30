@@ -727,7 +727,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
             value_t!(matches, "score_max_commission", u8).unwrap_or(10),
             value_t!(matches, "commission_point_discount", u32).unwrap_or(16_000),
             value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
-            value_t!(matches, "commission_point_discount", u32).unwrap_or(4000),
+            value_t!(matches, "concentration_point_discount", u32).unwrap_or(2000),
         ),
         _ => (false, 0, 0, 0, 0),
     };
@@ -1185,7 +1185,7 @@ fn classify(
     // compute cumulative_stake_limit => active_stake of the last validator inside the can-halt-the-network group
     // we later set score=0 to all validators whose stake >= concentrated_validators_stake_limit
     // sort by active_stake
-    vote_account_info.sort_by(|a, b| a.active_stake.cmp(&b.active_stake));
+    vote_account_info.sort_by(|a, b| b.active_stake.cmp(&a.active_stake));
     let mut accumulated: u64 = 0;
     let mut count_halt_group: u32 = 0;
     let limit: u64 = total_active_stake / 100 * 34;

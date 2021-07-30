@@ -14,8 +14,8 @@ CREATE TABLE mainnet(
   stake_state_reason TEXT
 );
 .mode csv
---.import ./db/score-all-mainnet-beta/mainnet-beta-validator-detail.csv mainnet
-.import ./db/score-all-testnet/testnet-validator-detail.csv mainnet
+.import ./db/score-all-mainnet-beta/mainnet-beta-validator-detail.csv mainnet
+--.import ./db/score-all-testnet/testnet-validator-detail.csv mainnet
 --remove header row
 delete FROM mainnet where identity='identity';
 --add pct column 
