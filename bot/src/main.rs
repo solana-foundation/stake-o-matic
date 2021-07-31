@@ -1194,9 +1194,9 @@ fn classify(
         accumulated += info.active_stake;
         count_halt_group += 1;
         if accumulated > limit {
-            concentrated_validators_stake_limit = info.active_stake;
             break;
         }
+        concentrated_validators_stake_limit = info.active_stake
     }
     info!(
         "validators:{} total_active_stake:{}, can_halt_the_network:top {}, pro-decentralization-stake-limit: less than {}",
