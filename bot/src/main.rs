@@ -1188,7 +1188,7 @@ fn classify(
     vote_account_info.sort_by(|a, b| b.active_stake.cmp(&a.active_stake));
     let mut accumulated: u64 = 0;
     let mut count_halt_group: u32 = 0;
-    let limit: u64 = total_active_stake / 100 * 34;
+    let limit: u64 = total_active_stake / 100 * 33;
     let mut concentrated_validators_stake_limit = limit;
     for info in &vote_account_info {
         accumulated += info.active_stake;
