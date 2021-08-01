@@ -85,13 +85,26 @@ impl ScoreData {
                 as u64;
 
             // score discounts according to commission
-            let discount_because_commission =
-                (self.commission as u32 * config.score_commission_discount) as u64;
+            // apply commission % as a discount to credits_observed.
+            // The rationale es:
+            // If you're the top performer validator and get 300K credits, but you have 50% commission,
+            // from our user's point of view, it's the same as a 150K credits validator with 0% commission,
+            // both represent the same APY for the user.
+            // So to treat both the same we apply commission to self.epoch_credits
+            let discount_because_commission = self.commission as u64 * self.epoch_credits / 100;
+
+            // give more score to above average validators in order to increase APY for our users
+            let points_added_above_average: u64 = if self.average_position > 50 {
+                (self.average_position - 50) as u64 * self.epoch_credits / 10_u64
+            } else {
+                0
+            };
 
             //result
             self.epoch_credits
                 .saturating_sub(discount_because_commission)
                 .saturating_sub(discount_because_data_center_concentration)
+                .saturating_add(points_added_above_average)
         }
     }
 }

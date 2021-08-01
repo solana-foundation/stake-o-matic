@@ -200,8 +200,6 @@ pub struct Config {
     score_all: bool,
     /// max commission accepted to score (0-100)
     score_max_commission: u8,
-    /// score discount per commission point
-    score_commission_discount: u32,
     /// score min stake required
     score_min_stake: u64,
     /// score discount per concentration percentage point
@@ -286,9 +284,8 @@ impl Config {
             dry_run: true,
             score_all: false,
             score_max_commission: 8,
-            score_commission_discount: 12_000,
-            score_min_stake: sol_to_lamports(75.0),
-            score_concentration_point_discount: 4_000,
+            score_min_stake: sol_to_lamports(100.0),
+            score_concentration_point_discount: 1_500,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -715,22 +712,16 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
     .unwrap();
 
     // score-all command and arguments
-    let (
-        score_all,
-        score_max_commission,
-        score_commission_discount,
-        score_min_stake,
-        score_concentration_point_discount,
-    ) = match matches.subcommand() {
-        ("score-all", Some(matches)) => (
-            true,
-            value_t!(matches, "score_max_commission", u8).unwrap_or(10),
-            value_t!(matches, "commission_point_discount", u32).unwrap_or(16_000),
-            value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
-            value_t!(matches, "concentration_point_discount", u32).unwrap_or(2000),
-        ),
-        _ => (false, 0, 0, 0, 0),
-    };
+    let (score_all, score_max_commission, score_min_stake, score_concentration_point_discount) =
+        match matches.subcommand() {
+            ("score-all", Some(matches)) => (
+                true,
+                value_t!(matches, "score_max_commission", u8).unwrap_or(10),
+                value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
+                value_t!(matches, "concentration_point_discount", u32).unwrap_or(2000),
+            ),
+            _ => (false, 0, 0, 0),
+        };
 
     let config = Config {
         json_rpc_url,
@@ -741,7 +732,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         dry_run,
         score_all,
         score_max_commission,
-        score_commission_discount,
         score_min_stake,
         score_concentration_point_discount,
         quality_block_producer_percentage,
