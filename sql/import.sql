@@ -20,10 +20,10 @@ CREATE TABLE mainnet(
 delete FROM mainnet where identity='identity';
 --add pct column 
 ALTER table mainnet add pct FLOAT;
-ALTER table mainnet add pct_of_stake FLOAT;
+ALTER table mainnet add stake_conc FLOAT;
 UPDATE mainnet set 
      pct = round(score * 100.0 / (select sum(score) from mainnet),4),
-     pct_of_stake = round(active_stake * 100.0 / (select sum(active_stake) from mainnet),4)
+     stake_conc = round(active_stake * 100.0 / (select sum(active_stake) from mainnet),4)
    ;
 --control, show total staked
 select 'validators',count(*),'total staked',sum(active_stake) from mainnet;
