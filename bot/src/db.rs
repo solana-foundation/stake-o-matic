@@ -19,17 +19,27 @@ use {
 pub struct ScoreDiscounts {
     pub can_halt_the_network_group: bool,
 }
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct ByIdentityInfo {
+    pub data_center_id: DataCenterId,
+    pub keybase_id: String,
+    pub name: String,
+    pub www_url: String,
+}
+
 #[derive(Default, Clone, Deserialize, Serialize)]
 /// computed score (more granular than ValidatorStakeState)
 pub struct ScoreData {
     /// epoch_credits is the base score
     pub epoch_credits: u64,
     /// 50 => Average, 0=>worst, 100=twice the average
-    pub average_position: u32,
+    pub average_position: f64,
     pub score_discounts: ScoreDiscounts,
     pub commission: u8,
     pub active_stake: u64,
     pub data_center_concentration: f64,
+    pub validators_app_info: ByIdentityInfo,
 }
 
 #[derive(Default, Clone, Deserialize, Serialize)]
@@ -70,10 +80,9 @@ impl ScoreData {
     pub fn score(&self, config: &Config) -> u64 {
         if self.score_discounts.can_halt_the_network_group
             || self.active_stake < config.score_min_stake
-            || self.average_position
-                < 50_u32.saturating_sub(config.min_epoch_credit_percentage_of_average as u32 / 2)
-            // if min_epoch_credit_percentage_of_average=100 => everybody passes
-            // if min_epoch_credit_percentage_of_average=25 => only validators above avg-25% pass
+            || self.average_position < config.min_avg_position
+            // if config.min_avg_position=100 => everybody passes
+            // if config.min_avg_position=50 => only validators above avg pass
             || self.commission > config.score_max_commission
         {
             0
@@ -93,9 +102,9 @@ impl ScoreData {
             // So to treat both the same we apply commission to self.epoch_credits
             let discount_because_commission = self.commission as u64 * self.epoch_credits / 100;
 
-            // give more score to above average validators in order to increase APY for our users
-            let points_added_above_average: u64 = if self.average_position > 50 {
-                (self.average_position - 50) as u64 * self.epoch_credits / 10_u64
+            // give extra score to above average validators in order to increase APY for our users
+            let points_added_above_average: u64 = if self.average_position > 50.0 {
+                (self.average_position - 50.0) as u64 * self.epoch_credits / 10_u64
             } else {
                 0
             };

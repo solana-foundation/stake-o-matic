@@ -1,5 +1,5 @@
 use {
-    crate::validators_app,
+    crate::{validators_app,ByIdentityInfo},
     log::*,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
@@ -75,7 +75,7 @@ impl std::fmt::Display for DataCenterInfo {
 #[derive(Debug, Default)]
 pub struct DataCenters {
     pub info: Vec<DataCenterInfo>,
-    pub by_identity: HashMap<Pubkey, DataCenterId>,
+    pub by_identity: HashMap<Pubkey, ByIdentityInfo>,
 }
 
 pub fn get(cluster: &str) -> Result<DataCenters, Box<dyn error::Error>> {
@@ -123,7 +123,15 @@ pub fn get(cluster: &str) -> Result<DataCenters, Box<dyn error::Error>> {
             })
             .unwrap_or_default();
 
-        by_identity.insert(identity, data_center_id.clone());
+        by_identity.insert(
+            identity,
+            ByIdentityInfo {
+                data_center_id: data_center_id.clone(),
+                keybase_id: String::from(v.keybase_id.as_deref().unwrap_or("")),
+                name: String::from(v.name.as_deref().unwrap_or("")),
+                www_url: String::from(v.www_url.as_deref().unwrap_or("")),
+            },
+        );
 
         let mut data_center_info = data_center_map
             .entry(data_center_id.clone())

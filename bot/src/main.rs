@@ -204,6 +204,8 @@ pub struct Config {
     score_min_stake: u64,
     /// score discount per concentration percentage point
     score_concentration_point_discount: u32,
+    /// min average position considering credits_observed, 50.0 = average
+    min_avg_position: f64,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
@@ -235,7 +237,7 @@ pub struct Config {
     /// None: skip infrastructure concentration check
     max_infrastructure_concentration: Option<f64>,
 
-    /// How validators with infrastruction concentration above `max_infrastructure_concentration`
+    /// How validators with infrastructure concentration above `max_infrastructure_concentration`
     /// will be affected. Accepted values are:
     /// 1) "warn"       - Stake unaffected. A warning message is notified
     /// 2) "destake"    - Removes all validator stake
@@ -647,6 +649,13 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
                     .required(false)
                     .help("score to discount for each concentration percentage point")
             )
+            .arg(
+                Arg::with_name("min_avg_position")
+                    .long ("min-avg-position")
+                    .takes_value(true)
+                    .required(false)
+                    .help("min avg position required considering epoch_credits")
+            )
         )
         .get_matches();
 
@@ -712,16 +721,22 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
     .unwrap();
 
     // score-all command and arguments
-    let (score_all, score_max_commission, score_min_stake, score_concentration_point_discount) =
-        match matches.subcommand() {
-            ("score-all", Some(matches)) => (
-                true,
-                value_t!(matches, "score_max_commission", u8).unwrap_or(10),
-                value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
-                value_t!(matches, "concentration_point_discount", u32).unwrap_or(2000),
-            ),
-            _ => (false, 0, 0, 0),
-        };
+    let (
+        score_all,
+        score_max_commission,
+        score_min_stake,
+        score_concentration_point_discount,
+        min_avg_position,
+    ) = match matches.subcommand() {
+        ("score-all", Some(matches)) => (
+            true,
+            value_t!(matches, "score_max_commission", u8).unwrap_or(10),
+            value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
+            value_t!(matches, "concentration_point_discount", u32).unwrap_or(2000),
+            value_t!(matches, "min_avg_position", f64).unwrap_or(50.0),
+        ),
+        _ => (false, 0, 0, 0, 0.0),
+    };
 
     let config = Config {
         json_rpc_url,
@@ -734,6 +749,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         score_max_commission,
         score_min_stake,
         score_concentration_point_discount,
+        min_avg_position,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -1356,11 +1372,13 @@ fn classify(
 
             let participant = identity_to_participant.get(&identity).cloned();
 
-            let current_data_center = data_centers
+            let validators_app_info = data_centers
                 .by_identity
                 .get(&identity)
                 .cloned()
                 .unwrap_or_default();
+
+            let current_data_center = validators_app_info.data_center_id.clone();
 
             // score: check data center concentration
             let data_center_info = data_centers
@@ -1566,13 +1584,12 @@ fn classify(
                     stake_state,
                     score_data: Some(ScoreData {
                         epoch_credits,
-                        average_position: ((epoch_credits as u128 * 50_u128)
-                            / avg_epoch_credits as u128)
-                            as u32,
+                        average_position: epoch_credits as f64 / avg_epoch_credits as f64 * 50.0,
                         score_discounts,
                         commission,
                         active_stake,
                         data_center_concentration: data_center_info.stake_percent,
+                        validators_app_info,
                     }),
                     stake_states: Some(stake_states),
                     stake_action: None,
@@ -1867,8 +1884,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
         if let Some(ref validator_classifications) = epoch_classification.validator_classifications
         {
             let mut validator_detail_csv = vec![];
-            validator_detail_csv.push("identity,vote_address,score,average_position,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,stake_state,stake_state_reason".into());
-
+            validator_detail_csv.push("epoch,keybase_id,name,identity,vote_address,score,average_position,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,stake_state,stake_state_reason,www_url".into());
             let mut validator_classifications =
                 validator_classifications.iter().collect::<Vec<_>>();
             validator_classifications.sort_by(|a, b| a.0.cmp(b.0));
@@ -1894,10 +1910,13 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     classification.stake_state_reason
                 ));
 
-                //identity,vote_address,score,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,low_credits,insufficient_self_stake,stake_state,stake_state_reason
+                //epoch,keybase_id,name,identity,vote_address,score,average_position,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,stake_state,stake_state_reason,www_url
                 if let Some(score_data) = &classification.score_data {
                     let csv_line = format!(
-                        r#""{}","{}",{},{},{},{},{},{:.4},{},"{:?}","{}""#,
+                        r#"{},"{}","{}","{}","{}",{},{},{},{},{},{:.4},{},"{:?}","{}","{}""#,
+                        epoch,
+                        score_data.validators_app_info.keybase_id,
+                        score_data.validators_app_info.name,
                         identity.to_string(),
                         classification.vote_address,
                         score_data.score(config),
@@ -1909,6 +1928,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                         score_data.score_discounts.can_halt_the_network_group,
                         classification.stake_state,
                         classification.stake_state_reason,
+                        score_data.validators_app_info.www_url,
                     );
                     validator_detail_csv.push(csv_line);
                 }
