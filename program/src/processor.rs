@@ -50,6 +50,7 @@ pub fn process_instruction(
     let account_info_iter = &mut accounts.iter();
     let participant_info = next_account_info(account_info_iter)?;
     let mut participant = Participant::unpack_from_slice(&participant_info.data.borrow())?;
+    let mut check_mainnet_testnet_eq = true;
 
     match instruction {
         RegistryInstruction::Apply => {
@@ -79,6 +80,7 @@ pub fn process_instruction(
             msg!("Withdraw");
             let identity_info = next_account_info(account_info_iter)?;
             let refundee_info = next_account_info(account_info_iter)?;
+            check_mainnet_testnet_eq = false;
 
             if !identity_info.is_signer {
                 msg!("Error: {} is not a signer", identity_info.key);
@@ -104,6 +106,7 @@ pub fn process_instruction(
             msg!("Reject");
             authenticate_admin(next_account_info(account_info_iter)?)?;
             participant.state = ParticipantState::Rejected;
+            check_mainnet_testnet_eq = false;
         }
         RegistryInstruction::Rewrite(new_participant) => {
             msg!("Rewrite");
@@ -112,7 +115,7 @@ pub fn process_instruction(
         }
     }
 
-    if participant.testnet_identity == participant.mainnet_identity {
+    if check_mainnet_testnet_eq && participant.testnet_identity == participant.mainnet_identity {
         msg!("Error: mainnet and testnet identities must be unique",);
         Err(ProgramError::InvalidAccountData)
     } else {
