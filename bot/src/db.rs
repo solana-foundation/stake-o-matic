@@ -104,7 +104,8 @@ impl ScoreData {
 
             // give extra score to above average validators in order to increase APY for our users
             let points_added_above_average: u64 = if self.average_position > 50.0 {
-                (self.average_position - 50.0) as u64 * self.epoch_credits / 10_u64
+                let above = self.average_position - 50.0;
+                (above * self.epoch_credits as f64) as u64
             } else {
                 0
             };

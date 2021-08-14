@@ -1,5 +1,5 @@
 use {
-    crate::{validators_app,ByIdentityInfo},
+    crate::{validators_app, ByIdentityInfo},
     log::*,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
