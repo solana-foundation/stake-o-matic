@@ -1941,8 +1941,15 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _reason_msg, cluster_average_skip_rate, too_many_poor_block_producers) =
-            classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
+        let (
+            quality,
+            poor,
+            _reason_msg,
+            cluster_average_skip_rate,
+            too_many_poor_block_producers,
+            blocks_and_slots,
+        ) = classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
+
         assert_eq!(cluster_average_skip_rate, 58);
         assert!(quality.contains(&l1));
         assert!(quality.contains(&l5));
@@ -1952,6 +1959,15 @@ mod test {
         assert!(poor.contains(&l4));
         assert_eq!(poor.len(), 2);
         assert!(!too_many_poor_block_producers);
+
+        // spot-check that returned slots and blocks are correct
+        let l1_blocks_and_slots = blocks_and_slots.get(&l1).unwrap();
+        assert_eq!(l1_blocks_and_slots.0, 9);
+        assert_eq!(l1_blocks_and_slots.1, 10);
+
+        let l2_blocks_and_slots = blocks_and_slots.get(&l2).unwrap();
+        assert_eq!(l2_blocks_and_slots.0, 4);
+        assert_eq!(l2_blocks_and_slots.1, 10);
     }
 
     #[test]
@@ -1974,11 +1990,26 @@ mod test {
         leader_schedule.insert(l3.to_string(), (20..30).collect());
         leader_schedule.insert(l4.to_string(), (30..40).collect());
         leader_schedule.insert(l5.to_string(), (40..50).collect());
-        let (quality, poor, _reason_msg, cluster_average_skip_rate, too_many_poor_block_producers) =
-            classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
+        let (
+            quality,
+            poor,
+            _reason_msg,
+            cluster_average_skip_rate,
+            too_many_poor_block_producers,
+            blocks_and_slots,
+        ) = classify_producers(0, confirmed_blocks, leader_schedule, &config).unwrap();
         assert_eq!(cluster_average_skip_rate, 0);
         assert!(poor.is_empty());
         assert_eq!(quality.len(), 5);
         assert!(!too_many_poor_block_producers);
+
+        // spot-check that returned slots and blocks are correct
+        let l1_blocks_and_slots = blocks_and_slots.get(&l1).unwrap();
+        assert_eq!(l1_blocks_and_slots.0, 10);
+        assert_eq!(l1_blocks_and_slots.1, 10);
+
+        let l5_blocks_and_slots = blocks_and_slots.get(&l5).unwrap();
+        assert_eq!(l5_blocks_and_slots.0, 10);
+        assert_eq!(l5_blocks_and_slots.1, 10);
     }
 }
