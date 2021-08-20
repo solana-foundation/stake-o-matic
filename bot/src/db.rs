@@ -111,7 +111,7 @@ pub struct EpochClassificationV1 {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct EpochStats {
-    pub bonus_stake_amount: Option<u64>,
+    pub bonus_stake_amount: u64,
     pub min_epoch_credits: u64,
     pub avg_epoch_credits: u64,
     pub max_skip_rate: usize,

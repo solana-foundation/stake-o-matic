@@ -1564,7 +1564,7 @@ fn classify(
     };
 
     let epoch_stats = EpochStats {
-        bonus_stake_amount: None,
+        bonus_stake_amount: 0,
         min_epoch_credits,
         avg_epoch_credits,
         max_skip_rate: (cluster_average_skip_rate + config.quality_block_producer_percentage),
@@ -1747,7 +1747,7 @@ fn main() -> BoxResult<()> {
         notifications.extend(validator_stake_change_notes);
 
         if let Some(ref mut stats) = epoch_classification.stats {
-            stats.bonus_stake_amount = Some(bonus_stake_amount);
+            stats.bonus_stake_amount = bonus_stake_amount;
         }
     }
 
