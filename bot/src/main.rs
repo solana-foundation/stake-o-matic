@@ -5,8 +5,7 @@ use {
         ArgMatches, SubCommand,
     },
     log::*,
-    serde::Serialize,
-    serde_yaml::Mapping,
+    serde::{Deserialize, Serialize},
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
         input_validators::{
@@ -62,7 +61,7 @@ pub enum InfrastructureConcentrationAffectKind {
     Warn(String),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum InfrastructureConcentrationAffects {
     WarnAll,
     DestakeListed(ValidatorList),
@@ -255,7 +254,7 @@ pub struct Config {
     /// Minimum amount of lamports a validator must stake on itself to be eligible for a delegation
     min_self_stake_lamports: u64,
 
-    /// Validators with more than this amount of active stake are not eligible fora delegation
+    /// Validators with more than this amount of active stake are not eligible for a delegation
     max_active_stake_lamports: u64,
 
     /// If true, enforce the `min_self_stake_lamports` limit. If false, only warn on insufficient stake
@@ -1542,32 +1541,43 @@ fn classify(
     };
     notes.push(format!("Active stake: {}", Sol(total_active_stake)));
 
-    let mut info = Mapping::new();
-    // "min_vote_credits",
-    info.insert("min_epoch_credits".into(), min_epoch_credits.into());
-    // "avg_vote_credits",
-    info.insert("avg_epoch_credits".into(), avg_epoch_credits.into());
-    // "max_skip_rate",
-    info.insert(
-        "max_skip_rate".into(),
-        (cluster_average_skip_rate + config.quality_block_producer_percentage).into(),
-    );
-    // "avg_skip_rate"
-    info.insert(
-        "cluster_average_skip_rate".into(),
-        cluster_average_skip_rate.into(),
-    );
-    // "active_stake",
-    info.insert("total_active_stake".into(), total_active_stake.into());
+    let epoch_config = EpochConfig {
+        require_classification: Some(config.require_classification),
+        quality_block_producer_percentage: Some(config.quality_block_producer_percentage),
+        max_poor_block_producer_percentage: Some(config.max_poor_block_producer_percentage),
+        max_commission: Some(config.max_commission),
+        min_release_version: config.min_release_version.clone(),
+        max_old_release_version_percentage: Some(config.max_old_release_version_percentage),
+        max_poor_voter_percentage: Some(config.max_poor_block_producer_percentage),
+        max_infrastructure_concentration: config.max_infrastructure_concentration,
+        infrastructure_concentration_affects: Some(
+            config.infrastructure_concentration_affects.clone(),
+        ),
+        bad_cluster_average_skip_rate: Some(config.bad_cluster_average_skip_rate),
+        min_epoch_credit_percentage_of_average: Some(config.min_epoch_credit_percentage_of_average),
+        min_self_stake_lamports: Some(config.min_self_stake_lamports),
+        max_active_stake_lamports: Some(config.max_active_stake_lamports),
+        enforce_min_self_stake: Some(config.enforce_min_self_stake),
+        enforce_testnet_participation: Some(config.enforce_testnet_participation),
+        min_testnet_participation: config.min_testnet_participation,
+        baseline_stake_amount_lamports: config.baseline_stake_amount_lamports,
+    };
 
-    info.insert("min_release_version".into(), min_release_version.into());
+    let epoch_stats = EpochStats {
+        bonus_stake_amount: None,
+        min_epoch_credits,
+        avg_epoch_credits,
+        max_skip_rate: (cluster_average_skip_rate + config.quality_block_producer_percentage),
+        cluster_average_skip_rate,
+        total_active_stake,
+    };
 
     Ok(EpochClassificationV1 {
         data_center_info: data_centers.info,
         validator_classifications,
         notes,
-        config: Some(serde_yaml::to_value(config).unwrap()),
-        info: Some(info),
+        config: Some(epoch_config),
+        stats: Some(epoch_stats),
     })
 }
 
@@ -1736,8 +1746,8 @@ fn main() -> BoxResult<()> {
         validator_stake_change_notes.sort();
         notifications.extend(validator_stake_change_notes);
 
-        if let Some(ref mut info) = epoch_classification.info {
-            info.insert("bonus_stake_amount".into(), bonus_stake_amount.into());
+        if let Some(ref mut stats) = epoch_classification.stats {
+            stats.bonus_stake_amount = Some(bonus_stake_amount);
         }
     }
 
