@@ -704,12 +704,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     )
     .unwrap();
 
-    let baseline_stake_amount_lamports = match value_t!(matches, "baseline_stake_amount", f64) {
-        Ok(amt) => Some(sol_to_lamports(amt)),
-        Err(_) => None,
-    };
-
-    let config = Config {
+    let mut config = Config {
         json_rpc_url,
         cluster,
         db_path,
@@ -733,7 +728,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         enforce_min_self_stake,
         enforce_testnet_participation,
         min_testnet_participation,
-        baseline_stake_amount_lamports,
+        baseline_stake_amount_lamports: None,
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
@@ -773,10 +768,15 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
             let reserve_stake_address = pubkey_of(matches, "reserve_stake_address").unwrap();
             let min_reserve_stake_balance =
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
-            let baseline_stake_amount = baseline_stake_amount_lamports.unwrap_or_else(|| {
-                println!("Missing baseline_stake_amount");
-                process::exit(1)
-            });
+            let baseline_stake_amount = match value_t!(matches, "baseline_stake_amount", f64) {
+                Ok(amt) => sol_to_lamports(amt),
+                Err(_) => {
+                    println!("Missing baseline_stake_amount");
+                    process::exit(1)
+                }
+            };
+
+            config.baseline_stake_amount_lamports = Some(baseline_stake_amount);
 
             Box::new(stake_pool_v0::new(
                 &rpc_client,
@@ -789,10 +789,16 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         ("stake-pool", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(matches, "pool_address").unwrap();
-            let baseline_stake_amount = baseline_stake_amount_lamports.unwrap_or_else(|| {
-                println!("Missing baseline_stake_amount");
-                process::exit(1)
-            });
+            let baseline_stake_amount = match value_t!(matches, "baseline_stake_amount", f64) {
+                Ok(amt) => sol_to_lamports(amt),
+                Err(_) => {
+                    println!("Missing baseline_stake_amount");
+                    process::exit(1)
+                }
+            };
+
+            config.baseline_stake_amount_lamports = Some(baseline_stake_amount);
+
             Box::new(stake_pool::new(
                 &rpc_client,
                 authorized_staker,
