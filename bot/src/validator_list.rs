@@ -3364,6 +3364,6 @@ solana_sdk::pubkeys!(
         "ZgnpwxhtomEjgKxqJyNP78PZxnA9jxcSkXoBmh1Wm7P",
         "zi35ABZ6Lc8L5s4nVt2qzAHJCAZZV4E2aYXL2Xq9aqF",
         "zjG7sHeExhC7tfLZwTJwHH3zzDSqDcwRVe2LdXg389j",
-        "zKuryCTzgvwoyDZTTh4NuiT9D9bpMHG33tTRyKKZUUT"
+        "zKuryCTzgvwoyDZTTh4NuiT9D9bpMHG33tTRyKKZUUT",
     ]
 );
