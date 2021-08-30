@@ -1047,7 +1047,7 @@ fn get_self_stake_by_vote_account(
                 if *vote_account_authorized_withdrawer == meta.authorized.withdrawer {
                     let effective_stake = stake
                         .delegation
-                        .stake_activating_and_deactivating(epoch, Some(&stake_history), true)
+                        .stake_activating_and_deactivating(epoch, Some(&stake_history))
                         .0;
                     if effective_stake > 0 {
                         *self_stake_by_vote_account.entry(*vote_address).or_default() +=
