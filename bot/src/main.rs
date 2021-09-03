@@ -206,8 +206,6 @@ pub struct Config {
     score_concentration_point_discount: u32,
     /// min average position considering credits_observed, 50.0 = average
     min_avg_position: f64,
-    /// select top n validators
-    top: u16,
 
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
@@ -290,6 +288,7 @@ impl Config {
             score_max_commission: 8,
             score_min_stake: sol_to_lamports(100.0),
             score_concentration_point_discount: 1_500,
+            min_avg_position: 40.0,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -658,13 +657,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
                     .required(false)
                     .help("min avg position required considering epoch_credits")
             )
-            .arg(
-                Arg::with_name("top")
-                    .long ("top")
-                    .takes_value(true)
-                    .required(false)
-                    .help("take top n validators")
-            )
         )
         .get_matches();
 
@@ -736,7 +728,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         score_min_stake,
         score_concentration_point_discount,
         min_avg_position,
-        top,
     ) = match matches.subcommand() {
         ("score-all", Some(matches)) => (
             true,
@@ -744,9 +735,8 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
             value_t!(matches, "score_min_stake", u64).unwrap_or(sol_to_lamports(100.0)),
             value_t!(matches, "concentration_point_discount", u32).unwrap_or(2000),
             value_t!(matches, "min_avg_position", f64).unwrap_or(50.0),
-            value_t!(matches, "top", u16).unwrap_or(100),
         ),
-        _ => (false, 0, 0, 0, 0.0, 0),
+        _ => (false, 0, 0, 0, 0.0),
     };
 
     let config = Config {
@@ -761,7 +751,6 @@ fn get_config() -> BoxResult<(Config, RpcClient, Option<Box<dyn GenericStakePool
         score_min_stake,
         score_concentration_point_discount,
         min_avg_position,
-        top,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -1907,7 +1896,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     .epoch_credits
                     .cmp(&a.1.score_data.as_ref().unwrap().epoch_credits)
             });
-            let mut index_with_score = 0;
+            
             for (identity, classification) in validator_classifications {
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 
@@ -1932,13 +1921,7 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
 
                 //epoch,keybase_id,name,identity,vote_address,score,average_position,commission,active_stake,epoch_credits,data_center_concentration,can_halt_the_network_group,stake_state,stake_state_reason,www_url
                 if let Some(score_data) = &classification.score_data {
-                    let mut score = score_data.score(config);
-                    if score > 0 {
-                        index_with_score += 1;
-                        if index_with_score > config.top {
-                            score = 0;
-                        }
-                    }
+                    let score = score_data.score(config);
 
                     let csv_line = format!(
                         r#"{},"{}","{}","{}","{}",{},{},{},{},{},{:.4},{},"{:?}","{}","{}""#,

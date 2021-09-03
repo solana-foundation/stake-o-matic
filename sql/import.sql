@@ -62,13 +62,23 @@ DELETE FROM scores where epoch = (select DISTINCT epoch from imported);
 INSERT INTO scores select * from imported;
 
 -- recompute avg last 3 epochs
+-- * (avg(b.avg_position)-49) * (avg(b.avg_position)-49) ) 
 DROP TABLE IF EXISTS avg;
 create table AVG as 
-select epoch,keybase_id,name,score, case when score=0 then 0 else b_score end as b_score, b_score-score as delta_score, avg_position, ap, commission, c2, epoch_credits, ec2, ec2-epoch_credits as delta_credits, 0.0 as pct, vote_address from scores A
-left outer JOIN (select round( avg(epoch_credits) * (100-avg(commission))/100 * (100-avg(data_center_concentration)*4)/100 * (avg(avg_position)-49) * (avg(avg_position)-49) ) as B_score, avg(avg_position) as ap, avg(commission) as c2, avg(epoch_credits) as ec2,  vote_address as va2 from scores B 
-where B.epoch between (select distinct epoch from imported)-2 and (select distinct epoch from imported)
-group by vote_address)
-on va2 = a.vote_address
+select epoch,keybase_id,name,score, 
+   case when score=0 or mult<=0 then 0 else b_score*mult*mult end as b_score, 
+   b_score-score as delta_score, ap-49 mult, avg_position, ap, commission, c2, dcc2,
+   epoch_credits, ec2, epoch_credits-ec2 as delta_credits, 
+   0.0 as pct, vote_address 
+from scores A
+left outer JOIN (
+       select round( avg(b.epoch_credits) * (100-avg(b.commission))/100 * (100-avg(b.data_center_concentration)*3)/100 ) as B_score, 
+              avg(b.avg_position) as ap, avg(b.avg_position)-49 as mult, avg(b.commission) as c2, avg(b.epoch_credits) as ec2, avg(b.data_center_concentration) as dcc2, b.vote_address as va2 
+       from scores B 
+       where B.epoch between (select distinct epoch from imported)-2 and (select distinct epoch from imported)
+       group by vote_address
+       )
+     on va2 = a.vote_address
 where A.epoch = (select distinct epoch from imported)
 --and score=0 and b_score>0
 --and score>0 WE MUST INCLUDE ALL RECORDS - so update-scores checks all validators health
@@ -76,14 +86,18 @@ order by b_score desc
 ;
 
 -- compute PCT (informative)
+-- SELECTING TOP 200
+drop table if exists temp;
+create table temp as select * from avg order by b_score desc LIMIT 200;
 update avg as U
-set pct = B_score / (select sum(A.b_score) from avg A where A.epoch = U.epoch) * 100
+set pct = B_score / (select sum(A.b_score) from temp A where A.epoch = U.epoch) * 100
+where exists (select 1 from temp A where A.vote_address = U.vote_address)
 ;
 
 -- show top validators with pct assgined (informative)
 .mode column
 .headers ON
-select epoch,keybase_id,name, round(pct,2) as pct, b_score,delta_score,avg_position,epoch_credits, round(c2) as comm, vote_address from AVG 
+select epoch,keybase_id,name, round(pct,2) as pct, b_score,delta_score,avg_position,ec2, round(c2) as comm,round(dcc2) as dcc2, vote_address from AVG 
 where pct>0 
 order by pct desc
 LIMIT 10
