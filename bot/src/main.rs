@@ -1532,7 +1532,7 @@ fn classify(
                     slots,
                     vote_credits: Some(epoch_credits),
                     commission: Some(commission),
-                    self_stake: Some(*self_stake_by_vote_account.get(&identity).unwrap_or(&0)),
+                    self_stake: Some(self_stake),
                     new_data_center_residency: Some(new_validator),
                     release_version: release_versions.get(&identity).cloned(),
                 },
