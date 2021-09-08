@@ -33,8 +33,8 @@ solana-notifier = "1.7.11"
 solana-sdk = "1.7.11"
 solana-transaction-status = "1.7.11"
 solana-vote-program = "1.7.11"
-spl-stake-pool = "0.4"
-spl-token = "3.1"
+spl-stake-pool = "0.5"
+spl-token = "3.2"
 thiserror = "1.0.25"
 
 [dev-dependencies]
