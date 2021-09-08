@@ -11,12 +11,11 @@ use {
         pubkey::Pubkey,
         signature::{Keypair, Signer},
         stake::{self, instruction as stake_instruction, state::StakeState},
-        system_instruction,
         transaction::Transaction,
+        system_instruction,
     },
     spl_stake_pool::{
-        self, find_stake_program_address, find_transient_stake_program_address,
-        stake_program::split_only,
+        self,
         state::{StakePool, StakeStatus, ValidatorList},
     },
     std::{
@@ -27,7 +26,7 @@ use {
 
 /// Minimum amount of lamports in a validator stake account, on top of the
 /// rent-exempt amount
-pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL;
+pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL / 1_000;
 
 /// Minimum amount of lamports in the stake pool reserve, on top of the rent-exempt
 /// amount
@@ -52,16 +51,10 @@ fn staker_transient_stake_address_seed(vote_address: Pubkey) -> String {
 
 /// Staker's transient stake account
 ///
-/// When adding a new validator to the pool, we must create a validator stake
-/// account with the rent-exempt amount + MIN_STAKE_ACCOUNT_BALANCE, and delegate
-/// the account to the appropriate vote address.  Once the stake is active, we
-/// can add it to the pool.
-///
-/// Separately, the stake pool enforces that a new validator stake account must
-/// have exactly the rent-exempt amount + MIN_STAKE_ACCOUNT_BALANCE as its balance.
-/// Since the validator stake account was staked for an epoch, it earned rewards during
-/// that epoch, bringing it over the enforced lamport amount. The extra amount
-/// is split into a transient stake account defined by this function.
+/// When removing a validator from the pool, the staker receives a stake account
+/// with the rent-exempt amount + MIN_STAKE_ACCOUNT_BALANCE, delegated to the
+/// appropriate vote address.  Once the stake is inactive, we can withdraw the
+/// lamports back to the staker.
 fn staker_transient_stake_address(authorized_staker: Pubkey, vote_address: Pubkey) -> Pubkey {
     Pubkey::create_with_seed(
         &authorized_staker,
@@ -211,7 +204,7 @@ impl GenericStakePool for StakePoolOMatic {
             dry_run,
         )?;
 
-        info!("Add new validators to pool if active");
+        info!("Add new validators to pool");
         add_validators_to_pool(
             rpc_client,
             &self.authorized_staker,
@@ -225,20 +218,9 @@ impl GenericStakePool for StakePoolOMatic {
 
         info!("Add unmerged transient stake accounts to the busy set");
         add_unmerged_transient_stake_accounts(
-            rpc_client,
             desired_validator_stake,
-            &self.stake_pool_address,
+            &self.validator_list,
             &mut validator_stake_actions,
-        )?;
-
-        info!("Create validator stake accounts if needed");
-        create_validator_stake_accounts(
-            rpc_client,
-            &self.authorized_staker,
-            desired_validator_stake,
-            &self.stake_pool_address,
-            &mut validator_stake_actions,
-            dry_run,
         )?;
 
         let total_stake_amount = self.stake_pool.total_stake_lamports;
@@ -388,9 +370,8 @@ fn get_available_reserve_stake_balance(
 /// Iterates through all possible transient stake accounts on the stake pool,
 /// and if any is present, mark the validator as busy.
 fn add_unmerged_transient_stake_accounts(
-    rpc_client: &RpcClient,
     desired_validator_stake: &[ValidatorStake],
-    stake_pool_address: &Pubkey,
+    validator_list: &ValidatorList,
     validator_stake_actions: &mut ValidatorStakeActions,
 ) -> Result<(), Box<dyn error::Error>> {
     for ValidatorStake {
@@ -399,23 +380,14 @@ fn add_unmerged_transient_stake_accounts(
         ..
     } in desired_validator_stake
     {
-        let transient_stake_address = find_transient_stake_program_address(
-            &spl_stake_pool::id(),
-            vote_address,
-            stake_pool_address,
-        )
-        .0;
-
-        let transient_stake_account = rpc_client
-            .get_account_with_commitment(&transient_stake_address, rpc_client.commitment())?
-            .value;
-
-        if transient_stake_account.is_some() {
-            let action = format!(
-                "busy due to transient stake account {}",
-                transient_stake_address
-            );
-            validator_stake_actions.insert(*identity, action);
+        if let Some(validator_stake_info) = validator_list.find(vote_address) {
+            if validator_stake_info.transient_stake_lamports != 0 {
+                let action = format!(
+                    "busy due to non-zero transient stake lamports {}",
+                    validator_stake_info.transient_stake_lamports
+                );
+                validator_stake_actions.insert(*identity, action);
+            }
         }
     }
     Ok(())
@@ -534,8 +506,8 @@ fn update_stake_pool(
 /// Remove validators no longer present in the desired validator list
 ///
 /// In order to properly remove a validator from the stake pool, their stake
-/// account must first be reduced down to the minimum of rent-exemption + 1 SOL.
-/// The staker will take control of the validator stake account on removal, so
+/// account must first be reduced down to the minimum of rent-exemption + 0.001 SOL.
+/// The staker will take control of a new stake account on removal, so
 /// this also deactivates the stake, to be reclaimed in the next epoch.
 fn remove_validators_from_pool(
     rpc_client: &RpcClient,
@@ -550,16 +522,24 @@ fn remove_validators_from_pool(
     let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
 
     for vote_address in remove_vote_addresses {
-        let validator_list_entry = validator_list.find(&vote_address);
-        if let Some(validator_list_entry) = validator_list_entry {
+        if let Some(validator_list_entry) = validator_list.find(&vote_address) {
             if validator_list_entry.status == StakeStatus::Active {
-                let removed_stake_address = find_stake_program_address(
-                    &spl_stake_pool::id(),
-                    &vote_address,
-                    stake_pool_address,
-                )
-                .0;
-                let mut instructions = vec![];
+                let destination_stake_address = staker_transient_stake_address(
+                    authorized_staker.pubkey(),
+                    vote_address,
+                );
+                let destination_stake_seed = staker_transient_stake_address_seed(vote_address);
+                let mut instructions = vec![
+                    system_instruction::create_account_with_seed(
+                        &authorized_staker.pubkey(),
+                        &destination_stake_address,
+                        &authorized_staker.pubkey(),
+                        &destination_stake_seed,
+                        stake_rent_exemption,
+                        mem::size_of::<StakeState>() as u64,
+                        &stake::program::id(),
+                    )
+                ];
                 if validator_list_entry.active_stake_lamports > stake_rent_exemption {
                     instructions.push(
                         spl_stake_pool::instruction::decrease_validator_stake_with_vote(
@@ -568,6 +548,7 @@ fn remove_validators_from_pool(
                             stake_pool_address,
                             &vote_address,
                             validator_list_entry.active_stake_lamports,
+                            validator_list_entry.transient_seed_suffix_start,
                         ),
                     );
                 }
@@ -579,10 +560,12 @@ fn remove_validators_from_pool(
                         stake_pool_address,
                         &vote_address,
                         &authorized_staker.pubkey(),
+                        validator_list_entry.transient_seed_suffix_start,
+                        &destination_stake_address,
                     ),
                 );
                 instructions.push(stake_instruction::deactivate_stake(
-                    &removed_stake_address,
+                    &destination_stake_address,
                     &authorized_staker.pubkey(),
                 ));
                 transactions.push(Transaction::new_with_payer(
@@ -624,9 +607,6 @@ fn add_validators_to_pool(
     dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
-    let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
-    let min_stake_account_balance = stake_rent_exemption + MIN_STAKE_ACCOUNT_BALANCE;
-
     for ValidatorStake {
         identity,
         vote_address,
@@ -634,89 +614,19 @@ fn add_validators_to_pool(
     } in desired_validator_stake
     {
         if !validator_list.contains(vote_address) {
-            let stake_address =
-                find_stake_program_address(&spl_stake_pool::id(), vote_address, stake_pool_address)
-                    .0;
-            let stake_account = rpc_client
-                .get_account_with_commitment(&stake_address, rpc_client.commitment())?
-                .value;
-
-            if let Some(stake_account) = stake_account {
-                // Check if the stake account is busy
-                let stake_activation = rpc_client
-                    .get_stake_activation(stake_address, None)
-                    .map_err(|err| {
-                        format!(
-                            "Unable to get activation information for stake account: {}: {}",
-                            stake_address, err
-                        )
-                    })?;
-
-                if stake_activation.state == StakeActivationState::Active {
-                    info!("Adding validator {} to the pool", identity);
-                    let mut instructions = vec![];
-                    let split_lamports = stake_activation
-                        .active
-                        .saturating_sub(MIN_STAKE_ACCOUNT_BALANCE);
-                    if split_lamports > 0 {
-                        let transient_stake_address = staker_transient_stake_address(
-                            authorized_staker.pubkey(),
-                            *vote_address,
-                        );
-                        let transient_stake_address_seed =
-                            staker_transient_stake_address_seed(*vote_address);
-                        info!(
-                            "Splitting {} lamports into staker account {}",
-                            split_lamports, transient_stake_address
-                        );
-                        instructions.push(system_instruction::create_account_with_seed(
-                            &authorized_staker.pubkey(),
-                            &transient_stake_address,
-                            &authorized_staker.pubkey(),
-                            &transient_stake_address_seed,
-                            stake_rent_exemption,
-                            mem::size_of::<StakeState>() as u64,
-                            &stake::program::id(),
-                        ));
-
-                        instructions.push(split_only(
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                            split_lamports,
-                            &transient_stake_address,
-                        ));
-                        instructions.push(stake_instruction::deactivate_stake(
-                            &transient_stake_address,
-                            &authorized_staker.pubkey(),
-                        ));
-                    }
-                    // if any extra lamports on the account after the split, just withdraw them
-                    let additional_lamports = stake_account
-                        .lamports
-                        .saturating_sub(min_stake_account_balance + split_lamports);
-                    if additional_lamports > 0 {
-                        instructions.push(stake_instruction::withdraw(
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                            &authorized_staker.pubkey(),
-                            additional_lamports,
-                            None,
-                        ));
-                    }
-                    instructions.push(
-                        spl_stake_pool::instruction::add_validator_to_pool_with_vote(
-                            &spl_stake_pool::id(),
-                            stake_pool,
-                            stake_pool_address,
-                            vote_address,
-                        ),
-                    );
-                    transactions.push(Transaction::new_with_payer(
-                        &instructions,
-                        Some(&authorized_staker.pubkey()),
-                    ));
-                }
-            }
+            info!("Adding validator identity {}, vote {} to the stake pool", identity, vote_address);
+            transactions.push(Transaction::new_with_payer(
+                &[
+                    spl_stake_pool::instruction::add_validator_to_pool_with_vote(
+                        &spl_stake_pool::id(),
+                        stake_pool,
+                        stake_pool_address,
+                        &authorized_staker.pubkey(),
+                        vote_address,
+                    ),
+                ],
+                Some(&authorized_staker.pubkey()),
+            ));
         }
     }
 
@@ -727,139 +637,6 @@ fn add_validators_to_pool(
         .is_empty()
     {
         Err("Failed to add validators to the stake pool".into())
-    } else {
-        Ok(())
-    }
-}
-
-/// Create validator stake accounts that are not currently included in the stake pool.
-/// For any newly created account, the validator identity is added to the set of
-/// busy validators.
-fn create_validator_stake_accounts(
-    rpc_client: &RpcClient,
-    authorized_staker: &Keypair,
-    desired_validator_stake: &[ValidatorStake],
-    stake_pool_address: &Pubkey,
-    validator_stake_actions: &mut ValidatorStakeActions,
-    dry_run: bool,
-) -> Result<(), Box<dyn error::Error>> {
-    let mut staker_balance = rpc_client.get_balance(&authorized_staker.pubkey()).unwrap();
-    info!("Staker available balance: {}", Sol(staker_balance));
-
-    let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(rpc_client)?;
-    let min_stake_account_balance = stake_rent_exemption + MIN_STAKE_ACCOUNT_BALANCE;
-
-    let mut transactions = vec![];
-    for ValidatorStake {
-        identity,
-        vote_address,
-        ..
-    } in desired_validator_stake
-    {
-        let stake_address =
-            find_stake_program_address(&spl_stake_pool::id(), vote_address, stake_pool_address).0;
-        let stake_account = rpc_client
-            .get_account_with_commitment(&stake_address, rpc_client.commitment())?
-            .value;
-
-        if stake_account.is_some() {
-            // Check if the stake account is busy
-            let stake_activation = rpc_client
-                .get_stake_activation(stake_address, None)
-                .map_err(|err| {
-                    format!(
-                        "Unable to get activation information for stake account: {}: {}",
-                        stake_address, err
-                    )
-                })?;
-
-            match stake_activation.state {
-                StakeActivationState::Activating => {
-                    let action = format!(
-                        "stake account busy due to stake activation of {}",
-                        stake_address
-                    );
-                    warn!("Busy validator {}: {}", *identity, action);
-                    validator_stake_actions.insert(*identity, action);
-                }
-                StakeActivationState::Deactivating => {
-                    let action = format!(
-                        "stake account busy due to stake deactivation of {}",
-                        stake_address
-                    );
-                    warn!("Busy validator {}: {}", *identity, action);
-                    validator_stake_actions.insert(*identity, action);
-                }
-                StakeActivationState::Active => {}
-                StakeActivationState::Inactive => {
-                    warn!(
-                        "Validator {} busy due to inactive stake {}: {:?}",
-                        identity, stake_address, stake_activation
-                    );
-                    let action =
-                        format!("stake account busy due to inactive stake {}", stake_address);
-                    warn!("Busy validator {}: {}", *identity, action);
-
-                    transactions.push(Transaction::new_with_payer(
-                        &[stake_instruction::delegate_stake(
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                            vote_address,
-                        )],
-                        Some(&authorized_staker.pubkey()),
-                    ));
-                    debug!(
-                        "Activating stake account for validator {} ({})",
-                        identity, stake_address
-                    );
-                    validator_stake_actions.insert(*identity, action);
-                }
-            }
-        } else {
-            if staker_balance < min_stake_account_balance {
-                // Try again next epoch
-                warn!(
-                    "Insufficient funds in reserve stake account to create stake account: {} required, {} balance",
-                    Sol(min_stake_account_balance), Sol(staker_balance)
-                );
-            } else {
-                // Create a stake account for the validator
-                staker_balance -= min_stake_account_balance;
-
-                let instruction =
-                    spl_stake_pool::instruction::create_validator_stake_account_with_vote(
-                        &spl_stake_pool::id(),
-                        stake_pool_address,
-                        &authorized_staker.pubkey(),
-                        &authorized_staker.pubkey(),
-                        vote_address,
-                    );
-
-                transactions.push(Transaction::new_with_payer(
-                    &[instruction],
-                    Some(&authorized_staker.pubkey()),
-                ));
-                info!(
-                    "Creating stake account for validator {} ({})",
-                    identity, stake_address
-                );
-            }
-            let action = format!(
-                "stake account busy due to no stake account: {}",
-                stake_address
-            );
-            warn!("Busy validator {}: {}", *identity, action);
-            validator_stake_actions.insert(*identity, action);
-        }
-    }
-
-    if dry_run {
-        Ok(())
-    } else if !send_and_confirm_transactions(rpc_client, false, transactions, authorized_staker)?
-        .failed
-        .is_empty()
-    {
-        Err("Failed to create validator stake accounts".into())
     } else {
         Ok(())
     }
@@ -956,6 +733,7 @@ where
                             stake_pool_address,
                             &vote_address,
                             amount_to_remove,
+                            /* transient_stake_seed = */ 0,
                         ),
                     ],
                     Some(&authorized_staker.pubkey()),
@@ -998,6 +776,7 @@ where
                                 stake_pool_address,
                                 &vote_address,
                                 amount_to_add,
+                                /* transient_stake_seed = */ 0,
                             ),
                         ],
                         Some(&authorized_staker.pubkey()),
@@ -1052,7 +831,7 @@ mod test {
             signature::{Keypair, Signer},
         },
         solana_validator::test_validator::*,
-        spl_stake_pool::find_withdraw_authority_program_address,
+        spl_stake_pool::{find_stake_program_address, find_withdraw_authority_program_address},
     };
 
     fn num_stake_accounts(rpc_client: &RpcClient, authority: Pubkey) -> usize {
@@ -1240,7 +1019,7 @@ mod test {
 
         // ===========================================================
         info!(
-            "Start with creating validator stake accounts and deposit stake, no managed stake yet"
+            "Start with adding validators and deposit stake, no managed stake yet"
         );
         let epoch = rpc_client.get_epoch_info().unwrap().epoch;
         stake_o_matic
@@ -1259,11 +1038,13 @@ mod test {
             )
             .unwrap();
 
+        let stake_deposit_amount = total_stake_amount / 2;
+        let sol_deposit_amount = total_stake_amount - stake_deposit_amount;
         let deposit_stake_address = create_stake_account(
             &rpc_client,
             &stake_o_matic.authorized_staker,
             &stake_o_matic.authorized_staker.pubkey(),
-            total_stake_amount,
+            total_stake_amount / 2,
         )
         .unwrap()
         .pubkey();
@@ -1289,37 +1070,20 @@ mod test {
                 0,
             );
         }
-        assert_eq!(num_stake_accounts(&rpc_client, pool_withdraw_authority), 1);
+        assert_eq!(num_stake_accounts(&rpc_client, pool_withdraw_authority), 4);
         assert_eq!(
             num_stake_accounts(&rpc_client, stake_o_matic.authorized_staker.pubkey()),
-            validators.len() + 1
+            1
         );
         let epoch = wait_for_next_epoch(&rpc_client).unwrap();
 
-        // To simulate a reward-earning environment, we add a few lamports
-        // to the validator stake accounts. This way, during the
-        // `add_validators_to_pool` phase, we can test the logic to split from
-        // the validator stake account.
         for validator in &validators {
             assert_validator_stake_activation(validator, epoch, StakeActivationState::Active);
-            let stake_address = find_stake_program_address(
-                &spl_stake_pool::id(),
-                &validator.vote_address,
-                &stake_o_matic.stake_pool_address,
-            )
-            .0;
-            transfer(
-                &rpc_client,
-                &stake_o_matic.authorized_staker,
-                &stake_address,
-                30,
-            )
-            .unwrap();
         }
 
         // ===========================================================
         stake_o_matic.epoch_update(&rpc_client).unwrap();
-        info!("Add all validators to the pool");
+        info!("Nothing happens to the pool, but added validator stakes are active");
         stake_o_matic
             .apply(
                 &rpc_client,
@@ -1344,7 +1108,7 @@ mod test {
             &stake_o_matic.authorized_staker.pubkey(),
         )
         .unwrap();
-        deposit_into_stake_pool(
+        deposit_stake_into_stake_pool(
             &rpc_client,
             &stake_o_matic.authorized_staker,
             &stake_o_matic.stake_pool_address,
@@ -1352,6 +1116,17 @@ mod test {
             &deposit_vote_address,
             &deposit_stake_address,
             &staker_pool_token_address,
+        )
+        .unwrap();
+
+        info!("Deposit sol directly");
+        deposit_sol_into_stake_pool(
+            &rpc_client,
+            &stake_o_matic.authorized_staker,
+            &stake_o_matic.stake_pool_address,
+            &stake_o_matic.stake_pool,
+            &staker_pool_token_address,
+            sol_deposit_amount,
         )
         .unwrap();
 
@@ -1429,8 +1204,10 @@ mod test {
 
         info!("Check after first epoch");
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
-        // needs one more epoch for the additional bonus stake to arrive
-        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.]) {
+        // needs one more epoch for the additional bonus stake to arrive. Validator 2
+        // already received some extra rent-exempt reserves during the previous
+        // re-balance.
+        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.00456576]) {
             let expected_sol_balance = sol_to_lamports(*expected_sol_balance);
             assert_eq!(
                 expected_sol_balance,

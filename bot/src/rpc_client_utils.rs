@@ -570,7 +570,10 @@ pub mod test {
                     pool_token_account,
                     &spl_token::id(),
                     None,
+                    fee.clone(),
+                    fee.clone(),
                     fee,
+                    10u8,
                     max_validators,
                 ),
             ],
@@ -585,7 +588,7 @@ pub mod test {
             .map(|_| ())
     }
 
-    pub fn deposit_into_stake_pool(
+    pub fn deposit_stake_into_stake_pool(
         rpc_client: &RpcClient,
         authorized_staker: &Keypair,
         stake_pool_address: &Pubkey,
@@ -599,7 +602,7 @@ pub mod test {
         let pool_withdraw_authority =
             find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
         let transaction = Transaction::new_signed_with_payer(
-            &spl_stake_pool::instruction::deposit(
+            &spl_stake_pool::instruction::deposit_stake(
                 &spl_stake_pool::id(),
                 stake_pool_address,
                 &stake_pool.validator_list,
@@ -608,6 +611,8 @@ pub mod test {
                 &authorized_staker.pubkey(),
                 &validator_stake_address,
                 &stake_pool.reserve_stake,
+                pool_token_address,
+                &stake_pool.manager_fee_account,
                 pool_token_address,
                 &stake_pool.pool_mint,
                 &spl_token::id(),
@@ -621,20 +626,32 @@ pub mod test {
             .map(|_| ())
     }
 
-    pub fn transfer(
+    pub fn deposit_sol_into_stake_pool(
         rpc_client: &RpcClient,
-        from_keypair: &Keypair,
-        to_address: &Pubkey,
+        authorized_staker: &Keypair,
+        stake_pool_address: &Pubkey,
+        stake_pool: &StakePool,
+        pool_token_address: &Pubkey,
         lamports: u64,
     ) -> client_error::Result<()> {
+        let pool_withdraw_authority =
+            find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
         let transaction = Transaction::new_signed_with_payer(
-            &[system_instruction::transfer(
-                &from_keypair.pubkey(),
-                to_address,
+            &spl_stake_pool::instruction::deposit_sol(
+                &spl_stake_pool::id(),
+                stake_pool_address,
+                &pool_withdraw_authority,
+                &stake_pool.reserve_stake,
+                &authorized_staker.pubkey(),
+                pool_token_address,
+                &stake_pool.manager_fee_account,
+                pool_token_address,
+                &stake_pool.pool_mint,
+                &spl_token::id(),
                 lamports,
-            )],
-            Some(&from_keypair.pubkey()),
-            &[from_keypair],
+            ),
+            Some(&authorized_staker.pubkey()),
+            &[authorized_staker],
             rpc_client.get_recent_blockhash()?.0,
         );
         rpc_client
