@@ -11,8 +11,8 @@ use {
         pubkey::Pubkey,
         signature::{Keypair, Signer},
         stake::{self, instruction as stake_instruction, state::StakeState},
-        transaction::Transaction,
         system_instruction,
+        transaction::Transaction,
     },
     spl_stake_pool::{
         self,
@@ -524,22 +524,19 @@ fn remove_validators_from_pool(
     for vote_address in remove_vote_addresses {
         if let Some(validator_list_entry) = validator_list.find(&vote_address) {
             if validator_list_entry.status == StakeStatus::Active {
-                let destination_stake_address = staker_transient_stake_address(
-                    authorized_staker.pubkey(),
-                    vote_address,
-                );
+                info!("Removing {} from stake pool", vote_address);
+                let destination_stake_address =
+                    staker_transient_stake_address(authorized_staker.pubkey(), vote_address);
                 let destination_stake_seed = staker_transient_stake_address_seed(vote_address);
-                let mut instructions = vec![
-                    system_instruction::create_account_with_seed(
-                        &authorized_staker.pubkey(),
-                        &destination_stake_address,
-                        &authorized_staker.pubkey(),
-                        &destination_stake_seed,
-                        stake_rent_exemption,
-                        mem::size_of::<StakeState>() as u64,
-                        &stake::program::id(),
-                    )
-                ];
+                let mut instructions = vec![system_instruction::create_account_with_seed(
+                    &authorized_staker.pubkey(),
+                    &destination_stake_address,
+                    &authorized_staker.pubkey(),
+                    &destination_stake_seed,
+                    stake_rent_exemption,
+                    mem::size_of::<StakeState>() as u64,
+                    &stake::program::id(),
+                )];
                 if validator_list_entry.active_stake_lamports > stake_rent_exemption {
                     instructions.push(
                         spl_stake_pool::instruction::decrease_validator_stake_with_vote(
@@ -614,7 +611,10 @@ fn add_validators_to_pool(
     } in desired_validator_stake
     {
         if !validator_list.contains(vote_address) {
-            info!("Adding validator identity {}, vote {} to the stake pool", identity, vote_address);
+            info!(
+                "Adding validator identity {}, vote {} to the stake pool",
+                identity, vote_address
+            );
             transactions.push(Transaction::new_with_payer(
                 &[
                     spl_stake_pool::instruction::add_validator_to_pool_with_vote(
@@ -687,7 +687,11 @@ where
                     }
                 };
 
-                list.push((validator_entry.stake_lamports(), validator_stake));
+                list.push((
+                    validator_entry.stake_lamports(),
+                    validator_entry.transient_seed_suffix_start,
+                    validator_stake,
+                ));
             }
         }
     }
@@ -701,6 +705,7 @@ where
     let mut transactions = vec![];
     for (
         balance,
+        transient_seed_suffix,
         ValidatorStake {
             identity,
             stake_state,
@@ -733,7 +738,7 @@ where
                             stake_pool_address,
                             &vote_address,
                             amount_to_remove,
-                            /* transient_stake_seed = */ 0,
+                            transient_seed_suffix.saturating_add(1),
                         ),
                     ],
                     Some(&authorized_staker.pubkey()),
@@ -776,7 +781,7 @@ where
                                 stake_pool_address,
                                 &vote_address,
                                 amount_to_add,
-                                /* transient_stake_seed = */ 0,
+                                transient_seed_suffix.saturating_add(1),
                             ),
                         ],
                         Some(&authorized_staker.pubkey()),
@@ -1018,9 +1023,7 @@ mod test {
         .unwrap();
 
         // ===========================================================
-        info!(
-            "Start with adding validators and deposit stake, no managed stake yet"
-        );
+        info!("Start with adding validators and deposit stake, no managed stake yet");
         let epoch = rpc_client.get_epoch_info().unwrap().epoch;
         stake_o_matic
             .apply(
