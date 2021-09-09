@@ -2180,6 +2180,7 @@ solana_sdk::pubkeys!(
         "EnLMAih8NTU7ENb5tiTHqgP8MtTUnY4QDLUKrsRwhjtk",
         "EnrrqXLwEwgDU9yfa7YVCxmm6uj9vjhCnNUk3qjpFgws",
         "ENtpcfC4cBpkCW3kHza399ZoUcbxYGsYkxuKM1jwei4L",
+        "ENAvhKRf2FF6iQxVRkrTyGiiFhw4Gv1GEkRzzjQKpTzE",
         "EnVrnxxqLsTuNs1PV6yBTNFPkgJAamkyLNM8pA9pDMdp",
         "Eo1uPQgv6jHk5etCBX3hJ7Y1iYti7WqhisrtY3krEHCN",
         "Eo8rLxC2apCYS1qQCzQA3CvSTFqbGxXEBe51i1i5sWkH",
