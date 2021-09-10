@@ -53,6 +53,7 @@ pub fn send_and_confirm_transactions(
         return Err("Authorized staker has insufficient funds".into());
     }
 
+    let mut num_transactions = 0;
     let mut pending_transactions = vec![];
     for mut transaction in transactions {
         if dry_run {
@@ -64,6 +65,14 @@ pub fn send_and_confirm_transactions(
                 },
             )?;
         } else {
+            // every 100 transactions, get a new blockhash
+            if num_transactions >= 100 {
+                info!("refreshing blockhash");
+                blockhash = rpc_client.get_recent_blockhash()?.0;
+                num_transactions = 0;
+            } else {
+                num_transactions += 1;
+            }
             transaction.sign(&[authorized_staker], blockhash);
             let _ = rpc_client.send_transaction(&transaction).map_err(|err| {
                 warn!("Failed to send transaction: {:?}", err);
