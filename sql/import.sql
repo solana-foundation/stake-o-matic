@@ -1,5 +1,6 @@
 .open ./db/score-sqlite3.db
 
+-- create table to receive stake-o-matic data
 DROP TABLE IF EXISTS imported;
 CREATE TABLE imported(
   epoch INT,
@@ -19,13 +20,13 @@ CREATE TABLE imported(
   www_url TEXT
 );
 
+-- import stake-o-matic data
 .mode csv
 .import ./db/score-all-mainnet-beta/mainnet-beta-validator-detail.csv imported
---.import ./db/score-all-testnet/testnet-validator-detail.csv imported
 --remove header row
 delete FROM imported where identity='identity';
 
---add pct column 
+--add pct and stake-concentration columns 
 ALTER table imported add pct FLOAT;
 ALTER table imported add stake_conc FLOAT;
 UPDATE imported set 
@@ -56,51 +57,64 @@ select 'avg epoch_credits',avg(epoch_credits),
  from imported
  where pct>0;
 
--- add to scores --drop table scores;
+-- add imported epoch to table scores
 create TABLE if not EXISTS scores as select * from imported;
 DELETE FROM scores where epoch = (select DISTINCT epoch from imported);
 INSERT INTO scores select * from imported;
 
--- recompute avg last 3 epochs
--- * (avg(b.avg_position)-49) * (avg(b.avg_position)-49) ) 
+-- recompute avg table with last 3 epochs
+-- if score=0 from imported => below nakamoto coefficient, or commission 100% or less than 100 SOL staked
+-- also we set score=0 if below 50% avg or less than 3 epochs on record
+-- create pct column and set to zero, will update after when selecting top 200
 DROP TABLE IF EXISTS avg;
 create table AVG as 
-select epoch,keybase_id,name,score, 
-   case when score=0 or mult<=0 then 0 else b_score*mult*mult end as b_score, 
-   b_score-score as delta_score, ap-49 mult, avg_position, ap, commission, c2, dcc2,
-   epoch_credits, ec2, epoch_credits-ec2 as delta_credits, 
-   0.0 as pct, vote_address 
-from scores A
+select 0 as rank, epoch,keybase_id, vote_address,name,
+   case when score=0 or mult<=0 or score_records<3 then 0 else ROUND(base_score*mult*mult) end as avg_score, 
+   base_score, ap-49 mult, ap as avg_pos, commission, round(c2,2) as avg_commiss, dcc2,
+   epoch_credits, cast(ec2 as integer) as avg_ec, epoch_credits-ec2 as delta_credits, 
+   0.0 as pct, score_records
+from imported A
 left outer JOIN (
-       select round( avg(b.epoch_credits) * (100-avg(b.commission))/100 * (100-avg(b.data_center_concentration)*3)/100 ) as B_score, 
-              avg(b.avg_position) as ap, avg(b.avg_position)-49 as mult, avg(b.commission) as c2, avg(b.epoch_credits) as ec2, avg(b.data_center_concentration) as dcc2, b.vote_address as va2 
+       select count(*) as score_records,
+            round( avg(b.epoch_credits) * (100-avg(b.commission))/100 * (100-avg(b.data_center_concentration)*3)/100 ) as base_score, 
+            avg(b.avg_position) as ap, avg(b.avg_position)-49 as mult, avg(b.commission) as c2, ROUND(avg(b.epoch_credits)) as ec2,
+            avg(b.data_center_concentration) as dcc2, b.vote_address as va2 
        from scores B 
        where B.epoch between (select distinct epoch from imported)-2 and (select distinct epoch from imported)
        group by vote_address
        )
      on va2 = a.vote_address
 where A.epoch = (select distinct epoch from imported)
---and score=0 and b_score>0
---and score>0 WE MUST INCLUDE ALL RECORDS - so update-scores checks all validators health
-order by b_score desc
+--and score>0 NOTE: WE MUST INCLUDE ALL RECORDS - so update-scores checks all validators' health
+order by base_score desc
 ;
 
--- compute PCT (informative)
--- SELECTING TOP 200
+-- compute rank
 drop table if exists temp;
-create table temp as select * from avg order by b_score desc LIMIT 200;
+create table temp as select vote_address, RANK() over (order by avg_score DESC) as rank from avg;
+-- set rank in avg table
+update avg 
+set rank = (select rank from temp where temp.vote_address=avg.vote_address);
+
+-- SELECT TOP 200
+drop table if exists temp;
+create table temp as select * from avg order by avg_score desc LIMIT 200;
+-- set pct ONLY ON TOP 200
 update avg as U
-set pct = B_score / (select sum(A.b_score) from temp A where A.epoch = U.epoch) * 100
+set pct = avg_score / (select sum(A.avg_score) from temp A where A.epoch = U.epoch) * 100
 where exists (select 1 from temp A where A.vote_address = U.vote_address)
 ;
 
 -- show top validators with pct assgined (informative)
 .mode column
 .headers ON
-select epoch,keybase_id,name, round(pct,2) as pct, b_score,delta_score,avg_position,ec2, round(c2) as comm,round(dcc2) as dcc2, vote_address from AVG 
+select epoch,rank,keybase_id,name, round(pct,4) as pct, avg_score, ROUND(mult,4) as mult,
+   round(avg_pos,4) as avg_pos,
+   epoch_credits,avg_ec,delta_credits,
+   avg_commiss,round(dcc2,5) as dcc2 from AVG 
 where pct>0 
-order by pct desc
+order by rank
 LIMIT 10
 ;
-
+select count(*) as validators_with_pct from avg where pct<>0;
 .exit
