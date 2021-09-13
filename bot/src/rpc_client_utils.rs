@@ -6,8 +6,8 @@ use {
         rpc_config::RpcSimulateTransactionConfig,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
         rpc_filter,
-        rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
-        rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
+        rpc_request::{RpcError, RpcResponseErrorData, MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS},
+        rpc_response::{RpcSimulateTransactionResult, RpcVoteAccountInfo, RpcVoteAccountStatus},
     },
     solana_sdk::{
         clock::Epoch,
@@ -32,6 +32,22 @@ pub struct SendAndConfirmTransactionResult {
     pub failed: HashSet<Signature>,
 }
 
+pub fn blockhash_expired(error_kind: &ClientErrorKind) -> bool {
+    matches!(
+        error_kind,
+        ClientErrorKind::TransactionError(TransactionError::BlockhashNotFound)
+            | ClientErrorKind::RpcError(RpcError::RpcResponseError {
+                data: RpcResponseErrorData::SendTransactionPreflightFailure(
+                    RpcSimulateTransactionResult {
+                        err: Some(TransactionError::BlockhashNotFound),
+                        ..
+                    }
+                ),
+                ..
+            })
+    )
+}
+
 pub fn send_transaction_with_refresh(
     rpc_client: &RpcClient,
     signer: &Keypair,
@@ -42,7 +58,8 @@ pub fn send_transaction_with_refresh(
     match rpc_client.send_transaction(transaction) {
         Ok(v) => Ok(v),
         Err(err) => {
-            if let ClientErrorKind::TransactionError(TransactionError::BlockhashNotFound) = &err.kind {
+            if blockhash_expired(&err.kind) {
+                info!("Refreshing blockhash");
                 *blockhash = rpc_client.get_recent_blockhash()?.0;
                 transaction.sign(&[signer], *blockhash);
                 return rpc_client.send_transaction(transaction).map_err(|err| {
@@ -129,6 +146,7 @@ pub fn send_and_confirm_transactions(
         assert_eq!(statuses.len(), pending_transactions.len());
 
         let mut still_pending_transactions = vec![];
+        let mut blockhash_expired = false;
         for (transaction, status) in pending_transactions.into_iter().zip(statuses.into_iter()) {
             let signature = transaction.signatures[0];
             trace!("{}: status={:?}", signature, status);
@@ -137,6 +155,7 @@ pub fn send_and_confirm_transactions(
             } else if let Some(status) = &status {
                 if status.satisfies_commitment(rpc_client.commitment()) {
                     if let Some(TransactionError::BlockhashNotFound) = &status.err {
+                        blockhash_expired = true;
                         None
                     } else {
                         Some(status.err.is_none())
@@ -161,9 +180,6 @@ pub fn send_and_confirm_transactions(
         }
         pending_transactions = still_pending_transactions;
 
-        let blockhash_expired = rpc_client
-            .get_fee_calculator_for_blockhash(&blockhash)?
-            .is_none();
         if blockhash_expired && !dry_run {
             max_expired_blockhashes = max_expired_blockhashes.saturating_sub(1);
             warn!(
@@ -183,12 +199,13 @@ pub fn send_and_confirm_transactions(
                 "Resending pending transactions with blockhash: {}",
                 blockhash
             );
-            for transaction in pending_transactions.iter_mut() {
-                assert!(!dry_run);
-                transaction.sign(&[authorized_staker], blockhash);
-                let _ = rpc_client.send_transaction(transaction).map_err(|err| {
-                    warn!("Failed to resend transaction: {:?}", err);
-                });
+            for mut transaction in pending_transactions.iter_mut() {
+                let _ = send_transaction_with_refresh(
+                    rpc_client,
+                    authorized_staker,
+                    &mut transaction,
+                    &mut blockhash,
+                );
             }
         }
         sleep(Duration::from_millis(500));
