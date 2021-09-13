@@ -1,6 +1,7 @@
 use {
     log::*,
     solana_client::{
+        client_error::{ClientErrorKind, Result as ClientResult},
         rpc_client::RpcClient,
         rpc_config::RpcSimulateTransactionConfig,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
@@ -10,11 +11,12 @@ use {
     },
     solana_sdk::{
         clock::Epoch,
+        hash::Hash,
         native_token::*,
         pubkey::Pubkey,
         signature::{Keypair, Signature, Signer},
         stake,
-        transaction::Transaction,
+        transaction::{Transaction, TransactionError},
     },
     std::{
         collections::{HashMap, HashSet},
@@ -28,6 +30,30 @@ use {
 pub struct SendAndConfirmTransactionResult {
     pub succeeded: HashSet<Signature>,
     pub failed: HashSet<Signature>,
+}
+
+pub fn send_transaction_with_refresh(
+    rpc_client: &RpcClient,
+    signer: &Keypair,
+    transaction: &mut Transaction,
+    blockhash: &mut Hash,
+) -> ClientResult<Signature> {
+    transaction.sign(&[signer], *blockhash);
+    match rpc_client.send_transaction(transaction) {
+        Ok(v) => Ok(v),
+        Err(err) => {
+            if let ClientErrorKind::TransactionError(TransactionError::BlockhashNotFound) = &err.kind {
+                *blockhash = rpc_client.get_recent_blockhash()?.0;
+                transaction.sign(&[signer], *blockhash);
+                return rpc_client.send_transaction(transaction).map_err(|err| {
+                    warn!("Failed to send transaction: {:?}", err);
+                    err
+                });
+            }
+            warn!("Failed to send transaction: {:?}", err);
+            Err(err)
+        }
+    }
 }
 
 pub fn send_and_confirm_transactions(
@@ -53,7 +79,6 @@ pub fn send_and_confirm_transactions(
         return Err("Authorized staker has insufficient funds".into());
     }
 
-    let mut num_transactions = 0;
     let mut pending_transactions = vec![];
     for mut transaction in transactions {
         if dry_run {
@@ -65,18 +90,12 @@ pub fn send_and_confirm_transactions(
                 },
             )?;
         } else {
-            // every 100 transactions, get a new blockhash
-            if num_transactions >= 100 {
-                info!("refreshing blockhash");
-                blockhash = rpc_client.get_recent_blockhash()?.0;
-                num_transactions = 0;
-            } else {
-                num_transactions += 1;
-            }
-            transaction.sign(&[authorized_staker], blockhash);
-            let _ = rpc_client.send_transaction(&transaction).map_err(|err| {
-                warn!("Failed to send transaction: {:?}", err);
-            });
+            let _ = send_transaction_with_refresh(
+                rpc_client,
+                authorized_staker,
+                &mut transaction,
+                &mut blockhash,
+            );
         }
         pending_transactions.push(transaction);
     }
@@ -88,6 +107,59 @@ pub fn send_and_confirm_transactions(
         if pending_transactions.is_empty() {
             break;
         }
+
+        let mut statuses = vec![];
+        for pending_signatures_chunk in pending_transactions
+            .iter()
+            .map(|transaction| transaction.signatures[0])
+            .collect::<Vec<_>>()
+            .chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
+        {
+            trace!(
+                "checking {} pending transactions",
+                pending_signatures_chunk.len()
+            );
+            statuses.extend(
+                rpc_client
+                    .get_signature_statuses(pending_signatures_chunk)?
+                    .value
+                    .into_iter(),
+            )
+        }
+        assert_eq!(statuses.len(), pending_transactions.len());
+
+        let mut still_pending_transactions = vec![];
+        for (transaction, status) in pending_transactions.into_iter().zip(statuses.into_iter()) {
+            let signature = transaction.signatures[0];
+            trace!("{}: status={:?}", signature, status);
+            let completed = if dry_run {
+                Some(true)
+            } else if let Some(status) = &status {
+                if status.satisfies_commitment(rpc_client.commitment()) {
+                    if let Some(TransactionError::BlockhashNotFound) = &status.err {
+                        None
+                    } else {
+                        Some(status.err.is_none())
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(success) = completed {
+                info!("{}: completed. success={}", signature, success);
+                if success {
+                    succeeded_transactions.insert(signature);
+                } else {
+                    failed_transactions.insert(signature);
+                }
+            } else {
+                still_pending_transactions.push(transaction);
+            }
+        }
+        pending_transactions = still_pending_transactions;
 
         let blockhash_expired = rpc_client
             .get_fee_calculator_for_blockhash(&blockhash)?
@@ -119,55 +191,6 @@ pub fn send_and_confirm_transactions(
                 });
             }
         }
-
-        let mut statuses = vec![];
-        for pending_signatures_chunk in pending_transactions
-            .iter()
-            .map(|transaction| transaction.signatures[0])
-            .collect::<Vec<_>>()
-            .chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
-        {
-            trace!(
-                "checking {} pending transactions",
-                pending_signatures_chunk.len()
-            );
-            statuses.extend(
-                rpc_client
-                    .get_signature_statuses(pending_signatures_chunk)?
-                    .value
-                    .into_iter(),
-            )
-        }
-        assert_eq!(statuses.len(), pending_transactions.len());
-
-        let mut still_pending_transactions = vec![];
-        for (transaction, status) in pending_transactions.into_iter().zip(statuses.into_iter()) {
-            let signature = transaction.signatures[0];
-            trace!("{}: status={:?}", signature, status);
-            let completed = if dry_run {
-                Some(true)
-            } else if let Some(status) = &status {
-                if status.satisfies_commitment(rpc_client.commitment()) {
-                    Some(status.err.is_none())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            if let Some(success) = completed {
-                info!("{}: completed. success={}", signature, success);
-                if success {
-                    succeeded_transactions.insert(signature);
-                } else {
-                    failed_transactions.insert(signature);
-                }
-            } else {
-                still_pending_transactions.push(transaction);
-            }
-        }
-        pending_transactions = still_pending_transactions;
         sleep(Duration::from_millis(500));
     }
 
