@@ -5,6 +5,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         error,
+        sync::Arc,
     },
 };
 
@@ -17,7 +18,8 @@ pub fn new() -> NoopStakePool {
 impl GenericStakePool for NoopStakePool {
     fn apply(
         &mut self,
-        _rpc_client: &RpcClient,
+        _rpc_client: Arc<RpcClient>,
+        _websocket_url: &str,
         _dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
