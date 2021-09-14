@@ -32,7 +32,7 @@ pub struct SendAndConfirmTransactionResult {
     pub failed: HashSet<Signature>,
 }
 
-pub fn blockhash_expired(error_kind: &ClientErrorKind) -> bool {
+pub fn is_blockhash_expired(error_kind: &ClientErrorKind) -> bool {
     matches!(
         error_kind,
         ClientErrorKind::TransactionError(TransactionError::BlockhashNotFound)
@@ -48,7 +48,7 @@ pub fn blockhash_expired(error_kind: &ClientErrorKind) -> bool {
     )
 }
 
-pub fn simulation_error<T>(result: ClientResult<T>) -> bool {
+pub fn is_simulation_error<T>(result: &ClientResult<T>) -> bool {
     matches!(
         result,
         Err(ClientError {
@@ -77,7 +77,7 @@ pub fn send_transaction_with_refresh(
     match rpc_client.send_transaction(transaction) {
         Ok(v) => Ok(v),
         Err(err) => {
-            if blockhash_expired(&err.kind) {
+            if is_blockhash_expired(&err.kind) {
                 info!("Refreshing blockhash");
                 *blockhash = rpc_client.get_recent_blockhash()?.0;
                 transaction.sign(&[signer], *blockhash);
@@ -139,7 +139,7 @@ pub fn send_and_confirm_transactions(
                 &mut transaction,
                 &mut recent_blockhash,
             );
-            if simulation_error(result) {
+            if is_simulation_error(&result) {
                 failed_transactions.insert(transaction.signatures[0]);
             } else {
                 pending_transactions
@@ -159,7 +159,9 @@ pub fn send_and_confirm_transactions(
         // Gather all statuses
         let mut blockhash_statuses = HashMap::new();
         for (blockhash, transactions) in pending_transactions.iter() {
-            let statuses = blockhash_statuses.entry(*blockhash).or_insert_with(Vec::new);
+            let statuses = blockhash_statuses
+                .entry(*blockhash)
+                .or_insert_with(Vec::new);
             for pending_signatures_chunk in transactions
                 .iter()
                 .map(|transaction| transaction.signatures[0])
@@ -253,7 +255,7 @@ pub fn send_and_confirm_transactions(
                         &mut transaction,
                         &mut recent_blockhash,
                     );
-                    if simulation_error(result) {
+                    if is_simulation_error(&result) {
                         failed_transactions.insert(transaction.signatures[0]);
                     } else {
                         pending_transactions
