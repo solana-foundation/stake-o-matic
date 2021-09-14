@@ -37,6 +37,7 @@ use {
         path::PathBuf,
         process,
         str::FromStr,
+        sync::Arc,
         time::Duration,
     },
     thiserror::Error,
@@ -198,6 +199,7 @@ impl std::fmt::Display for Cluster {
 #[derive(Debug, Serialize)]
 pub struct Config {
     json_rpc_url: String,
+    websocket_url: String,
     cluster: Cluster,
     db_path: PathBuf,
     db_suffix: String,
@@ -282,6 +284,9 @@ impl Config {
     pub fn default_for_test() -> Self {
         Self {
             json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
+            websocket_url: solana_cli_config::Config::compute_websocket_url(
+                "https://api.mainnet-beta.solana.com",
+            ),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
             db_suffix: "".to_string(),
@@ -338,7 +343,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -678,6 +683,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
         Cluster::Testnet => value_t!(matches, "json_rpc_url", String)
             .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
     };
+    let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let db_suffix = matches.value_of("db_suffix").unwrap().to_string();
     let markdown_mode = match value_t_or_exit!(matches, "markdown", String).as_str() {
@@ -706,6 +712,7 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
 
     let mut config = Config {
         json_rpc_url,
+        websocket_url,
         cluster,
         db_path,
         db_suffix,
@@ -732,8 +739,10 @@ fn get_config() -> BoxResult<(Config, RpcClient, Box<dyn GenericStakePool>)> {
     };
 
     info!("RPC URL: {}", config.json_rpc_url);
-    let rpc_client =
-        RpcClient::new_with_timeout(config.json_rpc_url.clone(), Duration::from_secs(180));
+    let rpc_client = Arc::new(RpcClient::new_with_timeout(
+        config.json_rpc_url.clone(),
+        Duration::from_secs(180),
+    ));
 
     // Sanity check that the RPC endpoint is healthy before performing too much work
     {
@@ -1730,7 +1739,12 @@ fn main() -> BoxResult<()> {
             .collect();
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
-            stake_pool.apply(&rpc_client, config.dry_run, &desired_validator_stake)?;
+            stake_pool.apply(
+                rpc_client,
+                &config.websocket_url,
+                config.dry_run,
+                &desired_validator_stake,
+            )?;
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
 

@@ -5,6 +5,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         error,
+        sync::Arc,
     },
 };
 
@@ -37,7 +38,8 @@ pub trait GenericStakePool {
     /// Fourth value in returned tuple is the calculated bonus stake amount
     fn apply(
         &mut self,
-        rpc_client: &RpcClient,
+        rpc_client: Arc<RpcClient>,
+        websocket_url: &str,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
