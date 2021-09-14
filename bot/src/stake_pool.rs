@@ -524,51 +524,55 @@ fn remove_validators_from_pool(
     for vote_address in remove_vote_addresses {
         if let Some(validator_list_entry) = validator_list.find(&vote_address) {
             if validator_list_entry.status == StakeStatus::Active {
-                info!("Removing {} from stake pool", vote_address);
-                let destination_stake_address =
-                    staker_transient_stake_address(authorized_staker.pubkey(), vote_address);
-                let destination_stake_seed = staker_transient_stake_address_seed(vote_address);
-                let mut instructions = vec![system_instruction::create_account_with_seed(
-                    &authorized_staker.pubkey(),
-                    &destination_stake_address,
-                    &authorized_staker.pubkey(),
-                    &destination_stake_seed,
-                    stake_rent_exemption,
-                    mem::size_of::<StakeState>() as u64,
-                    &stake::program::id(),
-                )];
-                if validator_list_entry.active_stake_lamports > stake_rent_exemption {
+                if validator_list_entry.transient_stake_lamports == 0 {
+                    info!("Removing {} from stake pool", vote_address);
+                    let destination_stake_address =
+                        staker_transient_stake_address(authorized_staker.pubkey(), vote_address);
+                    let destination_stake_seed = staker_transient_stake_address_seed(vote_address);
+                    let mut instructions = vec![system_instruction::create_account_with_seed(
+                        &authorized_staker.pubkey(),
+                        &destination_stake_address,
+                        &authorized_staker.pubkey(),
+                        &destination_stake_seed,
+                        stake_rent_exemption,
+                        mem::size_of::<StakeState>() as u64,
+                        &stake::program::id(),
+                    )];
+                    if validator_list_entry.active_stake_lamports > stake_rent_exemption {
+                        instructions.push(
+                            spl_stake_pool::instruction::decrease_validator_stake_with_vote(
+                                &spl_stake_pool::id(),
+                                stake_pool,
+                                stake_pool_address,
+                                &vote_address,
+                                validator_list_entry.active_stake_lamports,
+                                validator_list_entry.transient_seed_suffix_start,
+                            ),
+                        );
+                    }
+
                     instructions.push(
-                        spl_stake_pool::instruction::decrease_validator_stake_with_vote(
+                        spl_stake_pool::instruction::remove_validator_from_pool_with_vote(
                             &spl_stake_pool::id(),
                             stake_pool,
                             stake_pool_address,
                             &vote_address,
-                            validator_list_entry.active_stake_lamports,
+                            &authorized_staker.pubkey(),
                             validator_list_entry.transient_seed_suffix_start,
+                            &destination_stake_address,
                         ),
                     );
-                }
-
-                instructions.push(
-                    spl_stake_pool::instruction::remove_validator_from_pool_with_vote(
-                        &spl_stake_pool::id(),
-                        stake_pool,
-                        stake_pool_address,
-                        &vote_address,
-                        &authorized_staker.pubkey(),
-                        validator_list_entry.transient_seed_suffix_start,
+                    instructions.push(stake_instruction::deactivate_stake(
                         &destination_stake_address,
-                    ),
-                );
-                instructions.push(stake_instruction::deactivate_stake(
-                    &destination_stake_address,
-                    &authorized_staker.pubkey(),
-                ));
-                transactions.push(Transaction::new_with_payer(
-                    &instructions,
-                    Some(&authorized_staker.pubkey()),
-                ));
+                        &authorized_staker.pubkey(),
+                    ));
+                    transactions.push(Transaction::new_with_payer(
+                        &instructions,
+                        Some(&authorized_staker.pubkey()),
+                    ));
+                } else {
+                    warn!("Validator {} cannot be removed because of existing transient stake, ignoring", vote_address);
+                }
             } else {
                 debug!("Validator {} already removed, ignoring", vote_address);
             }
