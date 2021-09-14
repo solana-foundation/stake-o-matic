@@ -1,7 +1,7 @@
 use {
     log::*,
     solana_client::{
-        client_error::{ClientErrorKind, Result as ClientResult},
+        client_error::{ClientError, ClientErrorKind, Result as ClientResult},
         rpc_client::RpcClient,
         rpc_config::RpcSimulateTransactionConfig,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
@@ -48,6 +48,25 @@ pub fn blockhash_expired(error_kind: &ClientErrorKind) -> bool {
     )
 }
 
+pub fn simulation_error<T>(result: ClientResult<T>) -> bool {
+    matches!(
+        result,
+        Err(ClientError {
+            kind: ClientErrorKind::RpcError(RpcError::RpcResponseError {
+                data: RpcResponseErrorData::SendTransactionPreflightFailure(
+                    RpcSimulateTransactionResult {
+                        err: Some(TransactionError::InstructionError(_, _))
+                            | Some(TransactionError::AlreadyProcessed),
+                        ..
+                    }
+                ),
+                ..
+            }),
+            ..
+        })
+    )
+}
+
 pub fn send_transaction_with_refresh(
     rpc_client: &RpcClient,
     signer: &Keypair,
@@ -85,7 +104,7 @@ pub fn send_and_confirm_transactions(
         lamports_to_sol(authorized_staker_balance)
     );
 
-    let (mut blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
+    let (mut recent_blockhash, fee_calculator) = rpc_client.get_recent_blockhash()?;
     info!("{} transactions to send", transactions.len());
 
     let required_fee = transactions.iter().fold(0, |fee, transaction| {
@@ -96,7 +115,10 @@ pub fn send_and_confirm_transactions(
         return Err("Authorized staker has insufficient funds".into());
     }
 
-    let mut pending_transactions = vec![];
+    let mut succeeded_transactions = HashSet::new();
+    let mut failed_transactions = HashSet::new();
+    let mut pending_transactions = HashMap::new();
+
     for mut transaction in transactions {
         if dry_run {
             rpc_client.simulate_transaction_with_config(
@@ -106,108 +128,145 @@ pub fn send_and_confirm_transactions(
                     ..RpcSimulateTransactionConfig::default()
                 },
             )?;
+            pending_transactions
+                .entry(recent_blockhash)
+                .or_insert_with(Vec::new)
+                .push(transaction);
         } else {
-            let _ = send_transaction_with_refresh(
+            let result = send_transaction_with_refresh(
                 rpc_client,
                 authorized_staker,
                 &mut transaction,
-                &mut blockhash,
+                &mut recent_blockhash,
             );
+            if simulation_error(result) {
+                failed_transactions.insert(transaction.signatures[0]);
+            } else {
+                pending_transactions
+                    .entry(recent_blockhash)
+                    .or_insert_with(Vec::new)
+                    .push(transaction);
+            }
         }
-        pending_transactions.push(transaction);
     }
 
-    let mut succeeded_transactions = HashSet::new();
-    let mut failed_transactions = HashSet::new();
     let mut max_expired_blockhashes = 5usize;
     loop {
         if pending_transactions.is_empty() {
             break;
         }
 
-        let mut statuses = vec![];
-        for pending_signatures_chunk in pending_transactions
-            .iter()
-            .map(|transaction| transaction.signatures[0])
-            .collect::<Vec<_>>()
-            .chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
-        {
-            trace!(
-                "checking {} pending transactions",
-                pending_signatures_chunk.len()
-            );
-            statuses.extend(
-                rpc_client
-                    .get_signature_statuses(pending_signatures_chunk)?
-                    .value
-                    .into_iter(),
-            )
+        // Gather all statuses
+        let mut blockhash_statuses = HashMap::new();
+        for (blockhash, transactions) in pending_transactions.iter() {
+            let statuses = blockhash_statuses.entry(*blockhash).or_insert_with(Vec::new);
+            for pending_signatures_chunk in transactions
+                .iter()
+                .map(|transaction| transaction.signatures[0])
+                .collect::<Vec<_>>()
+                .chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS - 1)
+            {
+                trace!(
+                    "checking {} pending transactions",
+                    pending_signatures_chunk.len()
+                );
+                statuses.extend(
+                    rpc_client
+                        .get_signature_statuses(pending_signatures_chunk)?
+                        .value
+                        .into_iter(),
+                )
+            }
+            assert_eq!(statuses.len(), transactions.len());
         }
-        assert_eq!(statuses.len(), pending_transactions.len());
+        assert_eq!(blockhash_statuses.len(), pending_transactions.len());
 
-        let mut still_pending_transactions = vec![];
-        let mut blockhash_expired = false;
-        for (transaction, status) in pending_transactions.into_iter().zip(statuses.into_iter()) {
-            let signature = transaction.signatures[0];
-            trace!("{}: status={:?}", signature, status);
-            let completed = if dry_run {
-                Some(true)
-            } else if let Some(status) = &status {
-                if status.satisfies_commitment(rpc_client.commitment()) {
-                    if let Some(TransactionError::BlockhashNotFound) = &status.err {
-                        blockhash_expired = true;
-                        None
+        // Populate pending / success / error transactions, consuming the
+        // previous `pending_transactions` HashMap
+        let mut still_pending_transactions = HashMap::new();
+        for (blockhash, mut transactions) in pending_transactions.drain() {
+            let statuses = blockhash_statuses.get(&blockhash).unwrap();
+            for (transaction, status) in transactions.drain(..).zip(statuses.iter()) {
+                let signature = transaction.signatures[0];
+                trace!("{}: status={:?}", signature, status);
+                let completed = if dry_run {
+                    Some(true)
+                } else if let Some(status) = &status {
+                    if status.satisfies_commitment(rpc_client.commitment()) {
+                        if let Some(TransactionError::BlockhashNotFound) = &status.err {
+                            None
+                        } else {
+                            Some(status.err.is_none())
+                        }
                     } else {
-                        Some(status.err.is_none())
+                        None
                     }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            if let Some(success) = completed {
-                info!("{}: completed. success={}", signature, success);
-                if success {
-                    succeeded_transactions.insert(signature);
+                if let Some(success) = completed {
+                    info!("{}: completed. success={}", signature, success);
+                    if success {
+                        succeeded_transactions.insert(signature);
+                    } else {
+                        failed_transactions.insert(signature);
+                    }
                 } else {
-                    failed_transactions.insert(signature);
+                    still_pending_transactions
+                        .entry(blockhash)
+                        .or_insert_with(Vec::new)
+                        .push(transaction);
+                }
+            }
+        }
+
+        // Resend expired transactions, repopulating the `pending_transactions`
+        // HashMap
+        for (blockhash, transactions) in still_pending_transactions.into_iter() {
+            let blockhash_expired = rpc_client
+                .get_fee_calculator_for_blockhash(&blockhash)?
+                .is_none();
+            if blockhash_expired && !dry_run {
+                max_expired_blockhashes = max_expired_blockhashes.saturating_sub(1);
+                warn!(
+                    "Blockhash {} expired with {} pending transactions ({} retries remaining)",
+                    blockhash,
+                    transactions.len(),
+                    max_expired_blockhashes,
+                );
+
+                if max_expired_blockhashes == 0 {
+                    return Err("Too many expired blockhashes".into());
+                }
+
+                recent_blockhash = rpc_client.get_recent_blockhash()?.0;
+
+                warn!(
+                    "Resending pending transactions with blockhash: {}",
+                    blockhash
+                );
+                for mut transaction in transactions.into_iter() {
+                    let result = send_transaction_with_refresh(
+                        rpc_client,
+                        authorized_staker,
+                        &mut transaction,
+                        &mut recent_blockhash,
+                    );
+                    if simulation_error(result) {
+                        failed_transactions.insert(transaction.signatures[0]);
+                    } else {
+                        pending_transactions
+                            .entry(recent_blockhash)
+                            .or_insert_with(Vec::new)
+                            .push(transaction);
+                    }
                 }
             } else {
-                still_pending_transactions.push(transaction);
+                pending_transactions.insert(blockhash, transactions);
             }
         }
-        pending_transactions = still_pending_transactions;
 
-        if blockhash_expired && !dry_run {
-            max_expired_blockhashes = max_expired_blockhashes.saturating_sub(1);
-            warn!(
-                "Blockhash {} expired with {} pending transactions ({} retries remaining)",
-                blockhash,
-                pending_transactions.len(),
-                max_expired_blockhashes,
-            );
-
-            if max_expired_blockhashes == 0 {
-                return Err("Too many expired blockhashes".into());
-            }
-
-            blockhash = rpc_client.get_recent_blockhash()?.0;
-
-            warn!(
-                "Resending pending transactions with blockhash: {}",
-                blockhash
-            );
-            for mut transaction in pending_transactions.iter_mut() {
-                let _ = send_transaction_with_refresh(
-                    rpc_client,
-                    authorized_staker,
-                    &mut transaction,
-                    &mut blockhash,
-                );
-            }
-        }
         sleep(Duration::from_millis(500));
     }
 
