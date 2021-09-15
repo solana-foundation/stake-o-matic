@@ -1099,7 +1099,7 @@ mod test {
 
         // ===========================================================
         info!("Start with adding validators and deposit stake, no managed stake yet");
-        let epoch = rpc_client.get_epoch_info().unwrap().epoch;
+        let epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
             .apply(
                 rpc_client.clone(),
