@@ -1210,6 +1210,7 @@ mod test {
         .unwrap();
 
         info!("All validators to nothing, moving all to reserve");
+        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
             .apply(
                 rpc_client.clone(),
