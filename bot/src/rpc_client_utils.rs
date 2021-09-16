@@ -126,22 +126,20 @@ pub fn send_and_confirm_transactions_with_spinner(
                 last_resend = Instant::now();
             }
 
-            if !rpc_client.commitment().is_processed() {
-                // Wait for the next block before checking for transaction statuses
-                set_message(
-                    confirmed_transactions,
-                    Some(block_height),
-                    last_valid_block_height,
-                    &format!("Waiting for next block, {} pending...", num_transactions),
-                );
+            // Wait for the next block before checking for transaction statuses
+            set_message(
+                confirmed_transactions,
+                Some(block_height),
+                last_valid_block_height,
+                &format!("Waiting for next block, {} pending...", num_transactions),
+            );
 
-                let mut new_block_height = block_height;
-                while block_height == new_block_height {
-                    sleep(Duration::from_millis(500));
-                    new_block_height = rpc_client.get_block_height()?;
-                }
-                block_height = new_block_height;
+            let mut new_block_height = block_height;
+            while block_height == new_block_height {
+                sleep(Duration::from_millis(500));
+                new_block_height = rpc_client.get_block_height()?;
             }
+            block_height = new_block_height;
 
             if block_height > last_valid_block_height {
                 break;
