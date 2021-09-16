@@ -29,10 +29,17 @@ delete FROM imported where identity='identity';
 --add pct and stake-concentration columns 
 ALTER table imported add pct FLOAT;
 ALTER table imported add stake_conc FLOAT;
+ALTER table imported add adj_credits INTEGER;
 UPDATE imported set 
      pct = round(score * 100.0 / (select sum(score) from imported),4),
-     stake_conc = round(active_stake * 100.0 / (select sum(active_stake) from imported),4)
+     stake_conc = round(active_stake * 100.0 / (select sum(active_stake) from imported),4),
+     adj_credits = CAST((epoch_credits * (100-commission-3*data_center_concentration)/100) as INTEGER)
    ;
+
+--recompute avg_position based on adj_credits
+update imported
+set avg_position = adj_credits * 50 / (select avg(adj_credits) from scores B where adj_credits>30000);
+
 
 --control, show total staked
 select DISTINCT epoch from imported;
@@ -62,6 +69,7 @@ create TABLE if not EXISTS scores as select * from imported;
 DELETE FROM scores where epoch = (select DISTINCT epoch from imported);
 INSERT INTO scores select * from imported;
 
+
 -- recompute avg table with last 3 epochs
 -- if score=0 from imported => below nakamoto coefficient, or commission 100% or less than 100 SOL staked
 -- also we set score=0 if below 50% avg or less than 3 epochs on record
@@ -69,14 +77,14 @@ INSERT INTO scores select * from imported;
 DROP TABLE IF EXISTS avg;
 create table AVG as 
 select 0 as rank, epoch,keybase_id, vote_address,name,
-   case when score=0 or mult<=0 or score_records<3 then 0 else ROUND(base_score*mult*mult) end as avg_score, 
+   case when score=0 or mult<=0 or score_records<3 then 0 else ROUND(base_score*mult) end as avg_score, 
    base_score, ap-49 mult, ap as avg_pos, commission, round(c2,2) as avg_commiss, dcc2,
    epoch_credits, cast(ec2 as integer) as avg_ec, epoch_credits-ec2 as delta_credits, 
    0.0 as pct, score_records
 from imported A
 left outer JOIN (
        select count(*) as score_records,
-            round( avg(b.epoch_credits) * (100-avg(b.commission))/100 * (100-avg(b.data_center_concentration)*3)/100 ) as base_score, 
+            round( avg(b.adj_credits) ) as base_score, 
             avg(b.avg_position) as ap, avg(b.avg_position)-49 as mult, avg(b.commission) as c2, ROUND(avg(b.epoch_credits)) as ec2,
             avg(b.data_center_concentration) as dcc2, b.vote_address as va2 
        from scores B 
