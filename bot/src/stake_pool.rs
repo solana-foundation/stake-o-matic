@@ -992,7 +992,7 @@ mod test {
         solana_logger::setup_with_default("solana_stake_o_matic=info");
 
         let mut test_validator_genesis = TestValidatorGenesis::default();
-        const TEST_SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH * 3 / 2; // a bit longer than minimum to avoid CI failures
+        const TEST_SLOTS_PER_EPOCH: u64 = MINIMUM_SLOTS_PER_EPOCH * 2; // longer than minimum to avoid CI failures
         test_validator_genesis
             .epoch_schedule(EpochSchedule::custom(
                 TEST_SLOTS_PER_EPOCH,
