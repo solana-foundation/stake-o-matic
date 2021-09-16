@@ -1099,7 +1099,7 @@ mod test {
 
         // ===========================================================
         info!("Start with adding validators and deposit stake, no managed stake yet");
-        let epoch = wait_for_next_epoch(&rpc_client).unwrap();
+        let epoch = rpc_client.get_epoch_info().unwrap().epoch;
         stake_o_matic
             .apply(
                 rpc_client.clone(),
@@ -1210,7 +1210,6 @@ mod test {
         .unwrap();
 
         info!("All validators to nothing, moving all to reserve");
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
             .apply(
                 rpc_client.clone(),
@@ -1242,8 +1241,7 @@ mod test {
         );
 
         // ===========================================================
-        info!("All the validators to bonus stake level");
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
+        info!("All validators to bonus stake level");
         uniform_stake_pool_apply(
             &mut stake_o_matic,
             rpc_client.clone(),
@@ -1256,7 +1254,6 @@ mod test {
 
         // ===========================================================
         info!("Different stake for each validator");
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         let desired_validator_stake = vec![
             ValidatorStake {
                 identity: validators[0].identity,
@@ -1352,7 +1349,6 @@ mod test {
         // ===========================================================
         info!("remove all validators");
         // deactivate all validator stake and remove from pool
-        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
             .apply(rpc_client.clone(), websocket_url, false, &[])
             .unwrap();
