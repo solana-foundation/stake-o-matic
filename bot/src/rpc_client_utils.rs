@@ -15,7 +15,6 @@ use {
         stake,
         transaction::{Transaction, TransactionError},
     },
-    solana_transaction_status::TransactionConfirmationStatus,
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -161,28 +160,12 @@ pub fn send_and_confirm_transactions_with_spinner(
                         pending_signatures_chunk.iter().zip(statuses.into_iter())
                     {
                         if let Some(status) = status {
-                            if let Some(confirmation_status) = &status.confirmation_status {
-                                if *confirmation_status != TransactionConfirmationStatus::Processed
-                                {
-                                    if let Some((i, _)) = pending_transactions.remove(signature) {
-                                        confirmed_transactions += 1;
-                                        if status.err.is_some() {
-                                            progress_bar.println(format!(
-                                                "Failed transaction: {:?}",
-                                                status
-                                            ));
-                                        }
-                                        transaction_errors[i] = status.err;
-                                    }
-                                }
-                            } else if status.confirmations.is_none()
-                                || status.confirmations.unwrap() > 1
-                            {
+                            if status.satisfies_commitment(rpc_client.commitment()) {
                                 if let Some((i, _)) = pending_transactions.remove(signature) {
                                     confirmed_transactions += 1;
                                     if status.err.is_some() {
                                         progress_bar
-                                            .println(format!("Failed transaction: {:?}", &status));
+                                            .println(format!("Failed transaction: {:?}", status));
                                     }
                                     transaction_errors[i] = status.err;
                                 }
