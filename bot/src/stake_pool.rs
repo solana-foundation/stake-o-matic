@@ -1179,6 +1179,10 @@ mod test {
             )
             .unwrap();
 
+        let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
+        stake_o_matic
+            .epoch_update(rpc_client.clone(), websocket_url)
+            .unwrap();
         info!("Deposit stake");
         let staker_pool_token_address = create_token_account(
             &rpc_client,
