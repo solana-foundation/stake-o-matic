@@ -120,7 +120,7 @@ pub fn send_and_confirm_transactions_with_spinner(
         }
 
         let mut last_resend = Instant::now() - transaction_resend_interval;
-        loop {
+        while block_height <= last_valid_block_height {
             let num_transactions = pending_transactions.len();
 
             // Periodically re-send all pending transactions
@@ -170,11 +170,6 @@ pub fn send_and_confirm_transactions_with_spinner(
                 new_block_height = rpc_client.get_block_height()?;
             }
             block_height = new_block_height;
-
-            if block_height > last_valid_block_height {
-                break;
-            }
-
             if dry_run {
                 return Ok(transaction_errors);
             }
