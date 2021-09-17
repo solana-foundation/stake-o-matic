@@ -1,12 +1,14 @@
 use {
     indicatif::{ProgressBar, ProgressStyle},
+    log::*,
     solana_client::{
+        pubsub_client::PubsubClientError,
         rpc_client::RpcClient,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig},
         rpc_filter,
         rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
         rpc_response::{Fees, RpcVoteAccountInfo, RpcVoteAccountStatus},
-        tpu_client::{TpuClient, TpuClientConfig},
+        tpu_client::{TpuClient, TpuClientConfig, TpuSenderError},
     },
     solana_sdk::{
         clock::Epoch,
@@ -33,6 +35,38 @@ fn new_spinner_progress_bar() -> ProgressBar {
     progress_bar
 }
 
+fn new_tpu_client_with_retry(
+    rpc_client: &Arc<RpcClient>,
+    websocket_url: &str,
+) -> Result<TpuClient, TpuSenderError> {
+    let mut retries = 5;
+    let sleep_seconds = 5;
+    while retries > 0 {
+        match TpuClient::new(
+            rpc_client.clone(),
+            websocket_url,
+            TpuClientConfig::default(),
+        ) {
+            // only retry on connection error
+            Err(TpuSenderError::PubsubError(PubsubClientError::ConnectionError(_))) => {
+                warn!(
+                    "Error creating Tpu Client, retrying in {}s, {} retries remaining",
+                    sleep_seconds, retries
+                );
+                retries -= 1;
+                sleep(Duration::from_secs(sleep_seconds));
+            }
+            // everything else, Ok or Err, can pass through
+            result => return result,
+        }
+    }
+    TpuClient::new(
+        rpc_client.clone(),
+        websocket_url,
+        TpuClientConfig::default(),
+    )
+}
+
 pub fn send_and_confirm_transactions_with_spinner(
     rpc_client: Arc<RpcClient>,
     websocket_url: &str,
@@ -46,11 +80,7 @@ pub fn send_and_confirm_transactions_with_spinner(
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
     progress_bar.set_message("Connecting...");
-    let tpu_client = TpuClient::new(
-        rpc_client.clone(),
-        websocket_url,
-        TpuClientConfig::default(),
-    )?;
+    let tpu_client = new_tpu_client_with_retry(&rpc_client, websocket_url)?;
 
     let mut transactions = transactions.into_iter().enumerate().collect::<Vec<_>>();
     let num_transactions = transactions.len() as f64;
