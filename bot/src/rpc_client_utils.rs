@@ -21,7 +21,7 @@ use {
         str::FromStr,
         sync::Arc,
         thread::sleep,
-        time::{Duration, Instant},
+        time::Duration,
     },
 };
 
@@ -43,7 +43,6 @@ pub fn send_and_confirm_transactions_with_spinner(
     let progress_bar = new_spinner_progress_bar();
     let mut expired_blockhash_retries = 5;
     let send_transaction_interval = Duration::from_millis(10); /* Send at ~100 TPS */
-    let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
     progress_bar.set_message("Connecting...");
     let tpu_client = TpuClient::new(
@@ -89,49 +88,46 @@ pub fn send_and_confirm_transactions_with_spinner(
             pending_transactions.insert(transaction.signatures[0], (i, transaction));
         }
 
-        let mut last_resend = Instant::now() - transaction_resend_interval;
+        let num_transactions = pending_transactions.len();
+        for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
+            let method = if dry_run {
+                "DRY RUN"
+            } else if tpu_client.send_transaction(transaction) {
+                "TPU"
+            } else {
+                let _ = rpc_client.send_transaction_with_config(
+                    transaction,
+                    RpcSendTransactionConfig {
+                        skip_preflight: true,
+                        ..RpcSendTransactionConfig::default()
+                    },
+                );
+                "RPC"
+            };
+            set_message(
+                confirmed_transactions,
+                None, //block_height,
+                last_valid_block_height,
+                &format!(
+                    "Sending {}/{} transactions (via {})",
+                    index + 1,
+                    num_transactions,
+                    method
+                ),
+            );
+            sleep(send_transaction_interval);
+        }
+
         loop {
-            let num_transactions = pending_transactions.len();
-
-            // Periodically re-send all pending transactions
-            if Instant::now().duration_since(last_resend) > transaction_resend_interval {
-                for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
-                    let method = if dry_run {
-                        "DRY RUN"
-                    } else if tpu_client.send_transaction(transaction) {
-                        "TPU"
-                    } else {
-                        let _ = rpc_client.send_transaction_with_config(
-                            transaction,
-                            RpcSendTransactionConfig {
-                                skip_preflight: true,
-                                ..RpcSendTransactionConfig::default()
-                            },
-                        );
-                        "RPC"
-                    };
-                    set_message(
-                        confirmed_transactions,
-                        None, //block_height,
-                        last_valid_block_height,
-                        &format!(
-                            "Sending {}/{} transactions (via {})",
-                            index + 1,
-                            num_transactions,
-                            method
-                        ),
-                    );
-                    sleep(send_transaction_interval);
-                }
-                last_resend = Instant::now();
-            }
-
             // Wait for the next block before checking for transaction statuses
             set_message(
                 confirmed_transactions,
                 Some(block_height),
                 last_valid_block_height,
-                &format!("Waiting for next block, {} pending...", num_transactions),
+                &format!(
+                    "Waiting for next block, {} pending...",
+                    pending_transactions.len()
+                ),
             );
 
             let mut new_block_height = block_height;
