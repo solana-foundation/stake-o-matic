@@ -783,7 +783,7 @@ where
         #[allow(clippy::comparison_chain)]
         let op_msg = if balance > desired_balance {
             let amount_to_remove = balance - desired_balance;
-            if amount_to_remove < MIN_STAKE_CHANGE_AMOUNT {
+            if amount_to_remove < stake_rent_exemption {
                 format!("not removing {} (amount too small)", Sol(amount_to_remove))
             } else {
                 transactions.push(Transaction::new_with_payer(
