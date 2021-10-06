@@ -683,7 +683,7 @@ pub mod test {
         let pool_withdraw_authority =
             find_withdraw_authority_program_address(&spl_stake_pool::id(), stake_pool_address).0;
         let transaction = Transaction::new_signed_with_payer(
-            &spl_stake_pool::instruction::deposit_sol(
+            &[spl_stake_pool::instruction::deposit_sol(
                 &spl_stake_pool::id(),
                 stake_pool_address,
                 &pool_withdraw_authority,
@@ -695,7 +695,7 @@ pub mod test {
                 &stake_pool.pool_mint,
                 &spl_token::id(),
                 lamports,
-            ),
+            )],
             Some(&authorized_staker.pubkey()),
             &[authorized_staker],
             rpc_client.get_recent_blockhash()?.0,
