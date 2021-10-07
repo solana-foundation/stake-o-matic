@@ -4789,9 +4789,9 @@ dependencies = [
 
 [[package]]
 name = "spl-stake-pool"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bebd56680e4ea49257b750428dad893afbe57f4bcd5f721879f0ee1f71ec308"
+checksum = "4d6abc7a79b9a913c25262d8c605c4a4a928090f730102102637ca30ff3f3be2"
 dependencies = [
  "arrayref",
  "bincode",
