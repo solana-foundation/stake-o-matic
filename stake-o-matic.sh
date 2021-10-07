@@ -25,7 +25,7 @@ TESTNET_ARGS=(
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
-  --min-release-version 1.7.3
+  --min-release-version 1.7.12
 )
 
 # shellcheck disable=SC2206
@@ -37,7 +37,7 @@ MAINNET_BETA_ARGS=(
   --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
-  --min-release-version 1.6.20
+  --min-release-version 1.6.25
   --max-infrastructure-concentration 10
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
