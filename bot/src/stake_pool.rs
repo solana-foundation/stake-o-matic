@@ -237,7 +237,7 @@ impl GenericStakePool for StakePoolOMatic {
             &mut validator_stake_actions,
         )?;
 
-        let total_stake_amount = self.stake_pool.total_stake_lamports;
+        let total_stake_amount = self.stake_pool.total_lamports;
         info!(
             "Total stake pool balance minus required reserves: {}",
             Sol(total_stake_amount)
