@@ -26,6 +26,7 @@ TESTNET_ARGS=(
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
   --min-release-version 1.8.0
+  --max-old-release-version-percentage 20
 )
 
 # shellcheck disable=SC2206
