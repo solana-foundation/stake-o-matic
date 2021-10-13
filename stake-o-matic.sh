@@ -42,6 +42,8 @@ MAINNET_BETA_ARGS=(
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
   --min-testnet-participation 5 10
+  --enforce-testnet-participation
+  --enforce-self-stake
 )
 
 # shellcheck disable=SC2206
