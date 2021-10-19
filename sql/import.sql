@@ -79,14 +79,14 @@ create table AVG as
 select 0 as rank, epoch,keybase_id, vote_address,name,
    case when score=0 or mult<=0 or score_records<3 then 0 else ROUND(base_score*mult) end as avg_score, 
    base_score, ap-49 mult, ap as avg_pos, commission, round(c2,2) as avg_commiss, dcc2,
-   epoch_credits, cast(ec2 as integer) as avg_ec, epoch_credits-ec2 as delta_credits, 
-   0.0 as pct, score_records
+   epoch_credits, cast(ec2 as integer) as avg_ec, epoch_credits-ec2 as delta_credits,
+   0.0 as pct, score_records, avg_active_stake
 from imported A
 left outer JOIN (
        select count(*) as score_records,
             round( avg(b.adj_credits) ) as base_score, 
             avg(b.avg_position) as ap, avg(b.avg_position)-49 as mult, avg(b.commission) as c2, ROUND(avg(b.epoch_credits)) as ec2,
-            avg(b.data_center_concentration) as dcc2, b.vote_address as va2 
+            avg(b.data_center_concentration) as dcc2, b.vote_address as va2, avg(b.active_stake) as avg_active_stake
        from scores B 
        where B.epoch between (select distinct epoch from imported)-2 and (select distinct epoch from imported)
        group by vote_address
@@ -122,7 +122,7 @@ select epoch,rank,keybase_id,name, round(pct,4) as pct, avg_score, ROUND(mult,4)
    avg_commiss,round(dcc2,5) as dcc2 from AVG 
 where pct>0 
 order by rank
-LIMIT 10
+LIMIT 15
 ;
 select count(*) as validators_with_pct from avg where pct<>0;
 .exit
