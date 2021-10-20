@@ -643,6 +643,15 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                     .help("Keypair of the authorized staker")
             )
             .arg(
+                Arg::with_name("min_reserve_stake_balance")
+                    .long("min-reserve-stake-balance")
+                    .value_name("SOL")
+                    .takes_value(true)
+                    .default_value("1")
+                    .validator(is_amount)
+                    .help("The minimum balance to keep in the reserve stake account")
+            )
+            .arg(
                 Arg::with_name("baseline_stake_amount")
                     .index(3)
                     .value_name("SOL")
@@ -817,6 +826,8 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         ("stake-pool", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
             let pool_address = pubkey_of(matches, "pool_address").unwrap();
+            let min_reserve_stake_balance =
+                sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount = match value_t!(matches, "baseline_stake_amount", f64) {
                 Ok(amt) => sol_to_lamports(amt),
                 Err(_) => {
@@ -832,6 +843,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 authorized_staker,
                 pool_address,
                 baseline_stake_amount,
+                min_reserve_stake_balance,
             )?)
         }
         ("noop-stake-pool", _) => Box::new(noop_stake_pool::new()),
