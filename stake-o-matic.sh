@@ -10,6 +10,7 @@ if [[ -n $FOLLOWER ]]; then
   REQUIRE_CLASSIFICATION="--require-classification"
 else
   MARKDOWN="--markdown first"
+  EPOCH_CLASSIFICATION="--epoch-classification first"
 fi
 
 if [[ ! -d db ]]; then
@@ -50,6 +51,7 @@ MAINNET_BETA_ARGS=(
 # shellcheck disable=SC2206
 NOT_A_STAKE_POOL_ARGS=(
   $MARKDOWN
+  $EPOCH_CLASSIFICATION
   $CONFIRM
   $REQUIRE_CLASSIFICATION
   stake-pool-v0
@@ -61,6 +63,7 @@ NOT_A_STAKE_POOL_ARGS=(
 
 # shellcheck disable=SC2206
 STAKE_POOL_ARGS=(
+  $EPOCH_CLASSIFICATION
   $CONFIRM
   $REQUIRE_CLASSIFICATION
   --db-suffix stake-pool
