@@ -29,10 +29,6 @@ use {
 /// rent-exempt amount
 pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL / 1_000;
 
-/// Minimum amount of lamports in the stake pool reserve, on top of the rent-exempt
-/// amount
-pub const MIN_STAKE_RESERVE_BALANCE: u64 = 1;
-
 /// Don't bother adjusting stake if less than this amount of lamports will be affected
 /// (must be >= MIN_STAKE_ACCOUNT_BALANCE)
 const MIN_STAKE_CHANGE_AMOUNT: u64 = MIN_STAKE_ACCOUNT_BALANCE;
@@ -69,6 +65,7 @@ fn staker_transient_stake_address(authorized_staker: Pubkey, vote_address: Pubke
 pub struct StakePoolOMatic {
     authorized_staker: Keypair,
     baseline_stake_amount: u64,
+    min_reserve_stake_balance: u64,
     stake_pool_address: Pubkey,
     stake_pool: StakePool,
     validator_list: ValidatorList,
@@ -79,6 +76,7 @@ pub fn new(
     authorized_staker: Keypair,
     stake_pool_address: Pubkey,
     baseline_stake_amount: u64,
+    min_reserve_stake_balance: u64,
 ) -> Result<StakePoolOMatic, Box<dyn error::Error>> {
     if baseline_stake_amount < MIN_STAKE_CHANGE_AMOUNT {
         return Err(format!(
@@ -106,6 +104,7 @@ pub fn new(
         stake_pool_address,
         stake_pool,
         validator_list,
+        min_reserve_stake_balance,
     })
 }
 
@@ -237,7 +236,10 @@ impl GenericStakePool for StakePoolOMatic {
             &mut validator_stake_actions,
         )?;
 
-        let total_stake_amount = self.stake_pool.total_lamports;
+        let total_stake_amount = self
+            .stake_pool
+            .total_lamports
+            .saturating_sub(self.min_reserve_stake_balance);
         info!(
             "Total stake pool balance minus required reserves: {}",
             Sol(total_stake_amount)
@@ -296,7 +298,7 @@ impl GenericStakePool for StakePoolOMatic {
         let reserve_stake_balance = get_available_reserve_stake_balance(
             &rpc_client,
             self.stake_pool.reserve_stake,
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
+            self.min_reserve_stake_balance + stake_rent_exemption,
         )
         .map_err(|err| {
             format!(
@@ -1042,11 +1044,12 @@ mod test {
         )
         .unwrap();
         let num_validators = 3;
+        let min_reserve_stake_balance = sol_to_lamports(100.);
         let pool_reserve_stake = create_stake_account(
             &rpc_client,
             &authorized_staker,
             &withdraw_authority,
-            stake_rent_exemption + MIN_STAKE_RESERVE_BALANCE,
+            stake_rent_exemption + min_reserve_stake_balance,
         )
         .unwrap()
         .pubkey();
@@ -1073,7 +1076,7 @@ mod test {
             (baseline_stake_amount + bonus_stake_amount + stake_rent_exemption)
                 * validators.len() as u64;
         let total_stake_amount_plus_min =
-            total_stake_amount + stake_rent_exemption + MIN_STAKE_RESERVE_BALANCE;
+            total_stake_amount + stake_rent_exemption + min_reserve_stake_balance;
 
         let assert_reserve_account_only = |current_reserve_amount| {
             assert_eq!(
@@ -1088,13 +1091,18 @@ mod test {
                 assert!(all_stake.contains(&pool_reserve_stake));
             }
         };
-        assert_reserve_account_only(MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption);
+        assert_reserve_account_only(min_reserve_stake_balance + stake_rent_exemption);
 
         let mut stake_o_matic = new(
             &rpc_client,
             authorized_staker,
             stake_pool.pubkey(),
             baseline_stake_amount,
+            min_reserve_stake_balance - 1,
+            // This makes the math work neater for the sake of the test. That
+            // subtracted lamport represents the minimum 1 lamport that must
+            // always remain in the reserve stake account.  In practice, we don't
+            // need to be so specific, but it's good to get it right in a test.
         )
         .unwrap();
 
@@ -1140,7 +1148,7 @@ mod test {
         info!("min: wait for stake activation");
         assert_eq!(
             rpc_client.get_balance(&pool_reserve_stake).unwrap(),
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
+            min_reserve_stake_balance + stake_rent_exemption,
         );
 
         for validator in &validators {
@@ -1250,7 +1258,7 @@ mod test {
             &validators,
             ValidatorStakeState::Bonus,
             baseline_stake_amount + bonus_stake_amount,
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption * (1 + validators.len() as u64),
+            min_reserve_stake_balance + stake_rent_exemption * (1 + validators.len() as u64),
         );
 
         // ===========================================================
@@ -1299,7 +1307,7 @@ mod test {
         // needs one more epoch for the additional bonus stake to arrive. Validator 2
         // already received some extra rent-exempt reserves during the previous
         // re-balance.
-        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.00456576]) {
+        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.004565761]) {
             let expected_sol_balance = sol_to_lamports(*expected_sol_balance);
             assert_eq!(
                 expected_sol_balance,
@@ -1314,7 +1322,7 @@ mod test {
             rpc_client
                 .get_balance(&stake_o_matic.stake_pool.reserve_stake)
                 .unwrap(),
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption,
+            min_reserve_stake_balance + stake_rent_exemption,
         );
 
         info!("Check after second epoch");
@@ -1332,7 +1340,7 @@ mod test {
             rpc_client
                 .get_balance(&stake_o_matic.stake_pool.reserve_stake)
                 .unwrap(),
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption * 2, // additional withdrawn stake rent exemption
+            min_reserve_stake_balance + stake_rent_exemption * 2, // additional withdrawn stake rent exemption
         );
 
         // after the second epoch, validator 2 is now has all the bonus stake
@@ -1361,7 +1369,7 @@ mod test {
             .unwrap();
         // all stake has been returned to the reserve account
         assert_reserve_account_only(
-            MIN_STAKE_RESERVE_BALANCE + stake_rent_exemption + total_stake_amount,
+            min_reserve_stake_balance + stake_rent_exemption + total_stake_amount,
         );
         // staker has recovered all of their SOL from stake accounts
         assert_eq!(
