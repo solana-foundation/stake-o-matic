@@ -177,7 +177,7 @@ pub enum Cluster {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub enum Markdown {
+pub enum OutputMode {
     Yes,
     First,
     No,
@@ -204,7 +204,8 @@ pub struct Config {
     db_path: PathBuf,
     db_suffix: String,
     require_classification: bool,
-    markdown_mode: Markdown,
+    markdown_mode: OutputMode,
+    epoch_classification: OutputMode,
 
     /// Perform all stake processing, without sending transactions to the network
     dry_run: bool,
@@ -290,7 +291,8 @@ impl Config {
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
             db_suffix: "".to_string(),
-            markdown_mode: Markdown::No,
+            markdown_mode: OutputMode::No,
+            epoch_classification: OutputMode::No,
             require_classification: false,
             dry_run: true,
             quality_block_producer_percentage: 15,
@@ -385,8 +387,17 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .value_name("no|yes|first")
                 .takes_value(true)
                 .default_value("no")
-                .possible_values(&["yes", "first", "no"])
+                .possible_values(&["no", "yes", "first"])
                 .help("Output markdown.  If \"first\", markdown will only be generated on the first run.  If \"yes\", markdown will always be generated. If \"no\", no markdown is ever generated.")
+        )
+        .arg(
+            Arg::with_name("epoch_classification")
+                .long("epoch-classification")
+                .value_name("no|yes|first")
+                .takes_value(true)
+                .default_value("no")
+                .possible_values(&["no", "yes", "first"])
+                .help("Output epoch classification.  If \"first\", classification will only be output on the first run.  If \"yes\", classification will always be dumped. If \"no\", no classification is ever dumped.")
         )
         .arg(
             Arg::with_name("db_path")
@@ -687,11 +698,18 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let db_suffix = matches.value_of("db_suffix").unwrap().to_string();
     let markdown_mode = match value_t_or_exit!(matches, "markdown", String).as_str() {
-        "first" => Markdown::First,
-        "yes" => Markdown::Yes,
-        "no" => Markdown::No,
+        "first" => OutputMode::First,
+        "yes" => OutputMode::Yes,
+        "no" => OutputMode::No,
         _ => unreachable!(),
     };
+    let epoch_classification =
+        match value_t_or_exit!(matches, "epoch_classification", String).as_str() {
+            "first" => OutputMode::First,
+            "yes" => OutputMode::Yes,
+            "no" => OutputMode::No,
+            _ => unreachable!(),
+        };
     let require_classification = matches.is_present("require_classification");
 
     let confirmed_block_cache_path = matches
@@ -718,6 +736,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         db_suffix,
         require_classification,
         markdown_mode,
+        epoch_classification,
         dry_run,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
@@ -1771,10 +1790,15 @@ fn main() -> BoxResult<()> {
         }
     }
 
-    match (first_time, config.markdown_mode) {
-        (true, Markdown::First) | (_, Markdown::Yes) => {
+    match (first_time, config.epoch_classification) {
+        (true, OutputMode::First) | (_, OutputMode::Yes) => {
             EpochClassification::new(epoch_classification)
                 .save(epoch, &config.cluster_db_path())?;
+        }
+        _ => {}
+    }
+    match (first_time, config.markdown_mode) {
+        (true, OutputMode::First) | (_, OutputMode::Yes) => {
             generate_markdown(epoch, &config)?;
         }
         _ => {}
