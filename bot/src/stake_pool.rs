@@ -492,6 +492,11 @@ fn update_stake_pool(
     stake_pool: &StakePool,
     validator_list: &ValidatorList,
 ) -> Result<(), Box<dyn error::Error>> {
+    let epoch_info = rpc_client.get_epoch_info()?;
+    if stake_pool.last_update_epoch == epoch_info.epoch {
+        println!("Stake pool up to date, no need to update");
+        return Ok(());
+    }
     let (update_list_instructions, final_instructions) =
         spl_stake_pool::instruction::update_stake_pool(
             &spl_stake_pool::id(),
