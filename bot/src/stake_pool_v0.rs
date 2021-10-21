@@ -6,11 +6,10 @@ use {
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
-        account::Account,
         native_token::{Sol, LAMPORTS_PER_SOL},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
-        stake::{self, instruction as stake_instruction, state::StakeState},
+        stake::{self, instruction as stake_instruction},
         transaction::Transaction,
     },
     std::{
@@ -378,20 +377,10 @@ fn merge_transient_stake_accounts(
         let transient_stake_address =
             validator_transient_stake_address(authorized_staker.pubkey(), *vote_address);
 
-        let transient_stake_account = rpc_client
-            .get_account_with_commitment(&transient_stake_address, rpc_client.commitment())?
-            .value;
+        let transient_stake_activation =
+            rpc_client.get_stake_activation(transient_stake_address, None);
 
-        if let Some(transient_stake_account) = transient_stake_account {
-            let transient_stake_activation = rpc_client
-                .get_stake_activation(transient_stake_address, None)
-                .map_err(|err| {
-                    format!(
-                        "Unable to get activation information for transient stake account: {}: {}",
-                        transient_stake_address, err
-                    )
-                })?;
-
+        if let Ok(transient_stake_activation) = transient_stake_activation {
             match transient_stake_activation.state {
                 StakeActivationState::Activating => {
                     let action = format!(
@@ -410,15 +399,16 @@ fn merge_transient_stake_accounts(
                     validator_stake_actions.insert(*identity, action);
                 }
                 StakeActivationState::Active => {
-                    let stake_account = rpc_client
-                        .get_account_with_commitment(&stake_address, rpc_client.commitment())?
-                        .value
-                        .unwrap_or_default();
+                    let stake_activation = rpc_client
+                        .get_stake_activation(stake_address, None)
+                        .map_err(|err| {
+                            format!(
+                                "Unable to get activation information for stake account: {}: {}",
+                                stake_address, err
+                            )
+                        })?;
 
-                    if stake_accounts_have_same_credits_observed(
-                        &stake_account,
-                        &transient_stake_account,
-                    )? {
+                    if stake_activation.state == StakeActivationState::Active {
                         transactions.push(Transaction::new_with_payer(
                             &stake_instruction::merge(
                                 &stake_address,
@@ -430,7 +420,8 @@ fn merge_transient_stake_accounts(
                         debug!("Merging active transient stake for {}", identity);
                     } else {
                         let action = format!(
-                            "stake account busy due to credits observed mismatch with transient stake account {}",
+                            "stake account {} busy because not active, while transient account {} is active",
+                            stake_address,
                             transient_stake_address
                         );
                         warn!("Busy validator {}: {}", *identity, action);
@@ -466,39 +457,6 @@ fn merge_transient_stake_accounts(
     } else {
         Ok(())
     }
-}
-
-fn stake_accounts_have_same_credits_observed(
-    stake_account1: &Account,
-    stake_account2: &Account,
-) -> Result<bool, Box<dyn error::Error>> {
-    use solana_sdk::stake::state::Stake;
-
-    let stake_state1 = bincode::deserialize(stake_account1.data.as_slice())
-        .map_err(|err| format!("Invalid stake account 1: {}", err))?;
-    let stake_state2 = bincode::deserialize(stake_account2.data.as_slice())
-        .map_err(|err| format!("Invalid stake account 2: {}", err))?;
-
-    if let (
-        StakeState::Stake(
-            _,
-            Stake {
-                delegation: _,
-                credits_observed: credits_observed1,
-            },
-        ),
-        StakeState::Stake(
-            _,
-            Stake {
-                delegation: _,
-                credits_observed: credits_observed2,
-            },
-        ),
-    ) = (stake_state1, stake_state2)
-    {
-        return Ok(credits_observed1 == credits_observed2);
-    }
-    Ok(false)
 }
 
 fn create_validator_stake_accounts(
