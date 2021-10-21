@@ -74,6 +74,9 @@ pub fn send_and_confirm_transactions_with_spinner(
     transactions: Vec<Transaction>,
     signer: &Keypair,
 ) -> Result<Vec<Option<TransactionError>>, Box<dyn error::Error>> {
+    if transactions.is_empty() {
+        return Ok(vec![]);
+    }
     let progress_bar = new_spinner_progress_bar();
     let mut expired_blockhash_retries = 5;
     let send_transaction_interval = Duration::from_millis(10); /* Send at ~100 TPS */
