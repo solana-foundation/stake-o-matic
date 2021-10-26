@@ -7,7 +7,7 @@ use {
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
         borsh::try_from_slice_unchecked,
-        native_token::{Sol, LAMPORTS_PER_SOL},
+        native_token::Sol,
         pubkey::Pubkey,
         signature::{Keypair, Signer},
         stake::{self, instruction as stake_instruction, state::StakeState},
@@ -25,13 +25,10 @@ use {
     },
 };
 
-/// Minimum amount of lamports in a validator stake account, on top of the
-/// rent-exempt amount
-pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL / 1_000;
-
-/// Don't bother adjusting stake if less than this amount of lamports will be affected
-/// (must be >= MIN_STAKE_ACCOUNT_BALANCE)
-const MIN_STAKE_CHANGE_AMOUNT: u64 = MIN_STAKE_ACCOUNT_BALANCE;
+/// Don't bother adjusting stake if less than this amount of lamports will be affected.
+/// If we simply use `MINIMUM_ACTIVE_STAKE`, we run the risk of adding a small
+/// amount less than rent exemption, which would be later impossible to decrease.
+const MIN_STAKE_CHANGE_AMOUNT: u64 = spl_stake_pool::MINIMUM_ACTIVE_STAKE * 10;
 
 fn get_minimum_stake_balance_for_rent_exemption(
     rpc_client: &RpcClient,
@@ -49,7 +46,7 @@ fn staker_transient_stake_address_seed(vote_address: Pubkey) -> String {
 /// Staker's transient stake account
 ///
 /// When removing a validator from the pool, the staker receives a stake account
-/// with the rent-exempt amount + MIN_STAKE_ACCOUNT_BALANCE, delegated to the
+/// with the rent-exempt amount + MINIMUM_ACTIVE_STAKE, delegated to the
 /// appropriate vote address.  Once the stake is inactive, we can withdraw the
 /// lamports back to the staker.
 fn staker_transient_stake_address(authorized_staker: Pubkey, vote_address: Pubkey) -> Pubkey {
@@ -929,7 +926,7 @@ mod test {
     ) -> u64 {
         let stake_rent_exemption =
             get_minimum_stake_balance_for_rent_exemption(rpc_client).unwrap();
-        let min_stake_account_balance = stake_rent_exemption + MIN_STAKE_ACCOUNT_BALANCE;
+        let min_stake_account_balance = stake_rent_exemption + spl_stake_pool::MINIMUM_ACTIVE_STAKE;
         let stake_address = find_stake_program_address(
             &spl_stake_pool::id(),
             &validator.vote_address,
@@ -1318,11 +1315,10 @@ mod test {
             .unwrap();
 
         info!("Check after first epoch");
-        // after the first epoch, validators 0 and 1 are at their target levels but validator 2
-        // needs one more epoch for the additional bonus stake to arrive. Validator 2
-        // already received some extra rent-exempt reserves during the previous
-        // re-balance.
-        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.004565761]) {
+        // after the first epoch, validators 0 and 1 are at their target levels
+        // but validator 2 needs one more epoch for the additional bonus stake
+        // to arrive.
+        for (validator, expected_sol_balance) in validators.iter().zip(&[0., 10., 110.]) {
             let expected_sol_balance = sol_to_lamports(*expected_sol_balance);
             assert_eq!(
                 expected_sol_balance,
