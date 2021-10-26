@@ -16,7 +16,7 @@ use {
     },
     spl_stake_pool::{
         self,
-        state::{StakePool, StakeStatus, ValidatorList},
+        state::{StakePool, StakeStatus, ValidatorList, ValidatorStakeInfo},
     },
     std::{
         collections::{HashMap, HashSet},
@@ -59,6 +59,16 @@ fn staker_transient_stake_address(authorized_staker: Pubkey, vote_address: Pubke
         &stake::program::id(),
     )
     .unwrap()
+}
+
+/// Check if the validator is removable
+///
+/// A validator is removable if there's no transient stake and there isn't a
+/// dust amount of active stake (active lamports < stake rent exemption)
+fn is_removable(validator_stake_info: &ValidatorStakeInfo, stake_rent_exemption: u64) -> bool {
+    validator_stake_info.transient_stake_lamports == 0
+        && (validator_stake_info.active_stake_lamports == 0
+            || validator_stake_info.active_stake_lamports > stake_rent_exemption)
 }
 
 #[derive(Debug)]
@@ -568,7 +578,7 @@ fn remove_validators_from_pool(
     for vote_address in remove_vote_addresses {
         if let Some(validator_list_entry) = validator_list.find(&vote_address) {
             if validator_list_entry.status == StakeStatus::Active {
-                if validator_list_entry.transient_stake_lamports == 0 {
+                if is_removable(validator_list_entry, stake_rent_exemption) {
                     info!("Removing {} from stake pool", vote_address);
                     let destination_stake_address =
                         staker_transient_stake_address(authorized_staker.pubkey(), vote_address);
@@ -615,7 +625,7 @@ fn remove_validators_from_pool(
                         Some(&authorized_staker.pubkey()),
                     ));
                 } else {
-                    warn!("Validator {} cannot be removed because of existing transient stake, ignoring", vote_address);
+                    warn!("Validator {} cannot be removed because of existing transient stake or dust active stake, ignoring", vote_address);
                 }
             } else {
                 debug!("Validator {} already removed, ignoring", vote_address);
