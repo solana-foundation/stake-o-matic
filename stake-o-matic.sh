@@ -13,6 +13,12 @@ else
   EPOCH_CLASSIFICATION="--epoch-classification first"
 fi
 
+if [[ -n $SHORT_TESTNET_PARTICIPATION ]]; then
+  TESTNET_PARTICIPATION="--min-testnet-participation 2 4"
+else
+  TESTNET_PARTICIPATION="--min-testnet-participation 5 10"
+fi
+
 if [[ ! -d db ]]; then
   git clone git@github.com:solana-labs/stake-o-matic.wiki.git db
 fi
@@ -43,7 +49,7 @@ MAINNET_BETA_ARGS=(
   --max-infrastructure-concentration 10
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
-  --min-testnet-participation 5 10
+  $TESTNET_PARTICIPATION
   --enforce-testnet-participation
   --enforce-min-self-stake
 )
