@@ -70,14 +70,14 @@ DELETE FROM scores where epoch = (select DISTINCT epoch from imported);
 INSERT INTO scores select * from imported;
 
 
--- recompute avg table with last 3 epochs
+-- recompute avg table with last 5 epochs
 -- if score=0 from imported => below nakamoto coefficient, or commission 100% or less than 100 SOL staked
--- also we set score=0 if below 50% avg or less than 3 epochs on record
+-- also we set score=0 if below 50% avg or less than 5 epochs on record
 -- create pct column and set to zero, will update after when selecting top 200
 DROP TABLE IF EXISTS avg;
 create table AVG as 
 select 0 as rank, epoch,keybase_id, vote_address,name,
-   case when score=0 or mult<=0 or score_records<3 then 0 else ROUND(base_score*mult) end as avg_score, 
+   case when score=0 or mult<=0 or score_records<5 then 0 else ROUND(base_score*mult) end as avg_score, 
    base_score, ap-49 mult, ap as avg_pos, commission, round(c2,2) as avg_commiss, dcc2,
    epoch_credits, cast(ec2 as integer) as avg_ec, epoch_credits-ec2 as delta_credits,
    0.0 as pct, score_records, avg_active_stake
@@ -88,7 +88,7 @@ left outer JOIN (
             avg(b.avg_position) as ap, avg(b.avg_position)-49 as mult, avg(b.commission) as c2, ROUND(avg(b.epoch_credits)) as ec2,
             avg(b.data_center_concentration) as dcc2, b.vote_address as va2, avg(b.active_stake) as avg_active_stake
        from scores B 
-       where B.epoch between (select distinct epoch from imported)-2 and (select distinct epoch from imported)
+       where B.epoch between (select distinct epoch from imported)-4 and (select distinct epoch from imported)
        group by vote_address
        )
      on va2 = a.vote_address
