@@ -1860,6 +1860,7 @@ solana_sdk::pubkeys!(
         "AsvCrBKwz9Lj44Tp5zkhZabzR4bxE3HLTobrRRGQozcn",
         "AsVqSKFD1akXQwL53qiS2JxiQM8xabP1acrWx4SGycoP",
         "AT2N17bBBtTAu6ombzhiLNLc8JinjMXmGMzFbxt6AvwC",
+        "At4HLr46vxKbAXeUKKmjtFEUUGWRaUPozSuUGTEWDsGk",
         "At81qZCWTvuat4rVnvZxxqPmMyUhyKMvUeWfRBCLpoPA",
         "AT8cZMMPuZgBC4Av3bVd1NcmEQC4GoDzYvAS5t6hr6Bz",
         "AtHoh3UapTWEBsygTDXNQgphTHcqTj9g4RFpbvPTBDND",
