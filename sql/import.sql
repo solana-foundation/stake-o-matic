@@ -77,7 +77,7 @@ INSERT INTO scores select * from imported;
 DROP TABLE IF EXISTS avg;
 create table AVG as 
 select 0 as rank, epoch,keybase_id, vote_address,name,
-   case when score=0 or mult<=0 or score_records<5 then 0 else ROUND(base_score*mult) end as avg_score, 
+   case when score=0 or mult<=0 or score_records<5 or COALESCE(avg_active_stake,0)<100 then 0 else ROUND(base_score*mult) end as avg_score, 
    base_score, ap-49 mult, ap as avg_pos, commission, round(c2,2) as avg_commiss, dcc2,
    epoch_credits, cast(ec2 as integer) as avg_ec, epoch_credits-ec2 as delta_credits,
    0.0 as pct, score_records, avg_active_stake
