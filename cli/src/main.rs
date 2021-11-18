@@ -1,3 +1,4 @@
+use clap::value_t;
 use {
     clap::{
         crate_description, crate_name, crate_version, value_t_or_exit, App, AppSettings, Arg,
@@ -38,6 +39,16 @@ struct Config {
     json_rpc_url: String,
     verbose: bool,
 }
+
+const STATE_ARGUMENT_VALUES: [&str; 7] = [
+    "SignupRequired",
+    "RejectedProgramSignupIncomplete",
+    "TestnetWaitlist",
+    "RejectedForTestnetAndMainnetRulesViolation",
+    "ApprovedForTestnetOnly",
+    "ApprovedForTestnetAndMainnet",
+    "SignupUnderReview",
+];
 
 fn send_and_confirm_message<T: Signers>(
     rpc_client: &RpcClient,
@@ -230,6 +241,10 @@ fn process_withdraw(
         return Ok(());
     }
 
+    if participant.state == ParticipantState::RejectedForTestnetAndMainnetRulesViolation {
+        return Err("You cannot withdraw your registration if it has been set to RejectedForTestnetAndMainnetRulesViolation".into());
+    }
+
     let message = Message::new(
         &[
             solana_foundation_delegation_program_registry::instruction::withdraw(
@@ -268,77 +283,13 @@ fn process_list(
     Ok(())
 }
 
-fn process_admin_approve(
-    config: &Config,
-    rpc_client: &RpcClient,
-    admin_signer: Box<dyn Signer>,
-    identity: Pubkey,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (participant_address, participant) = get_participant_by_identity(rpc_client, identity)?
-        .ok_or_else(|| format!("Registration not found for {}", identity))?;
-
-    print_participant(&participant);
-
-    if participant.mainnet_identity == participant.testnet_identity {
-        return Err("Mainnet and Testnet identities cannot be the same".into());
-    }
-
-    println!("Approving...");
-
-    let message = Message::new(
-        &[
-            solana_foundation_delegation_program_registry::instruction::approve(
-                participant_address,
-                admin_signer.pubkey(),
-            ),
-        ],
-        Some(&config.default_signer.pubkey()),
-    );
-
-    send_and_confirm_message(
-        rpc_client,
-        message,
-        [admin_signer.deref(), config.default_signer.deref()],
-        None,
-    )
-}
-
-fn process_admin_reject(
-    config: &Config,
-    rpc_client: &RpcClient,
-    admin_signer: Box<dyn Signer>,
-    identity: Pubkey,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (participant_address, participant) = get_participant_by_identity(rpc_client, identity)?
-        .ok_or_else(|| format!("Registration not found for {}", identity))?;
-
-    print_participant(&participant);
-    println!("Rejecting...");
-
-    let message = Message::new(
-        &[
-            solana_foundation_delegation_program_registry::instruction::reject(
-                participant_address,
-                admin_signer.pubkey(),
-            ),
-        ],
-        Some(&config.default_signer.pubkey()),
-    );
-
-    send_and_confirm_message(
-        rpc_client,
-        message,
-        [admin_signer.deref(), config.default_signer.deref()],
-        None,
-    )
-}
-
 fn process_admin_import(
     config: &Config,
     rpc_client: &RpcClient,
     admin_signer: Box<dyn Signer>,
     mainnet_identity: Pubkey,
     testnet_identity: Pubkey,
+    participant_state: ParticipantState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let participants = get_participants_with_identity(
         rpc_client,
@@ -367,7 +318,7 @@ fn process_admin_import(
                 participant.pubkey(),
                 admin_signer.pubkey(),
                 Participant {
-                    state: ParticipantState::Approved,
+                    state: participant_state,
                     testnet_identity,
                     mainnet_identity,
                 },
@@ -412,6 +363,19 @@ fn process_admin_rewrite(
         [admin_signer.deref(), config.default_signer.deref()],
         None,
     )
+}
+
+fn state_string_to_participant_state(state_string: &str) -> Option<ParticipantState> {
+    match state_string {
+        "all" => None,
+        "signup_required" => Some(ParticipantState::SignupRequired),
+        "signup_incomplete" => Some(ParticipantState::RejectedProgramSignupIncomplete),
+        "testnet_waitlist" => Some(ParticipantState::TestnetWaitlist),
+        "approved_for_testnet" => Some(ParticipantState::ApprovedForTestnetOnly),
+        "approved" => Some(ParticipantState::ApprovedForTestnetAndMainnet),
+        "rejected" => Some(ParticipantState::RejectedForTestnetAndMainnetRulesViolation),
+        _ => None,
+    }
 }
 
 #[tokio::main]
@@ -531,7 +495,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arg::with_name("state")
                         .long("state")
                         .value_name("STATE")
-                        .possible_values(&["all", "pending", "approved", "rejected"])
+                        .possible_values(&[
+                            "all",
+                            "signup_required",
+                            "signup_incomplete",
+                            "testnet_waitlist",
+                            "approved_for_testnet",
+                            "approved",
+                            "rejected",
+                        ])
                         .default_value("all")
                         .help("Restrict the list to registrations in the specified state"),
                 ),
@@ -548,32 +520,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .required(true)
                         .value_name("KEYPAIR")
                         .help("Administration authority"),
-                )
-                .subcommand(
-                    SubCommand::with_name("approve")
-                        .about("Approve a participant")
-                        .arg(
-                            Arg::with_name("participant")
-                                .validator(is_valid_pubkey)
-                                .value_name("ADDRESS")
-                                .takes_value(true)
-                                .index(1)
-                                .required(true)
-                                .help("Testnet or Mainnet validator identity"),
-                        ),
-                )
-                .subcommand(
-                    SubCommand::with_name("reject")
-                        .about("Reject a participant")
-                        .arg(
-                            Arg::with_name("participant")
-                                .validator(is_valid_pubkey)
-                                .value_name("ADDRESS")
-                                .takes_value(true)
-                                .index(1)
-                                .required(true)
-                                .help("Testnet or Mainnet validator identity"),
-                        ),
                 )
                 .subcommand(
                     SubCommand::with_name("import")
@@ -595,6 +541,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .takes_value(true)
                                 .required(true)
                                 .help("Mainnet validator identity"),
+                        )
+                        .arg(
+                            Arg::with_name("state")
+                                .long("state")
+                                .value_name("STATE")
+                                .takes_value(true)
+                                .required(false)
+                                .possible_values(&STATE_ARGUMENT_VALUES)
+                                .help("Participant state"),
                         ),
                 )
                 .subcommand(
@@ -633,8 +588,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .value_name("STATE")
                                 .takes_value(true)
                                 .required(true)
-                                .possible_values(&["pending", "rejected", "approved"])
+                                .possible_values(&STATE_ARGUMENT_VALUES)
                                 .help("New participant state"),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("change_state")
+                        .about("Change the participant's state")
+                        .arg(
+                            Arg::with_name("state")
+                                .value_name("STATE")
+                                .index(1)
+                                .takes_value(true)
+                                .required(true)
+                                .possible_values(&STATE_ARGUMENT_VALUES)
+                                .help("State to move validator into"),
+                        )
+                        .arg(
+                            Arg::with_name("participant")
+                                .validator(is_valid_pubkey)
+                                .value_name("ADDRESS")
+                                .takes_value(true)
+                                .index(2)
+                                .required(true)
+                                .help("Testnet or Mainnet validator identity"),
                         ),
                 ),
         )
@@ -730,13 +707,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             process_withdraw(&config, &rpc_client, identity_signer, confirm)?;
         }
         ("list", Some(arg_matches)) => {
-            let state = match value_t_or_exit!(arg_matches, "state", String).as_str() {
-                "all" => None,
-                "pending" => Some(ParticipantState::Pending),
-                "rejected" => Some(ParticipantState::Rejected),
-                "approved" => Some(ParticipantState::Approved),
-                _ => unreachable!(),
-            };
+            let state =
+                state_string_to_participant_state(&value_t_or_exit!(arg_matches, "state", String));
 
             process_list(&config, &rpc_client, state)?;
         }
@@ -756,40 +728,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             match admin_matches.subcommand() {
-                ("approve", Some(arg_matches)) => {
-                    let participant = pubkey_of(arg_matches, "participant").unwrap();
-                    process_admin_approve(&config, &rpc_client, admin_signer, participant)?;
-                }
-                ("reject", Some(arg_matches)) => {
-                    let participant = pubkey_of(arg_matches, "participant").unwrap();
-                    process_admin_reject(&config, &rpc_client, admin_signer, participant)?;
-                }
                 ("import", Some(arg_matches)) => {
                     let testnet_identity = pubkey_of(arg_matches, "testnet").unwrap();
                     let mainnet_identity = pubkey_of(arg_matches, "mainnet").unwrap();
+
+                    let participant_state = value_t!(arg_matches, "state", ParticipantState)
+                        .unwrap_or(ParticipantState::ApprovedForTestnetAndMainnet);
+
                     process_admin_import(
                         &config,
                         &rpc_client,
                         admin_signer,
                         mainnet_identity,
                         testnet_identity,
+                        participant_state,
                     )?;
                 }
                 ("rewrite", Some(arg_matches)) => {
-                    let participant = pubkey_of(arg_matches, "participant").unwrap();
+                    let participant_key = pubkey_of(arg_matches, "participant").unwrap();
                     let testnet_identity = pubkey_of(arg_matches, "testnet").unwrap();
                     let mainnet_identity = pubkey_of(arg_matches, "mainnet").unwrap();
-                    let state = match arg_matches.value_of("state").unwrap() {
-                        "pending" => ParticipantState::Pending,
-                        "rejected" => ParticipantState::Rejected,
-                        "approved" => ParticipantState::Approved,
-                        _ => unreachable!(),
-                    };
+                    let state = value_t_or_exit!(arg_matches, "state", ParticipantState);
+
                     process_admin_rewrite(
                         &config,
                         &rpc_client,
                         admin_signer,
-                        participant,
+                        participant_key,
+                        Participant {
+                            testnet_identity,
+                            mainnet_identity,
+                            state,
+                        },
+                    )?;
+                }
+                ("change_state", Some(arg_matches)) => {
+                    let identity = pubkey_of(arg_matches, "participant").unwrap();
+                    let state = value_t_or_exit!(arg_matches, "state", ParticipantState);
+                    let (participant_key, participant) =
+                        get_participant_by_identity(&rpc_client, identity)?
+                            .ok_or_else(|| format!("Registration not found for {}", identity))?;
+
+                    println!(
+                        "Updating participant {:?} to state {:?}...",
+                        participant_key, state
+                    );
+
+                    let testnet_identity = participant.testnet_identity;
+                    let mainnet_identity = participant.mainnet_identity;
+
+                    process_admin_rewrite(
+                        &config,
+                        &rpc_client,
+                        admin_signer,
+                        participant_key,
                         Participant {
                             testnet_identity,
                             mainnet_identity,

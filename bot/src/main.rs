@@ -1782,9 +1782,18 @@ fn main() -> BoxResult<()> {
     let (config, rpc_client, mut stake_pool) = get_config()?;
 
     info!("Loading participants...");
+
+    // Define state filter like this once we've updated the states of all participants
+    // let state_filter = if config.cluster == Cluster::Testnet {
+    //     ParticipantState::ApprovedForTestnetOnly
+    // } else {
+    //     ParticipantState::ApprovedForTestnetAndMainnet
+    // };
+    let state_filter = ParticipantState::ApprovedForTestnetAndMainnet;
+
     let participants = get_participants_with_state(
         &RpcClient::new(config.participant_json_rpc_url.clone()),
-        Some(ParticipantState::Approved),
+        Some(state_filter),
     )?;
 
     let (mainnet_identity_to_participant, testnet_identity_to_participant): (
@@ -1818,6 +1827,9 @@ fn main() -> BoxResult<()> {
             mainnet_identity_to_participant,
         ),
         Cluster::Testnet => (
+            // TODO: Once the program is updated with the new registration states, and the validators in
+            // validator_list.rs have been moved to the ApprovedForTestnetOnly state, delete validator_list.rs
+            // and get this list from registrations in the ApprovedForTestnetOnly state
             validator_list::testnet_validators().into_iter().collect(),
             testnet_identity_to_participant,
         ),

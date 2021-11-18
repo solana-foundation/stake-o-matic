@@ -15,7 +15,7 @@ use solana_program::{
 pub enum RegistryInstruction {
     /// Apply for the program
     ///
-    /// On success the participant will be moved to the `ParticipantState::Pending` state
+    /// On success the participant will be moved to the `ParticipantState::SignupRequired` state
     ///
     /// 0. `[writable]` Uninitialized `Participant` account
     /// 1. `[signer]` Mainnet validator identity
@@ -33,20 +33,19 @@ pub enum RegistryInstruction {
     ///
     Withdraw,
 
-    /// Approve a participant.
+    /// Approve a participant for both Testnet and Mainnet Beta participation.
     ///
-    /// On success the participant will be moved to the `ParticipantState::Enrolled` state
+    /// On success the participant will be moved to the `ParticipantState::ApprovedForTestnetAndMainnet` state
     ///
-    /// 0. `[writable]` `Participant` account in the `ParticipantState::Pending` state
+    /// 0. `[writable]` `Participant` account in any state. In the normal flow, the participant's previous state will be `ApprovedForTestnetOnly` state
     /// 1. `[signer]` Admin account
-    Approve,
+    ApproveForTestnetAndMainnet, // previously was `Approve`
 
     /// Reject a participant
     ///
-    /// On success the participant will be moved to the `ParticipantState::Rejected` state
+    /// On success the participant will be moved to the `ParticipantState::RejectedForTestnetAndMainnetRulesViolation` state
     ///
-    /// 0. `[writable]` `Participant` account in the `ParticipantState::Pending` or
-    ///                 `ParticipantState::Enrolled` state
+    /// 0. `[writable]` `Participant` account in any state
     /// 1. `[signer]` Admin account
     Reject,
 
@@ -111,27 +110,32 @@ pub fn withdraw(participant: Pubkey, validator_identity: Pubkey, refundee: Pubke
     }
 }
 
-/// Create a `RegistryInstruction::Admin` instruction
+/// Create a `RegistryInstruction::ApproveForTestnetAndMainnet` instruction
 pub fn approve(participant: Pubkey, admin: Pubkey) -> Instruction {
-    Instruction {
-        program_id: id(),
-        accounts: vec![
-            AccountMeta::new(participant, false),
-            AccountMeta::new_readonly(admin, true),
-        ],
-        data: RegistryInstruction::Approve.pack_into_vec(),
-    }
+    admin_instruction(
+        participant,
+        admin,
+        RegistryInstruction::ApproveForTestnetAndMainnet,
+    )
 }
 
-/// Create a `RegistryInstruction::Reject` instruction
+/// Create a `RegistryInstruction::Reject` Instruction
 pub fn reject(participant: Pubkey, admin: Pubkey) -> Instruction {
+    admin_instruction(participant, admin, RegistryInstruction::Reject)
+}
+
+pub fn admin_instruction(
+    participant: Pubkey,
+    admin: Pubkey,
+    instruction: RegistryInstruction,
+) -> Instruction {
     Instruction {
         program_id: id(),
         accounts: vec![
             AccountMeta::new(participant, false),
             AccountMeta::new_readonly(admin, true),
         ],
-        data: RegistryInstruction::Reject.pack_into_vec(),
+        data: instruction.pack_into_vec(),
     }
 }
 
@@ -163,7 +167,7 @@ mod tests {
         assert_eq!(RegistryInstruction::Apply.try_to_vec().unwrap(), vec![0]);
         assert_eq!(
             RegistryInstruction::Rewrite(Participant {
-                state: ParticipantState::Approved,
+                state: ParticipantState::ApprovedForTestnetAndMainnet,
                 testnet_identity: Pubkey::new_unique(),
                 mainnet_identity: Pubkey::new_unique()
             })
@@ -181,7 +185,7 @@ mod tests {
     fn deserialize() {
         assert_eq!(
             RegistryInstruction::unpack_from_slice(&[2]),
-            Ok(RegistryInstruction::Approve),
+            Ok(RegistryInstruction::ApproveForTestnetAndMainnet),
         );
     }
 }

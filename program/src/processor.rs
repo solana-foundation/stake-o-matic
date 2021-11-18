@@ -73,7 +73,7 @@ pub fn process_instruction(
 
             participant.testnet_identity = *testnet_identity_info.key;
             participant.mainnet_identity = *mainnet_identity_info.key;
-            participant.state = ParticipantState::Pending;
+            participant.state = ParticipantState::SignupRequired;
         }
         RegistryInstruction::Withdraw => {
             msg!("Withdraw");
@@ -92,18 +92,23 @@ pub fn process_instruction(
                 return Err(ProgramError::MissingRequiredSignature);
             }
 
+            if participant.state == ParticipantState::RejectedForTestnetAndMainnetRulesViolation {
+                msg!("Error: {} has been rejected for rules violations and registration cannot be withdrawn", identity_info.key);
+                return Err(ProgramError::MissingRequiredSignature);
+            }
+
             **refundee_info.lamports.borrow_mut() += participant_info.lamports();
             **participant_info.lamports.borrow_mut() = 0;
         }
-        RegistryInstruction::Approve => {
-            msg!("Approve");
+        RegistryInstruction::ApproveForTestnetAndMainnet => {
+            msg!("Approve for Testnet and Mainnet");
             authenticate_admin(next_account_info(account_info_iter)?)?;
-            participant.state = ParticipantState::Approved;
+            participant.state = ParticipantState::ApprovedForTestnetAndMainnet;
         }
         RegistryInstruction::Reject => {
             msg!("Reject");
             authenticate_admin(next_account_info(account_info_iter)?)?;
-            participant.state = ParticipantState::Rejected;
+            participant.state = ParticipantState::RejectedForTestnetAndMainnetRulesViolation;
         }
         RegistryInstruction::Rewrite(new_participant) => {
             msg!("Rewrite");
@@ -200,7 +205,7 @@ mod test {
         assert_eq!(
             participant_state,
             Participant {
-                state: ParticipantState::Pending,
+                state: ParticipantState::SignupRequired,
                 testnet_identity: testnet_validator_identity.pubkey(),
                 mainnet_identity: mainnet_validator_identity.pubkey()
             }
@@ -239,7 +244,7 @@ mod test {
                 .await
                 .unwrap()
                 .state,
-            ParticipantState::Rejected
+            ParticipantState::RejectedForTestnetAndMainnetRulesViolation
         );
 
         // Approve...
@@ -256,7 +261,7 @@ mod test {
                 .await
                 .unwrap()
                 .state,
-            ParticipantState::Approved
+            ParticipantState::ApprovedForTestnetAndMainnet
         );
 
         // Approve with wrong admin key, failure...
@@ -288,7 +293,7 @@ mod test {
                 participant.pubkey(),
                 test_admin::id(),
                 Participant {
-                    state: ParticipantState::Pending,
+                    state: ParticipantState::TestnetWaitlist,
                     testnet_identity: testnet_validator_identity.pubkey(),
                     mainnet_identity: testnet_validator_identity.pubkey(),
                 },
@@ -304,7 +309,7 @@ mod test {
                 participant.pubkey(),
                 test_admin::id(),
                 Participant {
-                    state: ParticipantState::Pending,
+                    state: ParticipantState::TestnetWaitlist,
                     testnet_identity: testnet_validator_identity.pubkey(),
                     mainnet_identity: Pubkey::default(),
                 },
@@ -321,7 +326,7 @@ mod test {
         assert_eq!(
             participant_state,
             Participant {
-                state: ParticipantState::Pending,
+                state: ParticipantState::TestnetWaitlist,
                 testnet_identity: testnet_validator_identity.pubkey(),
                 mainnet_identity: Pubkey::default(),
             }
