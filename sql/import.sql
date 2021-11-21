@@ -73,7 +73,7 @@ INSERT INTO scores select * from imported;
 -- recompute avg table with last 5 epochs
 -- if score=0 from imported => below nakamoto coefficient, or commission 100% or less than 100 SOL staked
 -- also we set score=0 if below 50% avg or less than 5 epochs on record
--- create pct column and set to zero, will update after when selecting top 200
+-- create pct column and set to zero, will update after when selecting top 250
 DROP TABLE IF EXISTS avg;
 create table AVG as 
 select 0 as rank, epoch,keybase_id, vote_address,name,
@@ -104,10 +104,10 @@ create table temp as select vote_address, RANK() over (order by avg_score DESC) 
 update avg 
 set rank = (select rank from temp where temp.vote_address=avg.vote_address);
 
--- SELECT TOP 200
+-- SELECT TOP 250
 drop table if exists temp;
-create table temp as select * from avg order by avg_score desc LIMIT 200;
--- set pct ONLY ON TOP 200
+create table temp as select * from avg order by avg_score desc LIMIT 250;
+-- set pct ONLY ON selected TOP validators
 update avg as U
 set pct = avg_score / (select sum(A.avg_score) from temp A where A.epoch = U.epoch) * 100
 where exists (select 1 from temp A where A.vote_address = U.vote_address)
