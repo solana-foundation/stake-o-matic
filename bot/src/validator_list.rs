@@ -2413,6 +2413,7 @@ solana_sdk::pubkeys!(
         "BUtCnn8mRsf7uaCMKvPEBXSmk6epVuPJGTRC1HzZWrgA",
         "BUUWs98gxFs5MDGTubfLjx6PuBxb2X4TqS4KaQkCRBxB",
         "BuvYmqQuvqpNeBrPao4GKQyEVjV7sezT7M2hxb4rRLoX",
+        "BuWKGe7FRGf3SX38SYe16SNrW1VAYZauJmmmjiyx7LL",
         "BV8sS1jn1AvGAptY5TxNZdcm7aa49MZCXSpXQjzjdnYG",
         "BvEtg6hQaN4hf6kr73yDGkjr3eyXKPv7oUwFVmk7qM6u",
         "BVEX3B7fRUbadEcigqknwc3cM2CUXpyz9vtTccBpwt7r",
