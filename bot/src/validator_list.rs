@@ -1993,6 +1993,7 @@ solana_sdk::pubkeys!(
         "A4Kg15NX9i72WeQiH3Gp4u6QceScodz7CrkVdD2xhtws",
         "A4Kh17xLBZmd3Kazu9aa2iEVa2hiMy4VTB7NfMAtmeac",
         "A4L6Vy4bGqUCMaVC35ZbGbTMXL9AzNifhHymRj1u3nxM",
+        "A4ujSrodkszQyChYNZ36teeMFQeb7qEGCYEGPp7feL89",
         "A4vXgizfXzKqK6SdJEiPbebBhRwoM655DNssNR6JX9nY",
         "A4xoiWbs1GmkV4p4PXkBZWM5UDfJqXx8z2sDmHP8FmG3",
         "A5hMwgm8QfooAuCMw9Rw2S9vXbBwCknFMhhUwKKHvYeJ",
