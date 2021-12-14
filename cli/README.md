@@ -3,9 +3,10 @@
 This utility manages Solana Foundation Delegation Program registrations.
 
 ## Installation
-Install Rust from https://rustup.rs/, then run
 ```bash
-$ sudo apt install libudev-dev
+$ su sol
+$ cd
+$ sudo apt install libudev-dev libssl-dev cargo pkg-config 
 $ cargo install solana-foundation-delegation-program-cli
 $ solana-foundation-delegation-program --version
 ```
