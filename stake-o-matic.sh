@@ -32,7 +32,7 @@ TESTNET_ARGS=(
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
-  --min-release-version 1.8.5
+  --min-release-version 1.8.11
   --max-old-release-version-percentage 20
 )
 
