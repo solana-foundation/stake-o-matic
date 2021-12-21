@@ -1984,6 +1984,7 @@ solana_sdk::pubkeys!(
         "9VkfVYY6uBjyqoKaJhtLxPfmF25YK1vTfRLeGNmXdhnp",
         "9VYsMms4mgtcrZsbGfMVQFgyo4B5Kjin1PWrJRAwuaPv",
         "9VZHkXL1svmzag1K2YtqeDrEZGrvmoVbirH55rNgxjwv",
+        "9vznyJhjjQYn4qqZ5TzihVxioE4kx7DpoaY9RNKUos9d",
         "9wAkySUz2KihVRMUs86DcTNqPqtdNYVHMwFxoH7xbbiM",
         "9waRyqWAoP68etU17DdWamgpTnPb3skY7Er9kRZMzCfS",
         "9wbAKVn7brvRaWuqeWcyBKdce7DUd9FTvjrf99xq63B6",
