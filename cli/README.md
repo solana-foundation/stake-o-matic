@@ -4,8 +4,6 @@ This utility manages Solana Foundation Delegation Program registrations.
 
 ## Installation
 ```bash
-$ su sol
-$ cd
 $ sudo apt install libudev-dev libssl-dev cargo pkg-config 
 $ cargo install solana-foundation-delegation-program-cli
 $ solana-foundation-delegation-program --version
