@@ -1196,21 +1196,21 @@ fn classify(
     let mut accumulated: u64 = 0;
     let mut count_halt_group: u32 = 0;
     let limit: u64 = total_active_stake / 100 * 33;
-    let mut concentrated_validators_stake_limit = limit;
+    let mut last_under_nakamoto_active_stake = limit;
     for info in &vote_account_info {
+        last_under_nakamoto_active_stake = info.active_stake;
         accumulated += info.active_stake;
         count_halt_group += 1;
         if accumulated > limit {
             break;
         }
-        concentrated_validators_stake_limit = info.active_stake
     }
     info!(
-        "validators:{} total_active_stake:{}, can_halt_the_network:top {}, pro-decentralization-stake-limit: less than {}",
+        "validators:{} total_active_stake:{}, can_halt_the_network:top {}, last under-nakamoto-coefficient active-stake: {}",
         &vote_account_info.len(),
         total_active_stake,
         count_halt_group,
-        lamports_to_sol(concentrated_validators_stake_limit),
+        lamports_to_sol(last_under_nakamoto_active_stake),
     );
 
     // Note: get_self_stake_by_vote_account is expensive because it does a RPC call for each validator
@@ -1432,16 +1432,16 @@ fn classify(
                     }
                 });
 
-            let insufficent_self_stake_msg =
+            let insufficient_self_stake_msg =
                 format!("insufficient self stake: {}", Sol(self_stake));
             if config.min_self_stake_lamports > 0
                 && !config.enforce_min_self_stake
                 && self_stake < config.min_self_stake_lamports
             {
-                validator_notes.push(insufficent_self_stake_msg.clone());
+                validator_notes.push(insufficient_self_stake_msg.clone());
             }
 
-            let insufficent_testnet_participation = testnet_participation
+            let insufficient_testnet_participation = testnet_participation
                 .as_ref()
                 .map(|testnet_participation| {
                     if let Some(participant) = participant {
@@ -1460,14 +1460,14 @@ fn classify(
 
             // no score if in the can-halt-the-network group
             score_discounts.can_halt_the_network_group =
-                active_stake >= concentrated_validators_stake_limit;
+                active_stake >= last_under_nakamoto_active_stake;
 
             let (stake_state, reason) = if let Some(reason) =
                 infrastructure_concentration_destake_reason
             {
                 (ValidatorStakeState::None, reason)
             } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
-                (ValidatorStakeState::None, insufficent_self_stake_msg)
+                (ValidatorStakeState::None, insufficient_self_stake_msg)
             } else if active_stake > config.max_active_stake_lamports {
                 (
                     ValidatorStakeState::None,
@@ -1478,10 +1478,13 @@ fn classify(
                     ValidatorStakeState::None,
                     format!("Commission is too high: {}% commission", commission),
                 )
-            } else if let Some(insufficent_testnet_participation) =
-                insufficent_testnet_participation
+            } else if let Some(insufficient_testnet_participation) =
+                insufficient_testnet_participation
             {
-                (ValidatorStakeState::None, insufficent_testnet_participation)
+                (
+                    ValidatorStakeState::None,
+                    insufficient_testnet_participation,
+                )
             } else if poor_voters.contains(&identity) {
                 (
                     ValidatorStakeState::None,
@@ -1896,7 +1899,6 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     .epoch_credits
                     .cmp(&a.1.score_data.as_ref().unwrap().epoch_credits)
             });
-            
             for (identity, classification) in validator_classifications {
                 let validator_markdown = validators_markdown.entry(identity).or_default();
 
