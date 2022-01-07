@@ -1,8 +1,13 @@
+use crate::Cluster;
+use solana_sdk::pubkey::Pubkey;
+use std::str::FromStr;
 use {
+    chrono::{DateTime, Utc},
     log::*,
     serde::{Deserialize, Serialize},
     std::{
         collections::HashMap,
+        error,
         time::{Duration, Instant},
     },
 };
@@ -12,6 +17,15 @@ use {
 pub enum ClusterJson {
     MainnetBeta,
     Testnet,
+}
+
+impl ClusterJson {
+    pub fn from_cluster(cluster: Cluster) -> ClusterJson {
+        match cluster {
+            Cluster::MainnetBeta => ClusterJson::MainnetBeta,
+            Cluster::Testnet => ClusterJson::Testnet,
+        }
+    }
 }
 
 impl Default for ClusterJson {
@@ -55,6 +69,7 @@ impl Default for ClientConfig {
 enum Endpoint {
     Ping,
     Validators,
+    CommissionChangeIndex,
 }
 
 impl Endpoint {
@@ -65,6 +80,7 @@ impl Endpoint {
         match self {
             Self::Ping => "ping.json".to_string(),
             Self::Validators => Self::with_cluster("validators", cluster),
+            Self::CommissionChangeIndex => Self::with_cluster("commission-changes", cluster),
         }
     }
 }
@@ -115,6 +131,45 @@ impl AsRef<Vec<ValidatorsResponseEntry>> for ValidatorsResponse {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CommissionChangeIndexHistoryEntry {
+    pub created_at: String,
+    // commission_before can be null; presumably for new validators that have set their commission for the first time
+    pub commission_before: Option<f32>,
+    pub commission_after: f32,
+    pub epoch: u64,
+    pub network: String,
+    pub id: i32,
+    pub epoch_completion: f32,
+    pub batch_uuid: String,
+    pub account: String,
+    // name can be null
+    pub name: Option<String>,
+}
+
+impl Default for CommissionChangeIndexHistoryEntry {
+    fn default() -> CommissionChangeIndexHistoryEntry {
+        CommissionChangeIndexHistoryEntry {
+            created_at: "".to_string(),
+            commission_before: None,
+            commission_after: 0.0,
+            epoch: 0,
+            network: "".to_string(),
+            id: 0,
+            epoch_completion: 0.0,
+            batch_uuid: "".to_string(),
+            account: "".to_string(),
+            name: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CommissionChangeIndexResponse {
+    pub commission_histories: Vec<CommissionChangeIndexHistoryEntry>,
+    pub total_count: i32,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub enum SortKind {
@@ -142,6 +197,10 @@ pub struct Client {
     client: reqwest::blocking::Client,
 }
 
+pub fn get_validators_app_token() -> Result<String, String> {
+    std::env::var("VALIDATORS_APP_TOKEN").map_err(|err| format!("VALIDATORS_APP_TOKEN: {}", err))
+}
+
 impl Client {
     pub fn new<T: AsRef<str>>(api_token: T, cluster: ClusterJson) -> Self {
         let config = ClientConfig {
@@ -150,6 +209,13 @@ impl Client {
             ..ClientConfig::default()
         };
         Self::new_with_config(config)
+    }
+
+    pub fn new_with_cluster(cluster: Cluster) -> Result<Self, Box<dyn error::Error>> {
+        let token = get_validators_app_token()?;
+        let client = Self::new(token, ClusterJson::from_cluster(cluster));
+
+        Ok(client)
     }
 
     pub fn new_with_config(config: ClientConfig) -> Self {
@@ -209,5 +275,63 @@ impl Client {
         }
         let response = self.request(Endpoint::Validators, &query)?;
         response.json::<ValidatorsResponse>()
+    }
+
+    // See https://www.validators.app/api-documentation#commission-change-index
+    // Note that the endpoint returns a different format from what is currently (Jan 2022) documented at this URL, and the endpoint is currently  described as experimental. So this may change.
+    pub fn commission_change_index(
+        &self,
+        date_from: Option<DateTime<Utc>>,
+        records_per_page: Option<i32>,
+        page: Option<i32>,
+    ) -> reqwest::Result<CommissionChangeIndexResponse> {
+        let mut query: HashMap<String, String> = HashMap::new();
+
+        if let Some(date_from) = date_from {
+            query.insert("date_from".into(), date_from.format("%FT%T").to_string());
+        }
+
+        if let Some(records_per_page) = records_per_page {
+            query.insert("per".into(), records_per_page.to_string());
+        }
+
+        if let Some(page) = page {
+            query.insert("page".into(), page.to_string());
+        }
+
+        let response = self.request(Endpoint::CommissionChangeIndex, &query)?;
+        response.json::<CommissionChangeIndexResponse>()
+    }
+
+    // Returns map of identity -> CommissionChangeIndexHistoryEntries
+    pub fn get_all_commision_changes_since(
+        &self,
+        date_from: DateTime<Utc>,
+    ) -> Result<HashMap<Pubkey, Vec<CommissionChangeIndexHistoryEntry>>, Box<dyn error::Error>>
+    {
+        let mut return_map: HashMap<Pubkey, Vec<CommissionChangeIndexHistoryEntry>> =
+            HashMap::new();
+
+        let mut page = 1;
+        let records_per_page = 50;
+
+        loop {
+            let results =
+                self.commission_change_index(Some(date_from), Some(records_per_page), Some(page))?;
+            for record in results.commission_histories {
+                let pubkey = Pubkey::from_str(record.account.as_str())?;
+
+                let validator_records = return_map.entry(pubkey).or_insert_with(Vec::new);
+                validator_records.push(record);
+            }
+
+            if page * records_per_page >= results.total_count {
+                break;
+            } else {
+                page += 1;
+            }
+        }
+
+        Ok(return_map)
     }
 }

@@ -4490,6 +4490,7 @@ dependencies = [
  "bincode",
  "borsh 0.9.0",
  "bs58 0.4.0",
+ "chrono",
  "clap",
  "indicatif 0.16.2",
  "log 0.4.14",

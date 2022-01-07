@@ -1,3 +1,5 @@
+use crate::validators_app::CommissionChangeIndexHistoryEntry;
+use chrono::{Duration as ChronoDuration, Utc};
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
     clap::{
@@ -585,81 +587,81 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
-            .arg(
-                Arg::with_name("reserve_stake_address")
-                    .index(1)
-                    .value_name("RESERVE_STAKE_ADDRESS")
-                    .takes_value(true)
-                    .required(true)
-                    .validator(is_pubkey_or_keypair)
-                    .help("The reserve stake account used to fund the stake pool")
-            )
-            .arg(
-                Arg::with_name("authorized_staker")
-                    .index(2)
-                    .value_name("KEYPAIR")
-                    .validator(is_keypair)
-                    .required(true)
-                    .takes_value(true)
-                    .help("Keypair of the authorized staker")
-            )
-            .arg(
-                Arg::with_name("min_reserve_stake_balance")
-                    .long("min-reserve-stake-balance")
-                    .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("1")
-                    .validator(is_amount)
-                    .help("The minimum balance to keep in the reserve stake account")
-            )
-            .arg(
-                Arg::with_name("baseline_stake_amount")
-                    .index(3)
-                    .value_name("SOL")
-                    .validator(is_amount)
-                    .required(true)
-                    .takes_value(true)
-                    .help("The baseline SOL amount to stake to validators with adequate performance")
-            )
+                .arg(
+                    Arg::with_name("reserve_stake_address")
+                        .index(1)
+                        .value_name("RESERVE_STAKE_ADDRESS")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_pubkey_or_keypair)
+                        .help("The reserve stake account used to fund the stake pool")
+                )
+                .arg(
+                    Arg::with_name("authorized_staker")
+                        .index(2)
+                        .value_name("KEYPAIR")
+                        .validator(is_keypair)
+                        .required(true)
+                        .takes_value(true)
+                        .help("Keypair of the authorized staker")
+                )
+                .arg(
+                    Arg::with_name("min_reserve_stake_balance")
+                        .long("min-reserve-stake-balance")
+                        .value_name("SOL")
+                        .takes_value(true)
+                        .default_value("1")
+                        .validator(is_amount)
+                        .help("The minimum balance to keep in the reserve stake account")
+                )
+                .arg(
+                    Arg::with_name("baseline_stake_amount")
+                        .index(3)
+                        .value_name("SOL")
+                        .validator(is_amount)
+                        .required(true)
+                        .takes_value(true)
+                        .help("The baseline SOL amount to stake to validators with adequate performance")
+                )
         )
         .subcommand(
             SubCommand::with_name("stake-pool").about("Use a stake pool")
-            .arg(
-                Arg::with_name("pool_address")
-                    .index(1)
-                    .value_name("POOL_ADDRESS")
-                    .takes_value(true)
-                    .required(true)
-                    .validator(is_pubkey_or_keypair)
-                    .help("The stake pool address")
-            )
-            .arg(
-                Arg::with_name("authorized_staker")
-                    .index(2)
-                    .value_name("KEYPAIR")
-                    .validator(is_keypair)
-                    .required(true)
-                    .takes_value(true)
-                    .help("Keypair of the authorized staker")
-            )
-            .arg(
-                Arg::with_name("min_reserve_stake_balance")
-                    .long("min-reserve-stake-balance")
-                    .value_name("SOL")
-                    .takes_value(true)
-                    .default_value("1")
-                    .validator(is_amount)
-                    .help("The minimum balance to keep in the reserve stake account")
-            )
-            .arg(
-                Arg::with_name("baseline_stake_amount")
-                    .index(3)
-                    .value_name("SOL")
-                    .validator(is_amount)
-                    .required(true)
-                    .takes_value(true)
-                    .help("The baseline SOL amount to stake to validators with adequate performance")
-            )
+                .arg(
+                    Arg::with_name("pool_address")
+                        .index(1)
+                        .value_name("POOL_ADDRESS")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_pubkey_or_keypair)
+                        .help("The stake pool address")
+                )
+                .arg(
+                    Arg::with_name("authorized_staker")
+                        .index(2)
+                        .value_name("KEYPAIR")
+                        .validator(is_keypair)
+                        .required(true)
+                        .takes_value(true)
+                        .help("Keypair of the authorized staker")
+                )
+                .arg(
+                    Arg::with_name("min_reserve_stake_balance")
+                        .long("min-reserve-stake-balance")
+                        .value_name("SOL")
+                        .takes_value(true)
+                        .default_value("1")
+                        .validator(is_amount)
+                        .help("The minimum balance to keep in the reserve stake account")
+                )
+                .arg(
+                    Arg::with_name("baseline_stake_amount")
+                        .index(3)
+                        .value_name("SOL")
+                        .validator(is_amount)
+                        .required(true)
+                        .takes_value(true)
+                        .help("The baseline SOL amount to stake to validators with adequate performance")
+                )
         )
         .subcommand(
             SubCommand::with_name("noop-stake-pool").about("Use a no-op stake pool.  Useful for testing classification and generating markdown from an existing db.")
@@ -864,7 +866,7 @@ type ClassifyResult = (
     usize,
     // too_many_poor_block_producers
     bool,
-    // PubKey => (blocks, slots)
+    // Pubkey => (blocks, slots)
     HashMap<Pubkey, (usize, usize)>,
 );
 
@@ -1157,7 +1159,7 @@ fn classify(
 
     let testnet_participation = get_testnet_participation(config)?;
 
-    let data_centers = match data_center_info::get(&config.cluster.to_string()) {
+    let data_centers = match data_center_info::get(config.cluster) {
         Ok(data_centers) => {
             // Sanity check the infrastructure stake percent data.  More than 35% indicates there's
             // probably a bug in the data source. Abort if so.
@@ -1345,6 +1347,14 @@ fn classify(
     } else {
         let mut validator_classifications = HashMap::new();
 
+        // Get all commission changes, so we can figure out what the validator's commission was
+        let validators_app_client = validators_app::Client::new_with_cluster(config.cluster)?;
+        // We need records from last_epoch+1. Epochs are approximately 3 days long, so 5 days should be more than enough
+        let five_days_ago = Utc::now() - ChronoDuration::days(5);
+        let all_commission_changes =
+            validators_app_client.get_all_commision_changes_since(five_days_ago)?;
+        info!("total: {:?}", all_commission_changes.len());
+
         for VoteAccountInfo {
             identity,
             vote_address,
@@ -1368,6 +1378,21 @@ fn classify(
             let previous_classification = previous_epoch_validator_classifications
                 .map(|p| p.get(&identity))
                 .flatten();
+
+            let commission_at_end_of_epoch = calculate_commission_at_end_of_epoch(
+                epoch,
+                commission,
+                all_commission_changes.get(&vote_address),
+            );
+            let num_epochs_max_commission_exceeded = previous_classification
+                .map(|vc| vc.num_epochs_max_commission_exceeded)
+                .flatten()
+                .unwrap_or(0)
+                + (if commission_at_end_of_epoch > config.max_commission {
+                    1
+                } else {
+                    0
+                });
 
             let mut previous_data_center_residency = previous_classification
                 .map(|vc| vc.data_center_residency.clone())
@@ -1438,6 +1463,14 @@ fn classify(
                 infrastructure_concentration_destake_reason
             {
                 (ValidatorStakeState::None, reason)
+            } else if num_epochs_max_commission_exceeded > 1 {
+                (
+                    ValidatorStakeState::None,
+                    format!(
+                        "Commission too high in {} epochs",
+                        num_epochs_max_commission_exceeded
+                    ),
+                )
             } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
                 (ValidatorStakeState::None, insufficent_self_stake_msg)
             } else if active_stake > config.max_active_stake_lamports {
@@ -1445,10 +1478,13 @@ fn classify(
                     ValidatorStakeState::None,
                     format!("Active stake is too high: {}", Sol(active_stake)),
                 )
-            } else if commission > config.max_commission {
+            } else if commission_at_end_of_epoch > config.max_commission {
                 (
                     ValidatorStakeState::None,
-                    format!("Commission is too high: {}% commission", commission),
+                    format!(
+                        "Commission is too high: {}% commission",
+                        commission_at_end_of_epoch
+                    ),
                 )
             } else if let Some(insufficent_testnet_participation) =
                 insufficent_testnet_participation
@@ -1528,7 +1564,7 @@ fn classify(
             debug!(
                 "\nidentity: {} ({:?})\n\
                     - vote address: {}\n\
-                    - stake state: {:?}, data center: {:?} (seniority: {}), self stake: {}\n\
+                    - stake state: {:?}, data center: {:?} (seniority: {}), self stake: {}, commission: {}\n\
                     - {}",
                 identity,
                 participant,
@@ -1540,6 +1576,7 @@ fn classify(
                     .cloned()
                     .unwrap_or_default(),
                 Sol(self_stake),
+                commission_at_end_of_epoch,
                 reason
             );
 
@@ -1571,10 +1608,11 @@ fn classify(
                     blocks,
                     slots,
                     vote_credits: Some(epoch_credits),
-                    commission: Some(commission),
+                    commission: Some(commission_at_end_of_epoch),
                     self_stake: Some(self_stake),
                     new_data_center_residency: Some(new_validator),
                     release_version: release_versions.get(&identity).cloned(),
+                    num_epochs_max_commission_exceeded: Some(num_epochs_max_commission_exceeded),
                 },
             );
         }
@@ -1977,6 +2015,30 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     Ok(())
 }
 
+/// Given a validator's current commission and history of commission changes, returns the validator's commission at the end of `epoch`
+fn calculate_commission_at_end_of_epoch(
+    epoch: u64,
+    current_commission: u8,
+    commission_change_history: Option<&Vec<CommissionChangeIndexHistoryEntry>>,
+) -> u8 {
+    match commission_change_history {
+        Some(records) => {
+            let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
+                .iter()
+                .filter(|r| r.commission_before.is_some() && r.epoch == epoch + 1)
+                .collect();
+
+            rs.sort_by(|a, b| {
+                a.epoch
+                    .cmp(&b.epoch)
+                    .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
+            });
+            rs.first().unwrap().commission_before.unwrap() as u8
+        }
+        None => current_commission,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -2077,5 +2139,91 @@ mod test {
         let l5_blocks_and_slots = blocks_and_slots.get(&l5).unwrap();
         assert_eq!(l5_blocks_and_slots.0, 10);
         assert_eq!(l5_blocks_and_slots.1, 10);
+    }
+
+    #[test]
+    fn test_calculate_commission_at_end_of_epoch_no_history() {
+        let expected_commission = 100;
+
+        // If there is no change history, commission should be the current commission
+        assert_eq!(
+            expected_commission,
+            calculate_commission_at_end_of_epoch(123, expected_commission, None) as u8
+        );
+    }
+
+    #[test]
+    fn test_calculate_commission_at_end_of_epoch_long_history() {
+        let epoch: u64 = 123;
+        let expected_commission = 100.0;
+
+        // Changes:
+        // null -> 10 10% through epoch 123
+        // 10 -> 100 90% through epoch 123
+        // 100 -> 50 10% through epoch 124
+        // 100 -> 40 50% through epoch 124
+        //
+        // records deliberately placed out of chronological order
+        let history = [
+            // fourth
+            CommissionChangeIndexHistoryEntry {
+                commission_before: Some(50.0),
+                commission_after: 40.0,
+                epoch: epoch + 1,
+                epoch_completion: 50.0,
+                ..Default::default()
+            },
+            // first
+            CommissionChangeIndexHistoryEntry {
+                commission_before: None,
+                commission_after: 10.0,
+                epoch: epoch,
+                epoch_completion: 10.0,
+                ..Default::default()
+            },
+            // second
+            CommissionChangeIndexHistoryEntry {
+                commission_before: Some(10.0),
+                commission_after: expected_commission,
+                epoch: epoch,
+                epoch_completion: 90.0,
+                ..Default::default()
+            },
+            // third
+            CommissionChangeIndexHistoryEntry {
+                commission_before: Some(expected_commission),
+                commission_after: 50.0,
+                epoch: epoch + 1,
+                epoch_completion: 10.0,
+                ..Default::default()
+            },
+        ]
+        .to_vec();
+
+        let commission_at_end = calculate_commission_at_end_of_epoch(epoch, 75, Some(&history));
+        assert_eq!(commission_at_end, expected_commission as u8);
+    }
+
+    // Test the case where there is one record of changing a commission immediately after the end of an epoch
+    #[test]
+    fn test_calculate_commission_at_end_of_epoch_short_history() {
+        let epoch: u64 = 123;
+        let current_commission = 10.0;
+        let expected_commission = 100.0;
+
+        // Changes:
+        // 100 -> 10 10% through epoch 124
+        let history = [CommissionChangeIndexHistoryEntry {
+            commission_before: Some(expected_commission),
+            commission_after: current_commission,
+            epoch: epoch + 1,
+            epoch_completion: 50.0,
+            ..Default::default()
+        }]
+        .to_vec();
+
+        let commission_at_end =
+            calculate_commission_at_end_of_epoch(epoch, current_commission as u8, Some(&history));
+        assert_eq!(commission_at_end, expected_commission as u8);
     }
 }
