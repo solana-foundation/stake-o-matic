@@ -108,10 +108,10 @@ pub fn new(
     Ok(StakePoolOMatic {
         authorized_staker,
         baseline_stake_amount,
+        min_reserve_stake_balance,
         stake_pool_address,
         stake_pool,
         validator_list,
-        min_reserve_stake_balance,
     })
 }
 

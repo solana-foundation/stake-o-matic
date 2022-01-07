@@ -58,6 +58,10 @@ pub struct ValidatorClassification {
     pub new_data_center_residency: Option<bool>,
 
     pub release_version: Option<Version>,
+
+    // The number of times the validator has exceeded the max commission
+    // Note we only started counting this around Jan 2022; epochs prior to Jan 2022 are not counted
+    pub num_epochs_max_commission_exceeded: Option<u8>,
 }
 
 impl ValidatorClassification {

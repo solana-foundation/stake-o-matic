@@ -41,6 +41,8 @@ impl GenericStakePool for NoopStakePool {
             })
             .collect();
 
-        Ok((vec![], validator_stake_actions, HashSet::new(), 12_345))
+        let notes = vec!["This is the noop stake pool. All number are make-believe.".to_string()];
+
+        Ok((notes, validator_stake_actions, HashSet::new(), 12_345))
     }
 }

@@ -1,3 +1,4 @@
+use crate::Cluster;
 use {
     crate::validators_app,
     log::*,
@@ -78,16 +79,9 @@ pub struct DataCenters {
     pub by_identity: HashMap<Pubkey, DataCenterId>,
 }
 
-pub fn get(cluster: &str) -> Result<DataCenters, Box<dyn error::Error>> {
-    let cluster_json = match cluster {
-        "mainnet-beta" => validators_app::ClusterJson::MainnetBeta,
-        "testnet" => validators_app::ClusterJson::Testnet,
-        _ => return Err(format!("Unsupported cluster: {}", cluster).into()),
-    };
+pub fn get(cluster: Cluster) -> Result<DataCenters, Box<dyn error::Error>> {
+    let client = validators_app::Client::new_with_cluster(cluster)?;
 
-    let token = std::env::var("VALIDATORS_APP_TOKEN")
-        .map_err(|err| format!("VALIDATORS_APP_TOKEN: {}", err))?;
-    let client = validators_app::Client::new(token, cluster_json);
     let validators = client.validators(None, None)?;
     let mut data_center_map = HashMap::new();
     let mut total_stake = 0;
