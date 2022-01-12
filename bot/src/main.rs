@@ -2180,7 +2180,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: None,
                 commission_after: 10.0,
-                epoch: epoch,
+                epoch,
                 epoch_completion: 10.0,
                 ..Default::default()
             },
@@ -2188,7 +2188,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(10.0),
                 commission_after: expected_commission,
-                epoch: epoch,
+                epoch,
                 epoch_completion: 90.0,
                 ..Default::default()
             },
@@ -2241,7 +2241,7 @@ mod test {
         let history = [CommissionChangeIndexHistoryEntry {
             commission_before: Some(0.0),
             commission_after: expected_commission,
-            epoch: epoch,
+            epoch,
             epoch_completion: 50.0,
             ..Default::default()
         }]
