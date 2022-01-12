@@ -1353,7 +1353,6 @@ fn classify(
         let five_days_ago = Utc::now() - ChronoDuration::days(5);
         let all_commission_changes =
             validators_app_client.get_all_commision_changes_since(five_days_ago)?;
-        info!("total: {:?}", all_commission_changes.len());
 
         for VoteAccountInfo {
             identity,
@@ -2028,12 +2027,16 @@ fn calculate_commission_at_end_of_epoch(
                 .filter(|r| r.commission_before.is_some() && r.epoch == epoch + 1)
                 .collect();
 
-            rs.sort_by(|a, b| {
-                a.epoch
-                    .cmp(&b.epoch)
-                    .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
-            });
-            rs.first().unwrap().commission_before.unwrap() as u8
+            if rs.is_empty() {
+                current_commission
+            } else {
+                rs.sort_by(|a, b| {
+                    a.epoch
+                        .cmp(&b.epoch)
+                        .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
+                });
+                rs.first().unwrap().commission_before.unwrap() as u8
+            }
         }
         None => current_commission,
     }
@@ -2217,6 +2220,28 @@ mod test {
             commission_before: Some(expected_commission),
             commission_after: current_commission,
             epoch: epoch + 1,
+            epoch_completion: 50.0,
+            ..Default::default()
+        }]
+        .to_vec();
+
+        let commission_at_end =
+            calculate_commission_at_end_of_epoch(epoch, current_commission as u8, Some(&history));
+        assert_eq!(commission_at_end, expected_commission as u8);
+    }
+
+    #[test]
+    fn test_calculate_commission_at_end_of_epoch_irrelevant_history() {
+        let epoch: u64 = 123;
+        let current_commission = 100.0;
+        let expected_commission = 100.0;
+
+        // Changes:
+        // 100 -> 10 10% through epoch 124
+        let history = [CommissionChangeIndexHistoryEntry {
+            commission_before: Some(0.0),
+            commission_after: expected_commission,
+            epoch: epoch,
             epoch_completion: 50.0,
             ..Default::default()
         }]
