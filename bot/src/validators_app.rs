@@ -197,7 +197,7 @@ pub struct Client {
     client: reqwest::blocking::Client,
 }
 
-pub fn get_validators_app_token() -> Result<String, String> {
+pub fn get_validators_app_token_from_env() -> Result<String, String> {
     std::env::var("VALIDATORS_APP_TOKEN").map_err(|err| format!("VALIDATORS_APP_TOKEN: {}", err))
 }
 
@@ -212,7 +212,7 @@ impl Client {
     }
 
     pub fn new_with_cluster(cluster: Cluster) -> Result<Self, Box<dyn error::Error>> {
-        let token = get_validators_app_token()?;
+        let token = get_validators_app_token_from_env()?;
         let client = Self::new(token, ClusterJson::from_cluster(cluster));
 
         Ok(client)
