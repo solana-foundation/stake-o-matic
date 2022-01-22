@@ -1928,8 +1928,8 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                     let csv_line = format!(
                         r#"{},"{}","{}","{}","{}",{},{},{},{},{},{:.4},{},"{:?}","{}","{}""#,
                         epoch,
-                        score_data.validators_app_info.keybase_id,
-                        score_data.validators_app_info.name,
+                        escape_quotes(&score_data.validators_app_info.keybase_id),
+                        escape_quotes(&score_data.validators_app_info.name),
                         identity.to_string(),
                         classification.vote_address,
                         score,
@@ -1940,8 +1940,8 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
                         score_data.data_center_concentration,
                         score_data.score_discounts.can_halt_the_network_group,
                         classification.stake_state,
-                        classification.stake_state_reason,
-                        score_data.validators_app_info.www_url,
+                        escape_quotes(&classification.stake_state_reason),
+                        escape_quotes(&score_data.validators_app_info.www_url),
                     );
                     validator_detail_csv.push(csv_line);
                 }
@@ -2006,6 +2006,10 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     file.write_all(&markdown.into_bytes())?;
 
     Ok(())
+}
+
+fn escape_quotes(original: &String) -> String {
+    original.replace("\"", "\"\"")
 }
 
 #[cfg(test)]
