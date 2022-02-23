@@ -65,17 +65,6 @@ pub struct ValidatorClassification {
 }
 
 impl ValidatorClassification {
-    pub fn stake_state_streak(&self) -> usize {
-        let mut streak = 1;
-
-        if let Some(ref stake_states) = self.stake_states {
-            while streak < stake_states.len() && stake_states[0].0 == stake_states[streak].0 {
-                streak += 1;
-            }
-        }
-        streak
-    }
-
     // Was the validator staked for at last `n` of the last `m` epochs?
     pub fn staked_for(&self, n: usize, m: usize) -> bool {
         self.stake_states

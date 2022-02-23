@@ -9,7 +9,7 @@ set -ex
 if [[ -n $FOLLOWER ]]; then
   REQUIRE_CLASSIFICATION="--require-classification"
 else
-  MARKDOWN="--markdown first"
+  CSV_OUTPUT_MODE="--csv-output-mode first"
   EPOCH_CLASSIFICATION="--epoch-classification first"
 fi
 
@@ -56,7 +56,7 @@ MAINNET_BETA_ARGS=(
 
 # shellcheck disable=SC2206
 NOT_A_STAKE_POOL_ARGS=(
-  $MARKDOWN
+  $CSV_OUTPUT_MODE
   $EPOCH_CLASSIFICATION
   $CONFIRM
   $REQUIRE_CLASSIFICATION
