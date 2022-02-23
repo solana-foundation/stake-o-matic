@@ -34,7 +34,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         error,
-        fs::{self, File},
+        fs::File,
         io::Write,
         path::PathBuf,
         process,
@@ -206,7 +206,7 @@ pub struct Config {
     db_path: PathBuf,
     db_suffix: String,
     require_classification: bool,
-    markdown_mode: OutputMode,
+    csv_output_mode: OutputMode,
     epoch_classification: OutputMode,
 
     /// Perform all stake processing, without sending transactions to the network
@@ -248,6 +248,8 @@ pub struct Config {
     /// 2) "destake"    - Removes all validator stake
     /// 3) PATH_TO_YAML - Reads a list of validator identity pubkeys from the specified YAML file
     ///                   destaking those in the list and warning any others
+    /// 4) "destake-new" - When infrastructure concentration is too high, only destake validators
+    ///                    who are new to the data center
     infrastructure_concentration_affects: InfrastructureConcentrationAffects,
 
     bad_cluster_average_skip_rate: usize,
@@ -293,7 +295,7 @@ impl Config {
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
             db_suffix: "".to_string(),
-            markdown_mode: OutputMode::No,
+            csv_output_mode: OutputMode::No,
             epoch_classification: OutputMode::No,
             require_classification: false,
             dry_run: true,
@@ -384,13 +386,13 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .help("Confirm that the stake adjustments should actually be made")
         )
         .arg(
-            Arg::with_name("markdown")
-                .long("markdown")
+            Arg::with_name("csv-output-mode")
+                .long("csv-output-mode")
                 .value_name("no|yes|first")
                 .takes_value(true)
                 .default_value("no")
                 .possible_values(&["no", "yes", "first"])
-                .help("Output markdown.  If \"first\", markdown will only be generated on the first run.  If \"yes\", markdown will always be generated. If \"no\", no markdown is ever generated.")
+                .help("Output summary CSV.  If \"first\", CSV will only be generated on the first run.  If \"yes\", CSV will always be generated. If \"no\", no CSV is ever generated.")
         )
         .arg(
             Arg::with_name("epoch_classification")
@@ -664,7 +666,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 )
         )
         .subcommand(
-            SubCommand::with_name("noop-stake-pool").about("Use a no-op stake pool.  Useful for testing classification and generating markdown from an existing db.")
+            SubCommand::with_name("noop-stake-pool").about("Use a no-op stake pool.  Useful for testing classification and generating output from an existing db.")
         )
         .get_matches();
 
@@ -708,7 +710,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let db_suffix = matches.value_of("db_suffix").unwrap().to_string();
-    let markdown_mode = match value_t_or_exit!(matches, "markdown", String).as_str() {
+    let csv_output_mode = match value_t_or_exit!(matches, "csv-output-mode", String).as_str() {
         "first" => OutputMode::First,
         "yes" => OutputMode::Yes,
         "no" => OutputMode::No,
@@ -746,7 +748,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         db_path,
         db_suffix,
         require_classification,
-        markdown_mode,
+        csv_output_mode,
         epoch_classification,
         dry_run,
         quality_block_producer_percentage,
@@ -1842,9 +1844,9 @@ fn main() -> BoxResult<()> {
         }
         _ => {}
     }
-    match (first_time, config.markdown_mode) {
+    match (first_time, config.csv_output_mode) {
         (true, OutputMode::First) | (_, OutputMode::Yes) => {
-            generate_markdown(epoch, &config)?;
+            generate_csv(epoch, &config)?;
         }
         _ => {}
     }
@@ -1860,19 +1862,11 @@ fn main() -> BoxResult<()> {
     Ok(())
 }
 
-fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
-    let markdown_path = config.db_path.join("md");
-    fs::create_dir_all(&markdown_path)?;
-
+fn generate_csv(epoch: Epoch, config: &Config) -> BoxResult<()> {
     let mut list = vec![(
         epoch,
         EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
     )];
-
-    let cluster_md = match config.cluster {
-        Cluster::MainnetBeta => "Mainnet",
-        Cluster::Testnet => "Testnet",
-    };
 
     while let Some((epoch, epoch_classification)) =
         EpochClassification::load_previous(list.last().unwrap().0, &config.cluster_db_path())?
@@ -1922,90 +1916,6 @@ fn generate_markdown(epoch: Epoch, config: &Config) -> BoxResult<()> {
     info!("Writing {}", filename.display());
     let mut file = File::create(filename)?;
     file.write_all(&validator_summary_csv.into_bytes())?;
-
-    let mut validators_markdown: HashMap<_, Vec<_>> = HashMap::default();
-    let mut cluster_markdown = vec![];
-    for (epoch, epoch_classification) in list.iter() {
-        cluster_markdown.push(format!("### Epoch {}", epoch));
-        for note in &epoch_classification.notes {
-            cluster_markdown.push(format!("* {}", note));
-        }
-
-        if let Some(ref validator_classifications) = epoch_classification.validator_classifications
-        {
-            let mut validator_classifications =
-                validator_classifications.iter().collect::<Vec<_>>();
-            validator_classifications.sort_by(|a, b| a.0.cmp(b.0));
-            for (identity, classification) in validator_classifications {
-                let validator_markdown = validators_markdown.entry(identity).or_default();
-
-                validator_markdown.push(format!(
-                    "### [[{1} Epoch {0}|{1}#Epoch-{0}]]",
-                    epoch, cluster_md
-                ));
-                let stake_state_streak = classification.stake_state_streak();
-                validator_markdown.push(format!(
-                    "* Stake level: **{:?}**{}",
-                    classification.stake_state,
-                    if stake_state_streak > 1 {
-                        format!(" (for {} epochs)", stake_state_streak)
-                    } else {
-                        "".to_string()
-                    }
-                ));
-                validator_markdown.push(format!(
-                    "* Stake reason: {}",
-                    classification.stake_state_reason
-                ));
-                if let Some(ref stake_action) = classification.stake_action {
-                    validator_markdown.push(format!("* Staking activity: {}", stake_action));
-                }
-
-                validator_markdown.push(format!(
-                    "* Vote account address: {}",
-                    classification.vote_address
-                ));
-                if let (Some(current_data_center), Some(data_center_residency)) = (
-                    classification.current_data_center.as_ref(),
-                    classification.data_center_residency.as_ref(),
-                ) {
-                    validator_markdown.push(format!("* Data Center: {}", current_data_center));
-
-                    if !data_center_residency.is_empty() {
-                        validator_markdown.push(format!(
-                            "* Resident Data Center(s): {}",
-                            data_center_residency
-                                .iter()
-                                .map(|(data_center, seniority)| format!(
-                                    "{} (seniority: {})",
-                                    data_center, seniority
-                                ))
-                                .collect::<Vec<String>>()
-                                .join(",")
-                        ));
-                    }
-                }
-
-                for note in &classification.notes {
-                    validator_markdown.push(format!("* {}", note));
-                }
-            }
-        }
-    }
-
-    for (identity, validator_markdown) in validators_markdown {
-        let markdown = validator_markdown.join("\n");
-        let filename = markdown_path.join(format!("Validator-{}.md", identity));
-        info!("Writing {}", filename.display());
-        let mut file = File::create(filename)?;
-        file.write_all(&markdown.into_bytes())?;
-    }
-
-    let markdown = cluster_markdown.join("\n");
-    let filename = markdown_path.join(format!("{}.md", cluster_md));
-    info!("Writing {}", filename.display());
-    let mut file = File::create(filename)?;
-    file.write_all(&markdown.into_bytes())?;
 
     Ok(())
 }
