@@ -1374,9 +1374,8 @@ fn classify(
                 .cloned()
                 .unwrap_or_default();
 
-            let previous_classification = previous_epoch_validator_classifications
-                .map(|p| p.get(&identity))
-                .flatten();
+            let previous_classification =
+                previous_epoch_validator_classifications.and_then(|p| p.get(&identity));
 
             let commission_at_end_of_epoch = calculate_commission_at_end_of_epoch(
                 epoch,
@@ -1384,8 +1383,7 @@ fn classify(
                 all_commission_changes.get(&vote_address),
             );
             let num_epochs_max_commission_exceeded = previous_classification
-                .map(|vc| vc.num_epochs_max_commission_exceeded)
-                .flatten()
+                .and_then(|vc| vc.num_epochs_max_commission_exceeded)
                 .unwrap_or(0)
                 + (if commission_at_end_of_epoch > config.max_commission {
                     1
@@ -1394,8 +1392,7 @@ fn classify(
                 });
 
             let mut previous_data_center_residency = previous_classification
-                .map(|vc| vc.data_center_residency.clone())
-                .flatten()
+                .and_then(|vc| vc.data_center_residency.clone())
                 .unwrap_or_default();
 
             let previous_stake_state = previous_classification
@@ -1441,22 +1438,22 @@ fn classify(
                 validator_notes.push(insufficent_self_stake_msg.clone());
             }
 
-            let insufficent_testnet_participation = testnet_participation
-                .as_ref()
-                .map(|testnet_participation| {
-                    if let Some(participant) = participant {
-                        if !testnet_participation.get(&participant).unwrap_or(&true) {
-                            let note = "Insufficient testnet participation".to_string();
-                            if config.enforce_testnet_participation {
-                                return Some(note);
-                            } else {
-                                validator_notes.push(note);
+            let insufficent_testnet_participation =
+                testnet_participation
+                    .as_ref()
+                    .and_then(|testnet_participation| {
+                        if let Some(participant) = participant {
+                            if !testnet_participation.get(&participant).unwrap_or(&true) {
+                                let note = "Insufficient testnet participation".to_string();
+                                if config.enforce_testnet_participation {
+                                    return Some(note);
+                                } else {
+                                    validator_notes.push(note);
+                                }
                             }
                         }
-                    }
-                    None
-                })
-                .flatten();
+                        None
+                    });
 
             let (stake_state, reason) = if let Some(reason) =
                 infrastructure_concentration_destake_reason
@@ -1580,8 +1577,7 @@ fn classify(
             );
 
             let mut stake_states = previous_classification
-                .map(|vc| vc.stake_states.clone())
-                .flatten()
+                .and_then(|vc| vc.stake_states.clone())
                 .unwrap_or_default();
             stake_states.insert(0, (stake_state, reason.clone()));
 
