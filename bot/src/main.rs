@@ -701,13 +701,6 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         process::exit(1);
     }
 
-    let json_rpc_url = match cluster {
-        Cluster::MainnetBeta => value_t!(matches, "json_rpc_url", String)
-            .unwrap_or_else(|_| "http://api.mainnet-beta.solana.com".into()),
-        Cluster::Testnet => value_t!(matches, "json_rpc_url", String)
-            .unwrap_or_else(|_| "http://api.testnet.solana.com".into()),
-    };
-    let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
     let db_path = value_t_or_exit!(matches, "db_path", PathBuf);
     let db_suffix = matches.value_of("db_suffix").unwrap().to_string();
     let csv_output_mode = match value_t_or_exit!(matches, "csv-output-mode", String).as_str() {
@@ -741,6 +734,50 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     )
     .unwrap();
 
+    let default_json_rpc_url = match cluster {
+        Cluster::MainnetBeta => "http://api.mainnet-beta.solana.com",
+        Cluster::Testnet => "http://api.testnet.solana.com",
+    }
+    .to_string();
+
+    // Create a list of RPC URLs to try. If a URL is specified on the command-line, try that first.
+    // If the URL specified on the command-line is not "healthy," or if no URL was specified on the
+    // command-line, fall back to the public solana.com RPC url.
+    let json_rpc_urls_to_try: Vec<String> = match value_t!(matches, "json_rpc_url", String) {
+        Ok(url) => {
+            if url.eq(&default_json_rpc_url) {
+                vec![default_json_rpc_url]
+            } else {
+                vec![url, default_json_rpc_url]
+            }
+        }
+        _ => {
+            vec![default_json_rpc_url]
+        }
+    };
+
+    let (rpc_client, json_rpc_url) = json_rpc_urls_to_try
+        .iter()
+        .map(|url| {
+            let rpc_client = Arc::new(RpcClient::new_with_timeout(
+                url.clone(),
+                Duration::from_secs(180),
+            ));
+            (rpc_client, url.clone())
+        })
+        .find(|(rpc_client, url)| {
+            info!("Checking health of {}", url);
+            matches!(check_rpc_health(rpc_client), Ok(_))
+        })
+        .unwrap_or_else(|| {
+            error!("All RPC servers are unhealthy. Exiting.");
+            process::exit(1);
+        });
+
+    info!("using RPC URL: {}", json_rpc_url);
+
+    let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
+
     let mut config = Config {
         json_rpc_url,
         websocket_url,
@@ -769,39 +806,6 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         min_testnet_participation,
         baseline_stake_amount_lamports: None,
     };
-
-    info!("RPC URL: {}", config.json_rpc_url);
-    let rpc_client = Arc::new(RpcClient::new_with_timeout(
-        config.json_rpc_url.clone(),
-        Duration::from_secs(180),
-    ));
-
-    // Sanity check that the RPC endpoint is healthy before performing too much work
-    {
-        let mut retries = 12u8;
-        let retry_delay = Duration::from_secs(10);
-        loop {
-            match rpc_client.get_health() {
-                Ok(()) => {
-                    info!("RPC endpoint healthy");
-                    break;
-                }
-                Err(err) => {
-                    warn!("RPC endpoint is unhealthy: {:?}", err);
-                }
-            }
-            if retries == 0 {
-                process::exit(1);
-            }
-            retries = retries.saturating_sub(1);
-            info!(
-                "{} retries remaining, sleeping for {} seconds",
-                retries,
-                retry_delay.as_secs()
-            );
-            std::thread::sleep(retry_delay);
-        }
-    }
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {

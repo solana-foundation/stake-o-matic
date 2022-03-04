@@ -331,6 +331,32 @@ pub fn get_all_stake(
     Ok((all_stake_addresses, total_stake_balance))
 }
 
+pub fn check_rpc_health(rpc_client: &RpcClient) -> Result<(), Box<dyn error::Error>> {
+    let mut retries = 12u8;
+    let retry_delay = Duration::from_secs(10);
+    loop {
+        match rpc_client.get_health() {
+            Ok(()) => {
+                info!("RPC endpoint healthy");
+                return Ok(());
+            }
+            Err(err) => {
+                warn!("RPC endpoint is unhealthy: {:?}", err);
+            }
+        };
+        if retries == 0 {
+            return Err("Exhausted retries; connection to server is unhealthy".into());
+        }
+        retries = retries.saturating_sub(1);
+        info!(
+            "{} retries remaining, sleeping for {} seconds",
+            retries,
+            retry_delay.as_secs()
+        );
+        std::thread::sleep(retry_delay);
+    }
+}
+
 #[cfg(test)]
 pub mod test {
     use {
