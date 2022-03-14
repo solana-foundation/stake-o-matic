@@ -1,3 +1,4 @@
+use crate::data_center_info::{DataCenterInfo, DataCenters};
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
@@ -6,6 +7,7 @@ use {
         crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
         ArgMatches, SubCommand,
     },
+    itertools::Itertools,
     log::*,
     openssl::rsa::{Padding, Rsa},
     serde::{Deserialize, Serialize},
@@ -71,56 +73,7 @@ pub enum InfrastructureConcentrationAffects {
     DestakeListed(ValidatorList),
     DestakeAll,
     DestakeNew,
-}
-
-impl InfrastructureConcentrationAffects {
-    fn destake_memo(concentration: f64) -> String {
-        format!(
-            "infrastructure concentration {:.1}% is too high; \
-            find a new data center",
-            concentration
-        )
-    }
-    fn warning_memo(concentration: f64) -> String {
-        format!(
-            "infrastructure concentration {:.1}% is too high; \
-            consider finding a new data center",
-            concentration
-        )
-    }
-    pub fn memo(
-        &self,
-        validator_id: &Pubkey,
-        new_validator: bool,
-        concentration: f64,
-    ) -> InfrastructureConcentrationAffectKind {
-        match self {
-            Self::DestakeAll => {
-                InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(concentration))
-            }
-            Self::DestakeNew => {
-                if new_validator {
-                    InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
-                        concentration,
-                    ))
-                } else {
-                    InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
-                }
-            }
-            Self::WarnAll => {
-                InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
-            }
-            Self::DestakeListed(ref list) => {
-                if list.contains(validator_id) {
-                    InfrastructureConcentrationAffectKind::Destake(Self::destake_memo(
-                        concentration,
-                    ))
-                } else {
-                    InfrastructureConcentrationAffectKind::Warn(Self::warning_memo(concentration))
-                }
-            }
-        }
-    }
+    DestakeOverflow,
 }
 
 #[derive(Debug, Error)]
@@ -135,6 +88,7 @@ impl FromStr for InfrastructureConcentrationAffects {
             "warn" => Ok(Self::WarnAll),
             "destake-all" => Ok(Self::DestakeAll),
             "destake-new" => Ok(Self::DestakeNew),
+            "destake-overflow" => Ok(Self::DestakeOverflow),
             _ => {
                 let file = File::open(s)
                     .map_err(|_| InfrastructureConcentrationAffectsFromStrError(s.to_string()))?;
@@ -252,6 +206,8 @@ pub struct Config {
     ///                   destaking those in the list and warning any others
     /// 4) "destake-new" - When infrastructure concentration is too high, only destake validators
     ///                    who are new to the data center
+    /// 5) "destake-overflow" = Destake "junior" validators who are causing the infrastructure to be
+    ///                         over max_infrastructure_concentration
     infrastructure_concentration_affects: InfrastructureConcentrationAffects,
 
     bad_cluster_average_skip_rate: usize,
@@ -1289,21 +1245,6 @@ fn classify(
         }
     };
 
-    let infrastructure_concentration_too_high = data_centers
-        .info
-        .iter()
-        .filter_map(|dci| {
-            if let Some(max_infrastructure_concentration) = config.max_infrastructure_concentration
-            {
-                if dci.stake_percent > max_infrastructure_concentration {
-                    return Some((dci.validators.clone(), dci.stake_percent));
-                }
-            }
-            None
-        })
-        .flat_map(|(v, sp)| v.into_iter().map(move |v| (v, sp)))
-        .collect::<HashMap<_, _>>();
-
     let (vote_account_info, total_active_stake) = get_vote_account_info(rpc_client, last_epoch)?;
 
     let self_stake_by_vote_account =
@@ -1528,22 +1469,11 @@ fn classify(
 
             let new_validator = !previous_data_center_residency.contains_key(&current_data_center);
 
-            let infrastructure_concentration_destake_reason = infrastructure_concentration_too_high
-                .get(&identity)
-                .map(|concentration| {
-                    config.infrastructure_concentration_affects.memo(
-                        &identity,
-                        new_validator,
-                        *concentration,
-                    )
-                })
-                .and_then(|affect| match affect {
-                    InfrastructureConcentrationAffectKind::Destake(reason) => Some(reason),
-                    InfrastructureConcentrationAffectKind::Warn(reason) => {
-                        validator_notes.push(reason);
-                        None
-                    }
-                });
+            let insufficent_self_stake_msg =
+                format!("Insufficient self stake: {}", Sol(self_stake));
+            if !config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
+                validator_notes.push(insufficent_self_stake_msg.clone());
+            }
 
             let insufficent_testnet_participation =
                 testnet_participation
@@ -1562,11 +1492,7 @@ fn classify(
                         None
                     });
 
-            let (stake_state, reason) = if let Some(reason) =
-                infrastructure_concentration_destake_reason
-            {
-                (ValidatorStakeState::None, reason)
-            } else if num_epochs_commission_increased_above_max > 1 {
+            let (stake_state, reason) = if num_epochs_commission_increased_above_max > 1 {
                 (
                     ValidatorStakeState::None,
                     format!(
@@ -1689,11 +1615,6 @@ fn classify(
                 reason
             );
 
-            let mut stake_states = previous_classification
-                .and_then(|vc| vc.stake_states.clone())
-                .unwrap_or_default();
-            stake_states.insert(0, (stake_state, reason.clone()));
-
             let (blocks, slots) = match blocks_and_slots.get(&identity) {
                 Some((b, s)) => (Some(*b), Some(*s)),
                 None => (None, None),
@@ -1705,7 +1626,7 @@ fn classify(
                     identity,
                     vote_address,
                     stake_state,
-                    stake_states: Some(stake_states),
+                    stake_states: None, // to be added after data center concentration adjustments have been made
                     stake_action: None,
                     stake_state_reason: reason,
                     notes: validator_notes,
@@ -1731,6 +1652,27 @@ fn classify(
             "{} validators processed",
             validator_classifications.len()
         ));
+
+        // Calculating who gets destaked when the InfrastructureConcentrationAffects is DestakeOverflow requires that
+        // we have the data center seniority scores of _all_ validators calculated first, so we go
+        // back and adjust the stake states for the infrastructure concentration effects here.
+        adjust_validator_classification_for_data_center_concentration(
+            &mut validator_classifications,
+            &data_centers,
+            config,
+        );
+
+        // Now update the stake_states array with the state for the current epoch
+        validator_classifications.iter_mut().for_each(|(k, vc)| {
+            let previous_classification =
+                previous_epoch_validator_classifications.and_then(|p| p.get(k));
+
+            let mut stake_states = previous_classification
+                .and_then(|vc| vc.stake_states.clone())
+                .unwrap_or_default();
+            stake_states.insert(0, (vc.stake_state, vc.stake_state_reason.clone()));
+            vc.stake_states = Some(stake_states);
+        });
 
         Some(validator_classifications)
     };
@@ -1774,6 +1716,161 @@ fn classify(
         config: Some(epoch_config),
         stats: Some(epoch_stats),
     })
+}
+
+// Adjusts the validator classifications based on the infrastructure concentration affect
+fn adjust_validator_classification_for_data_center_concentration(
+    validator_classifications: &mut HashMap<Pubkey, ValidatorClassification>,
+    data_centers: &DataCenters,
+    config: &Config,
+) {
+    let infrastructure_concentration_too_high: Vec<&data_center_info::DataCenterInfo> =
+        match config.max_infrastructure_concentration {
+            Some(max_infrastructure_concentration) => data_centers
+                .info
+                .iter()
+                .filter(|dci| dci.stake_percent > max_infrastructure_concentration)
+                .collect(),
+            _ => {
+                vec![]
+            }
+        };
+
+    debug!(
+        "{} data centers over max_infrastructure_concentration",
+        infrastructure_concentration_too_high.len()
+    );
+
+    match &config.infrastructure_concentration_affects {
+        InfrastructureConcentrationAffects::WarnAll => {
+            for dci in infrastructure_concentration_too_high {
+                for validator_id in &dci.validators {
+                    if let Some(vc) = validator_classifications.get_mut(validator_id) {
+                        warn_validator_for_infrastructure_concentration(vc, dci);
+                    }
+                }
+            }
+        }
+        InfrastructureConcentrationAffects::DestakeListed(list) => {
+            for dci in infrastructure_concentration_too_high {
+                for validator_id in &dci.validators {
+                    if let Some(vc) = validator_classifications.get_mut(validator_id) {
+                        if list.contains(validator_id) {
+                            destake_validator_for_infrastructure_concentration(vc, dci);
+                        } else {
+                            warn_validator_for_infrastructure_concentration(vc, dci);
+                        }
+                    }
+                }
+            }
+        }
+        InfrastructureConcentrationAffects::DestakeAll => {
+            for dci in infrastructure_concentration_too_high {
+                for validator_id in &dci.validators {
+                    if let Some(vc) = validator_classifications.get_mut(validator_id) {
+                        destake_validator_for_infrastructure_concentration(vc, dci);
+                    }
+                }
+            }
+        }
+        InfrastructureConcentrationAffects::DestakeNew => {
+            for dci in infrastructure_concentration_too_high {
+                for validator_id in &dci.validators {
+                    if let Some(vc) = validator_classifications.get_mut(validator_id) {
+                        if vc.new_data_center_residency.unwrap_or(false) {
+                            destake_validator_for_infrastructure_concentration(vc, dci);
+                        }
+                    }
+                }
+            }
+        }
+        InfrastructureConcentrationAffects::DestakeOverflow => {
+            debug!("Processing InfrastructureConcentrationAffects::DestakeOverflow");
+            infrastructure_concentration_too_high.iter().for_each(|&data_center_info| {
+                // now order by seniority
+                let validators_by_seniority: Vec<Pubkey> = validator_classifications.iter()
+                    .filter_map(|(_k, vc)| {
+                        if let Some(ref current_data_center) = vc.current_data_center {
+                            if current_data_center == &data_center_info.id {
+                                vc.data_center_residency.as_ref().map(|dcr| (vc.identity, dcr.get(current_data_center)))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }).sorted_by(|(_ac, a), (_bc, b)| {
+                    a.cmp(b)
+                }).map(|(c, _s)| c)
+                    .collect();
+
+                let validators_stake = data_center_info.validators_stake.clone().unwrap_or_default();
+
+                // Figure out total stake from the data center's stake_percent and stake; TODO figure this out outside the loop
+                let total_stake = 100f64 * (data_center_info.stake as f64) / data_center_info.stake_percent;
+                // Maximum amount of stake a data center can have without being over max_infrastructure_concentration
+                let max_stake = config.max_infrastructure_concentration.unwrap() * total_stake / 100f64;
+                // We will keep destaking validators and removing their stake from this value until it is under max_stake
+                let mut data_center_stake = data_center_info.stake as f64;
+
+                // destake validators and remove their stake from the total until the sum is below the threshold
+                for validator_identity in validators_by_seniority {
+                    if let Some(validator_classification) = validator_classifications.get_mut(&validator_identity) {
+                        if validator_classification.stake_state != ValidatorStakeState::None {
+                            debug!("Destake {} for being junior in a high-concentration data center", validator_classification.identity);
+                            destake_validator_for_infrastructure_concentration(validator_classification, data_center_info);
+                        }
+                        data_center_stake -= *validators_stake.get(&validator_classification.identity).unwrap_or(&(0)) as f64;
+                    };
+
+                    if data_center_stake < max_stake {
+                        break;
+                    }
+                };
+            });
+        }
+    };
+}
+
+// Change ValidatorClassification.stake_state to None and adjust for violation of the infrastructure_concentration constraint
+fn destake_validator_for_infrastructure_concentration(
+    validator_classification: &mut ValidatorClassification,
+    data_center_info: &DataCenterInfo,
+) {
+    if validator_classification.stake_state == ValidatorStakeState::Bonus {
+        // If the validator was to receive Bonus, it received a , +1 seniority score bump.
+        // Validators without Bonus (Baseline or None) recieved a -1 seniority score penalty.
+        // So subtract 2 from the Validator's seinority score if it was slated to receive Bonus
+        // but is getting destaked for being in a over-saturated data center.
+        let dcr = validator_classification
+            .data_center_residency
+            .clone()
+            .unwrap();
+        let score = dcr.get(&data_center_info.id.clone()).unwrap_or(&1);
+        validator_classification
+            .data_center_residency
+            .as_mut()
+            .unwrap()
+            .insert(data_center_info.id.clone(), score.saturating_sub(2));
+    }
+
+    validator_classification.stake_state = ValidatorStakeState::None;
+
+    validator_classification.stake_state_reason = format!(
+        "infrastructure concentration {:.1}% is too high; find a new data center",
+        data_center_info.stake_percent
+    );
+}
+
+// Change ValidatorClassification.stake_state to warn about violation of the infrastructure_concentration constraint
+fn warn_validator_for_infrastructure_concentration(
+    validator_classification: &mut ValidatorClassification,
+    data_center_info: &DataCenterInfo,
+) {
+    validator_classification.notes.push(format!(
+        "infrastructure concentration {:.1}% is too high; consider finding a new data center",
+        data_center_info.stake_percent
+    ));
 }
 
 fn main() -> BoxResult<()> {
@@ -2065,6 +2162,8 @@ fn calculate_commission_at_end_of_epoch(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::data_center_info::{DataCenterId, DataCenterInfo};
+    use std::iter::FromIterator;
 
     #[test]
     fn test_quality_producer_with_average_skip_rate() {
@@ -2270,5 +2369,283 @@ mod test {
         let commission_at_end =
             calculate_commission_at_end_of_epoch(epoch, current_commission as u8, Some(&history));
         assert_eq!(commission_at_end, expected_commission as u8);
+    }
+
+    #[test]
+    fn test_adjust_validator_classification_for_data_center_concentration_warn_all() {
+        let (mut validator_classifications, data_centers) =
+            mocks_for_data_center_concentration_tests();
+
+        let config = Config {
+            max_infrastructure_concentration: Some(50.0),
+            infrastructure_concentration_affects: InfrastructureConcentrationAffects::WarnAll,
+            ..Config::default_for_test()
+        };
+
+        adjust_validator_classification_for_data_center_concentration(
+            &mut validator_classifications,
+            &data_centers,
+            &config,
+        );
+
+        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+            .iter()
+            .map(|(_id, vc)| vc.clone())
+            .filter(|vc| vc.stake_state == ValidatorStakeState::None)
+            .collect();
+
+        assert_eq!(destaked_validators.len(), 0);
+    }
+
+    #[test]
+    fn test_adjust_validator_classification_for_data_center_concentration_destake_listed() {
+        let (mut validator_classifications, data_centers) =
+            mocks_for_data_center_concentration_tests();
+
+        let max_infrastructure_concentration = 50.0;
+
+        // get five validators from the oversaturated data center and put them in the list to be destaked
+        // let dc = ;
+        let destake_list: ValidatorList = HashSet::from_iter(
+            data_centers
+                .info
+                .iter()
+                .find(|dci| dci.stake_percent > max_infrastructure_concentration)
+                .map(|dci| {
+                    dci.validators
+                        .iter()
+                        .map(|v| v.clone())
+                        .take(5)
+                        .collect::<Vec<_>>()
+                })
+                // .map(|validators| validators[0..=5])
+                .unwrap()
+                .clone(),
+        );
+
+        let config = Config {
+            max_infrastructure_concentration: Some(max_infrastructure_concentration),
+            infrastructure_concentration_affects: InfrastructureConcentrationAffects::DestakeListed(
+                destake_list,
+            ),
+            ..Config::default_for_test()
+        };
+
+        adjust_validator_classification_for_data_center_concentration(
+            &mut validator_classifications,
+            &data_centers,
+            &config,
+        );
+
+        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+            .iter()
+            .map(|(_id, vc)| vc.clone())
+            .filter(|vc| vc.stake_state == ValidatorStakeState::None)
+            .collect();
+
+        assert_eq!(destaked_validators.len(), 5);
+    }
+
+    #[test]
+    fn test_adjust_validator_classification_for_data_center_concentration_destake_all() {
+        let (mut validator_classifications, data_centers) =
+            mocks_for_data_center_concentration_tests();
+
+        let config = Config {
+            max_infrastructure_concentration: Some(50.0),
+            infrastructure_concentration_affects: InfrastructureConcentrationAffects::DestakeAll,
+            ..Config::default_for_test()
+        };
+
+        adjust_validator_classification_for_data_center_concentration(
+            &mut validator_classifications,
+            &data_centers,
+            &config,
+        );
+
+        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+            .iter()
+            .map(|(_id, vc)| vc.clone())
+            .filter(|vc| vc.stake_state == ValidatorStakeState::None)
+            .collect();
+
+        assert_eq!(destaked_validators.len(), 10);
+    }
+
+    #[test]
+    fn test_adjust_validator_classification_for_data_center_concentration_destake_new() {
+        let (mut validator_classifications, data_centers) =
+            mocks_for_data_center_concentration_tests();
+
+        let config = Config {
+            max_infrastructure_concentration: Some(50.0),
+            infrastructure_concentration_affects: InfrastructureConcentrationAffects::DestakeNew,
+            ..Config::default_for_test()
+        };
+
+        adjust_validator_classification_for_data_center_concentration(
+            &mut validator_classifications,
+            &data_centers,
+            &config,
+        );
+
+        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+            .iter()
+            .map(|(_id, vc)| vc.clone())
+            .filter(|vc| vc.stake_state == ValidatorStakeState::None)
+            .collect();
+
+        // Only one validator has `new_data_center_residency`==true
+        assert_eq!(destaked_validators.len(), 1);
+        assert_eq!(
+            destaked_validators
+                .first()
+                .unwrap()
+                .new_data_center_residency,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_adjust_validator_classification_for_data_center_concentration_destake_overflow() {
+        let (mut validator_classifications, data_centers) =
+            mocks_for_data_center_concentration_tests();
+
+        let config = Config {
+            max_infrastructure_concentration: Some(50.0),
+            infrastructure_concentration_affects:
+                InfrastructureConcentrationAffects::DestakeOverflow,
+            ..Config::default_for_test()
+        };
+
+        adjust_validator_classification_for_data_center_concentration(
+            &mut validator_classifications,
+            &data_centers,
+            &config,
+        );
+
+        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+            .iter()
+            .map(|(_id, vc)| vc.clone())
+            .filter(|vc| vc.stake_state == ValidatorStakeState::None)
+            .collect();
+
+        // two validators would need to be removed to get the data center under the max_infrastructure_concentration of 50%
+        assert_eq!(destaked_validators.len(), 2);
+
+        // verify that the destaked validators were junior, and that their seniority score were reduced.
+        // Since their initial seniority scores were 1 and 2, they should have been reduced to 0 and 1
+        for val in destaked_validators {
+            let &seniority_score = val
+                .data_center_residency
+                .unwrap()
+                .get(&val.current_data_center.unwrap_or_default())
+                .unwrap_or(&(100usize));
+            assert!(seniority_score < 2usize);
+        }
+    }
+
+    fn mocks_for_data_center_concentration_tests(
+    ) -> (HashMap<Pubkey, ValidatorClassification>, DataCenters) {
+        // Creates ValidatorClassifications and DataCenters to model a cluster+epoch for the purposes of testing different InfrastructureConcentrationAffects
+        // Creates two data centers and 11 ValidatorClassifications.
+        //
+        // Data Center 1 ("data_center_oversaturated") (will be oversaturated if max_infrastructure_concentration is < 60)
+        // Total stake: 600 / 60% of total
+        // 10 validators with 60 stake each
+        //  - one validator has `new_data_center_residency` set to true
+        //  - 60 stake each
+        //  - Seniority scores from 1--10
+        //
+        // Data center 2 ("data_center_not_oversaturated")
+        // Total stake: 400 / 40% of total
+        // 1 validator with 600 stake
+
+        let data_center_oversaturated_id = DataCenterId {
+            asn: 1234,
+            location: "oversaturated".to_string(),
+        };
+        let data_center_oversaturated_stake = 600;
+        let data_center_not_oversaturated_id = DataCenterId {
+            asn: 9876,
+            location: "not oversaturated".to_string(),
+        };
+        let data_center_not_oversaturated_stake = 400;
+
+        let validator_in_not_oversaturated = ValidatorClassification {
+            identity: Pubkey::new_unique(),
+            vote_address: Pubkey::new_unique(),
+            stake_state: ValidatorStakeState::Bonus,
+            stake_state_reason: "Test bonus reason".to_string(),
+            data_center_residency: Some(HashMap::from([(
+                data_center_not_oversaturated_id.clone(),
+                123,
+            )])),
+            current_data_center: Some(data_center_not_oversaturated_id.clone()),
+            ..ValidatorClassification::default()
+        };
+
+        let mut validator_classifications = HashMap::new();
+
+        let num_validators_in_oversaturated_data_center = 10;
+        // Create 10 validators for the oversaturated data center
+        for idx in 1..=num_validators_in_oversaturated_data_center {
+            let identity = Pubkey::new_unique();
+            validator_classifications.insert(
+                identity,
+                ValidatorClassification {
+                    identity,
+                    vote_address: Pubkey::new_unique(),
+                    new_data_center_residency: Some(idx == 1),
+                    stake_state: ValidatorStakeState::Bonus,
+                    stake_state_reason: "Test bonus reason".to_string(),
+                    data_center_residency: Some(HashMap::from([(
+                        data_center_oversaturated_id.clone(),
+                        idx,
+                    )])),
+
+                    current_data_center: Some(data_center_oversaturated_id.clone()),
+                    ..ValidatorClassification::default()
+                },
+            );
+        }
+
+        let data_center_oversaturated = DataCenterInfo {
+            id: data_center_oversaturated_id,
+            stake: data_center_oversaturated_stake,
+            stake_percent: 60.0,
+            validators: validator_classifications
+                .iter()
+                .map(|(id, _vc)| id.clone())
+                .collect(),
+            // data_center_oversaturated_stake / num_validators_in_oversaturated_data_center == 60
+            validators_stake: Some(
+                validator_classifications
+                    .iter()
+                    .map(|(id, _vc)| (id.clone(), 60))
+                    .collect(),
+            ),
+        };
+
+        let data_center_not_oversaturated = DataCenterInfo {
+            id: data_center_not_oversaturated_id,
+            stake: data_center_not_oversaturated_stake,
+            stake_percent: 40.0,
+            validators: vec![validator_in_not_oversaturated.identity],
+            validators_stake: Some(HashMap::from([(
+                validator_in_not_oversaturated.identity,
+                data_center_not_oversaturated_stake,
+            )])),
+        };
+
+        let data_centers = DataCenters {
+            info: vec![data_center_oversaturated, data_center_not_oversaturated],
+            by_identity: validator_classifications
+                .iter()
+                .map(|(id, vc)| (id.clone(), vc.current_data_center.as_ref().unwrap().clone()))
+                .collect(),
+        };
+
+        (validator_classifications, data_centers)
     }
 }
