@@ -49,6 +49,7 @@ pub struct DataCenterInfo {
     pub stake: u64,
     pub stake_percent: f64,
     pub validators: Vec<Pubkey>,
+    pub validators_stake: Option<HashMap<Pubkey, u64>>,
 }
 
 impl DataCenterInfo {
@@ -125,6 +126,10 @@ pub fn get(cluster: Cluster) -> Result<DataCenters, Box<dyn error::Error>> {
         data_center_info.stake += stake;
         total_stake += stake;
         data_center_info.validators.push(identity);
+        data_center_info
+            .validators_stake
+            .as_mut()
+            .map(|vs| vs.insert(identity, stake));
     }
 
     let unknown_percent = 100f64 * (unknown_data_center_stake as f64) / total_stake as f64;
