@@ -172,7 +172,6 @@ fn process_apply(
         );
     }
 
-
     let rent = rpc_client.get_minimum_balance_for_rent_exemption(Participant::get_packed_len())?;
     let participant: Box<dyn Signer> = Box::new(Keypair::new());
 
