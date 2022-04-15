@@ -2388,13 +2388,13 @@ mod test {
             &config,
         );
 
-        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+        let num_destaked_validators = validator_classifications
             .iter()
             .map(|(_id, vc)| vc.clone())
             .filter(|vc| vc.stake_state == ValidatorStakeState::None)
-            .collect();
+            .count();
 
-        assert_eq!(destaked_validators.len(), 0);
+        assert_eq!(num_destaked_validators, 0);
     }
 
     #[test]
@@ -2405,22 +2405,13 @@ mod test {
         let max_infrastructure_concentration = 50.0;
 
         // get five validators from the oversaturated data center and put them in the list to be destaked
-        // let dc = ;
         let destake_list: ValidatorList = HashSet::from_iter(
             data_centers
                 .info
                 .iter()
                 .find(|dci| dci.stake_percent > max_infrastructure_concentration)
-                .map(|dci| {
-                    dci.validators
-                        .iter()
-                        .map(|v| v.clone())
-                        .take(5)
-                        .collect::<Vec<_>>()
-                })
-                // .map(|validators| validators[0..=5])
-                .unwrap()
-                .clone(),
+                .map(|dci| dci.validators.iter().copied().take(5).collect::<Vec<_>>())
+                .unwrap(),
         );
 
         let config = Config {
@@ -2437,13 +2428,13 @@ mod test {
             &config,
         );
 
-        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+        let num_destaked_validators = validator_classifications
             .iter()
             .map(|(_id, vc)| vc.clone())
             .filter(|vc| vc.stake_state == ValidatorStakeState::None)
-            .collect();
+            .count();
 
-        assert_eq!(destaked_validators.len(), 5);
+        assert_eq!(num_destaked_validators, 5);
     }
 
     #[test]
@@ -2463,13 +2454,13 @@ mod test {
             &config,
         );
 
-        let destaked_validators: Vec<ValidatorClassification> = validator_classifications
+        let num_destaked_validators = validator_classifications
             .iter()
             .map(|(_id, vc)| vc.clone())
             .filter(|vc| vc.stake_state == ValidatorStakeState::None)
-            .collect();
+            .count();
 
-        assert_eq!(destaked_validators.len(), 10);
+        assert_eq!(num_destaked_validators, 10);
     }
 
     #[test]
@@ -2616,13 +2607,13 @@ mod test {
             stake_percent: 60.0,
             validators: validator_classifications
                 .iter()
-                .map(|(id, _vc)| id.clone())
+                .map(|(id, _vc)| *id)
                 .collect(),
             // data_center_oversaturated_stake / num_validators_in_oversaturated_data_center == 60
             validators_stake: Some(
                 validator_classifications
                     .iter()
-                    .map(|(id, _vc)| (id.clone(), 60))
+                    .map(|(id, _vc)| (*id, 60))
                     .collect(),
             ),
         };
@@ -2642,7 +2633,7 @@ mod test {
             info: vec![data_center_oversaturated, data_center_not_oversaturated],
             by_identity: validator_classifications
                 .iter()
-                .map(|(id, vc)| (id.clone(), vc.current_data_center.as_ref().unwrap().clone()))
+                .map(|(id, vc)| (*id, vc.current_data_center.as_ref().unwrap().clone()))
                 .collect(),
         };
 
