@@ -166,6 +166,12 @@ fn process_apply(
         );
         return Ok(());
     }
+    if confirm {
+        println!(
+        "\nThank you for creating your on-chain registration for the Solana Foundation Delegation Program.\nAs a reminder, your registration is not complete until you signup on https://solana.foundation/delegation-program"
+        );
+    }
+
 
     let rent = rpc_client.get_minimum_balance_for_rent_exemption(Participant::get_packed_len())?;
     let participant: Box<dyn Signer> = Box::new(Keypair::new());
