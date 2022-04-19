@@ -1128,25 +1128,45 @@ fn get_self_stake_by_vote_account(
     Ok(self_stake_by_vote_account)
 }
 
-fn get_testnet_participation(config: &Config) -> BoxResult<Option<HashMap<Pubkey, bool>>> {
+// Returns HashMap<identity, whether the validator met the min_testnet_participation criterion>
+fn get_testnet_participation(
+    config: &Config,
+    current_epoch: &Epoch,
+) -> BoxResult<Option<HashMap<Pubkey, bool>>> {
     if let Some((n, m)) = &config.min_testnet_participation {
         assert_eq!(config.cluster, Cluster::MainnetBeta);
-        let latest_testnet_epoch_classification =
-            EpochClassification::load_latest(&config.cluster_db_path_for(Cluster::Testnet))?
-                .ok_or("Unable to load testnet epoch classification")?
-                .1
-                .into_current();
 
-        let testnet_participation = latest_testnet_epoch_classification
-            .validator_classifications
-            .unwrap()
-            .drain()
-            .filter_map(|(_, validator_classification)| {
-                validator_classification
-                    .participant
-                    .map(|participant| (participant, validator_classification.staked_for(*n, *m)))
-            })
-            .collect::<HashMap<_, _>>();
+        let db_testnet_path = &config.cluster_db_path_for(Cluster::Testnet);
+
+        let mut validator_stake_count: HashMap<Pubkey, usize> = HashMap::new();
+        let mut num_classified_epochs = 0;
+        let mut current_epoch = *current_epoch;
+
+        while num_classified_epochs < *m {
+            current_epoch -= 1;
+            if let Some(epoch_classification) =
+                EpochClassification::load_if_validators_classified(current_epoch, db_testnet_path)?
+            {
+                if let Some(validator_classifications) = epoch_classification
+                    .into_current()
+                    .validator_classifications
+                {
+                    num_classified_epochs += 1;
+                    for (_pubkey, validator_classification) in validator_classifications {
+                        let identity = validator_classification.identity;
+                        if validator_classification.stake_state != ValidatorStakeState::None {
+                            let count = *validator_stake_count.entry(identity).or_insert(0);
+                            validator_stake_count.insert(identity, count + 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        let testnet_participation: HashMap<Pubkey, bool> = validator_stake_count
+            .iter()
+            .map(|(pubkey, c)| (*pubkey, c >= n))
+            .collect();
 
         let num_poor_testnet_participants =
             testnet_participation.iter().filter(|(_, v)| !*v).count();
@@ -1182,7 +1202,7 @@ fn classify(
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
-    let testnet_participation = get_testnet_participation(config)?;
+    let testnet_participation = get_testnet_participation(config, &epoch)?;
 
     let data_centers = match data_center_info::get(config.cluster) {
         Ok(data_centers) => {

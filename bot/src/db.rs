@@ -18,7 +18,8 @@ use {
 
 #[derive(Default, Clone, Deserialize, Serialize)]
 pub struct ValidatorClassification {
-    pub identity: Pubkey, // Validator identity
+    pub identity: Pubkey,
+    // Validator identity
     pub vote_address: Pubkey,
 
     pub stake_state: ValidatorStakeState,
@@ -67,23 +68,6 @@ pub struct ValidatorClassification {
     // the end of a subsequent epoch
     // Note that we only started counting this around April/May 2022
     pub num_epochs_commission_increased_above_max: Option<u8>,
-}
-
-impl ValidatorClassification {
-    // Was the validator staked for at last `n` of the last `m` epochs?
-    pub fn staked_for(&self, n: usize, m: usize) -> bool {
-        self.stake_states
-            .as_ref()
-            .map(|stake_states| {
-                stake_states
-                    .iter()
-                    .take(m)
-                    .filter(|(stake_state, _)| *stake_state != ValidatorStakeState::None)
-                    .count()
-                    >= n
-            })
-            .unwrap_or_default()
-    }
 }
 
 pub type ValidatorClassificationByIdentity =
@@ -202,12 +186,9 @@ impl EpochClassification {
 
             if Self::exists(previous_epoch, &path) {
                 let previous_epoch_classification =
-                    Self::load(previous_epoch, &path)?.into_current();
+                    Self::load_if_validators_classified(previous_epoch, &path)?;
 
-                if previous_epoch_classification
-                    .validator_classifications
-                    .is_some()
-                {
+                if let Some(epoch_classification) = previous_epoch_classification {
                     info!(
                         "Previous EpochClassification found for epoch {} at {}",
                         previous_epoch,
@@ -215,7 +196,7 @@ impl EpochClassification {
                     );
                     return Ok(Some((
                         previous_epoch,
-                        Self::V1(previous_epoch_classification),
+                        Self::V1(epoch_classification.into_current()),
                     )));
                 } else {
                     info!(
@@ -227,36 +208,23 @@ impl EpochClassification {
         }
     }
 
-    // Loads the latest epoch that contains `Some(validator_classifications)`
-    // Returns `Ok(None)` if no epoch is available
-    pub fn load_latest<P>(path: P) -> Result<Option<(Epoch, Self)>, io::Error>
+    // Returns the EpochClassification for `epoch` at `path` if it exists and if it contains validator_classifications
+    // (that is, if stake was adjusted for validators for the epoch)
+    pub fn load_if_validators_classified<P>(
+        epoch: Epoch,
+        path: P,
+    ) -> Result<Option<Self>, io::Error>
     where
-        P: AsRef<Path>,
+        P: AsRef<Path> + Copy,
     {
-        let epoch_filename_regex = regex::Regex::new(r"^epoch-(\d+).yml$").unwrap();
+        if Self::exists(epoch, path) {
+            let epoch_classification = Self::load(epoch, &path)?.into_current();
 
-        let mut epochs = vec![];
-        if let Ok(entries) = fs::read_dir(&path) {
-            for entry in entries.filter_map(|entry| entry.ok()) {
-                if entry.path().is_file() {
-                    let filename = entry
-                        .file_name()
-                        .into_string()
-                        .unwrap_or_else(|_| String::new());
-
-                    if let Some(captures) = epoch_filename_regex.captures(&filename) {
-                        epochs.push(captures.get(1).unwrap().as_str().parse::<u64>().unwrap());
-                    }
-                }
+            if epoch_classification.validator_classifications.is_some() {
+                return Ok(Some(Self::V1(epoch_classification)));
             }
         }
-        epochs.sort_unstable();
-
-        if let Some(latest_epoch) = epochs.last() {
-            Self::load_previous(*latest_epoch + 1, path)
-        } else {
-            Ok(None)
-        }
+        Ok(None)
     }
 
     pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
@@ -271,27 +239,5 @@ impl EpochClassification {
         file.write_all(&serialized.into_bytes())?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_staked_for() {
-        let mut vc = ValidatorClassification::default();
-
-        assert!(!vc.staked_for(0, 0));
-        assert!(!vc.staked_for(1, 0));
-        assert!(!vc.staked_for(0, 1));
-
-        vc.stake_states = Some(vec![
-            (ValidatorStakeState::None, String::new()),
-            (ValidatorStakeState::Baseline, String::new()),
-            (ValidatorStakeState::Bonus, String::new()),
-        ]);
-        assert!(!vc.staked_for(3, 3));
-        assert!(vc.staked_for(2, 3));
     }
 }
