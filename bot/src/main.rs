@@ -202,6 +202,7 @@ impl std::fmt::Display for Cluster {
 pub struct Config {
     json_rpc_url: String,
     websocket_url: String,
+    participant_json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
     db_suffix: String,
@@ -284,14 +285,18 @@ pub struct Config {
     baseline_stake_amount_lamports: Option<u64>,
 }
 
+const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
+const DEFAULT_TESTNET_JSON_RPC_URL: &str = "https://api.testnet.solana.com";
+
 impl Config {
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self {
-            json_rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
+            json_rpc_url: DEFAULT_MAINNET_BETA_JSON_RPC_URL.to_string(),
             websocket_url: solana_cli_config::Config::compute_websocket_url(
-                "https://api.mainnet-beta.solana.com",
+                DEFAULT_MAINNET_BETA_JSON_RPC_URL,
             ),
+            participant_json_rpc_url: DEFAULT_MAINNET_BETA_JSON_RPC_URL.to_string(),
             cluster: Cluster::MainnetBeta,
             db_path: PathBuf::default(),
             db_suffix: "".to_string(),
@@ -368,6 +373,15 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .takes_value(true)
                 .validator(is_url)
                 .help("JSON RPC URL for the cluster")
+        )
+        .arg(
+            Arg::with_name("participant_json_rpc_url")
+                .long("participant-url")
+                .value_name("URL")
+                .takes_value(true)
+                .validator(is_url)
+                .default_value(DEFAULT_MAINNET_BETA_JSON_RPC_URL)
+                .help("JSON RPC URL for the participant cluster, typically a mainnet URL")
         )
         .arg(
             Arg::with_name("cluster")
@@ -735,8 +749,8 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     .unwrap();
 
     let default_json_rpc_url = match cluster {
-        Cluster::MainnetBeta => "http://api.mainnet-beta.solana.com",
-        Cluster::Testnet => "http://api.testnet.solana.com",
+        Cluster::MainnetBeta => DEFAULT_MAINNET_BETA_JSON_RPC_URL,
+        Cluster::Testnet => DEFAULT_TESTNET_JSON_RPC_URL,
     }
     .to_string();
 
@@ -777,10 +791,15 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     info!("using RPC URL: {}", json_rpc_url);
 
     let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
+    let participant_json_rpc_url = matches
+        .value_of("participant_json_rpc_url")
+        .unwrap()
+        .to_string();
 
     let mut config = Config {
         json_rpc_url,
         websocket_url,
+        participant_json_rpc_url,
         cluster,
         db_path,
         db_suffix,
@@ -1673,7 +1692,7 @@ fn main() -> BoxResult<()> {
 
     info!("Loading participants...");
     let participants = get_participants_with_state(
-        &RpcClient::new("https://api.mainnet-beta.solana.com".to_string()),
+        &RpcClient::new(config.participant_json_rpc_url.clone()),
         Some(ParticipantState::Approved),
     )?;
 
