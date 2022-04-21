@@ -26,6 +26,7 @@ fi
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
   --url ${URL:?}
+  --participant-url ${PARTICIPANT_URL:?}
   --cluster testnet
   --quality-block-producer-percentage 30
   --max-poor-block-producer-percentage 20
@@ -39,6 +40,7 @@ TESTNET_ARGS=(
 # shellcheck disable=SC2206
 MAINNET_BETA_ARGS=(
   --url ${URL:?}
+  --participant-url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
   --max-poor-block-producer-percentage 20
