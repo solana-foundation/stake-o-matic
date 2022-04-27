@@ -188,7 +188,7 @@ fn process_apply(
         Some(&config.default_signer.pubkey()),
     );
 
-    send_and_confirm_message(
+    let response = send_and_confirm_message(
         rpc_client,
         message,
         [
@@ -198,7 +198,16 @@ fn process_apply(
             config.default_signer.deref(),
         ],
         Some(rent),
-    )
+    );
+
+    if response.is_ok() {
+        println!(
+            "\nThank you for creating your on-chain registration for the Solana Foundation Delegation Program.\
+             \n\nAs a reminder, your registration is not complete until you sign up on https://solana.foundation/delegation-program"
+        );
+    }
+
+    response
 }
 
 fn process_withdraw(
@@ -702,10 +711,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 testnet_identity_signer,
                 confirm,
             )?;
-            println!(
-                "\nThank you for creating your on-chain registration for the Solana Foundation Delegation Program.
-                \nAs a reminder, your registration is not complete until you signup on https://solana.foundation/delegation-program"
-                );
         }
         ("status", Some(arg_matches)) => {
             let identity = pubkey_of(arg_matches, "identity").unwrap();
