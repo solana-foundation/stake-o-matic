@@ -1416,6 +1416,17 @@ fn classify(
                     0
                 });
 
+            // if the commission was below max_commission last epoch, and is above max_commission this epoch
+            let commission_increased_above_max = commission_at_end_of_epoch > config.max_commission
+                && previous_classification
+                    .and_then(|pc| pc.commission)
+                    .map_or(false, |commission| commission < config.max_commission);
+
+            let num_epochs_commission_increased_above_max = previous_classification
+                .and_then(|vc| vc.num_epochs_commission_increased_above_max)
+                .unwrap_or(0)
+                + (if commission_increased_above_max { 1 } else { 0 });
+
             let mut previous_data_center_residency = previous_classification
                 .and_then(|vc| vc.data_center_residency.clone())
                 .unwrap_or_default();
@@ -1484,12 +1495,12 @@ fn classify(
                 infrastructure_concentration_destake_reason
             {
                 (ValidatorStakeState::None, reason)
-            } else if num_epochs_max_commission_exceeded > 1 {
+            } else if num_epochs_commission_increased_above_max > 1 {
                 (
                     ValidatorStakeState::None,
                     format!(
-                        "Commission too high in {} epochs",
-                        num_epochs_max_commission_exceeded
+                        "Commission increased above max_commission for {} epochs. Permanently destaked.",
+                        num_epochs_commission_increased_above_max
                     ),
                 )
             } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
@@ -1633,6 +1644,9 @@ fn classify(
                     new_data_center_residency: Some(new_validator),
                     release_version: release_versions.get(&identity).cloned(),
                     num_epochs_max_commission_exceeded: Some(num_epochs_max_commission_exceeded),
+                    num_epochs_commission_increased_above_max: Some(
+                        num_epochs_commission_increased_above_max,
+                    ),
                 },
             );
         }

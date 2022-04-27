@@ -62,6 +62,11 @@ pub struct ValidatorClassification {
     // The number of times the validator has exceeded the max commission
     // Note we only started counting this around Jan 2022; epochs prior to Jan 2022 are not counted
     pub num_epochs_max_commission_exceeded: Option<u8>,
+
+    // The number of times the validator was below max_commission at the end of one epoch, then above max_commission at
+    // the end of a subsequent epoch
+    // Note that we only started counting this around April/May 2022
+    pub num_epochs_commission_increased_above_max: Option<u8>,
 }
 
 impl ValidatorClassification {
