@@ -1416,7 +1416,8 @@ fn classify(
                     0
                 });
 
-            // if the commission was below max_commission last epoch, and is above max_commission this epoch
+            // if the commission was below max_commission at the beginning of the last epoch, and is
+            // above max_commission at the beginning of the current epoch
             let commission_increased_above_max = commission_at_end_of_epoch > config.max_commission
                 && previous_classification
                     .and_then(|pc| pc.commission)
