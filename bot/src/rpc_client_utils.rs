@@ -263,7 +263,7 @@ pub fn get_vote_account_info(
     Ok((
         latest_vote_account_info
             .values()
-            .map(
+            .filter_map(
                 |RpcVoteAccountInfo {
                      commission,
                      node_pubkey,
@@ -272,22 +272,20 @@ pub fn get_vote_account_info(
                      activated_stake,
                      ..
                  }| {
-                    let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
-                        epoch_credits.iter().find(|ec| ec.0 == epoch)
-                    {
-                        credits.saturating_sub(*prev_credits)
-                    } else {
-                        0
-                    };
-                    let identity = Pubkey::from_str(node_pubkey).unwrap();
-                    let vote_address = Pubkey::from_str(vote_pubkey).unwrap();
+                    match epoch_credits.iter().find(|ec| ec.0 == epoch) {
+                        Some((_last_epoch, credits, prev_credits)) => {
+                            let identity = Pubkey::from_str(node_pubkey).unwrap();
+                            let vote_address = Pubkey::from_str(vote_pubkey).unwrap();
 
-                    VoteAccountInfo {
-                        identity,
-                        vote_address,
-                        active_stake: *activated_stake,
-                        commission: *commission,
-                        epoch_credits,
+                            Some(VoteAccountInfo {
+                                identity,
+                                vote_address,
+                                active_stake: *activated_stake,
+                                commission: *commission,
+                                epoch_credits: credits.saturating_sub(*prev_credits),
+                            })
+                        }
+                        None => None,
                     }
                 },
             )
