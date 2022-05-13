@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use {
     indicatif::{ProgressBar, ProgressStyle},
     log::*,
@@ -272,20 +273,37 @@ pub fn get_vote_account_info(
                      activated_stake,
                      ..
                  }| {
-                    match epoch_credits.iter().find(|ec| ec.0 == epoch) {
-                        Some((_last_epoch, credits, prev_credits)) => {
-                            let identity = Pubkey::from_str(node_pubkey).unwrap();
-                            let vote_address = Pubkey::from_str(vote_pubkey).unwrap();
+                    let credits_last_four_epochs: u64 = epoch_credits
+                        .iter()
+                        .filter_map(|(credit_epoch, credits, prev_credits)| {
+                            if credit_epoch > (epoch - 4).borrow() {
+                                Some(credits - prev_credits)
+                            } else {
+                                None
+                            }
+                        })
+                        .sum();
 
-                            Some(VoteAccountInfo {
-                                identity,
-                                vote_address,
-                                active_stake: *activated_stake,
-                                commission: *commission,
-                                epoch_credits: credits.saturating_sub(*prev_credits),
-                            })
-                        }
-                        None => None,
+                    if credits_last_four_epochs > 0 {
+                        let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
+                            epoch_credits.iter().find(|ec| ec.0 == epoch)
+                        {
+                            credits.saturating_sub(*prev_credits)
+                        } else {
+                            0
+                        };
+                        let identity = Pubkey::from_str(node_pubkey).unwrap();
+                        let vote_address = Pubkey::from_str(vote_pubkey).unwrap();
+
+                        Some(VoteAccountInfo {
+                            identity,
+                            vote_address,
+                            active_stake: *activated_stake,
+                            commission: *commission,
+                            epoch_credits,
+                        })
+                    } else {
+                        None
                     }
                 },
             )
