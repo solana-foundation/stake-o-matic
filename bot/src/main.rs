@@ -1,12 +1,13 @@
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
-use chrono::{Duration as ChronoDuration, Utc};
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
+    chrono::{Duration as ChronoDuration, Utc},
     clap::{
         crate_description, crate_name, value_t, value_t_or_exit, values_t, App, AppSettings, Arg,
         ArgMatches, SubCommand,
     },
     log::*,
+    openssl::rsa::{Padding, Rsa},
     serde::{Deserialize, Serialize},
     solana_clap_utils::{
         input_parsers::{keypair_of, lamports_of_sol, pubkey_of},
@@ -33,9 +34,9 @@ use {
     solana_vote_program::vote_state::VoteState,
     std::{
         collections::{HashMap, HashSet},
-        error,
+        error, fs,
         fs::File,
-        io::Write,
+        io::{Read, Write},
         path::PathBuf,
         process,
         str::FromStr,
@@ -262,6 +263,9 @@ pub struct Config {
     /// Minimum amount of lamports a validator must stake on itself to be eligible for a delegation
     min_self_stake_lamports: u64,
 
+    /// identities of validators who don't have to meet the min_self_stake requirement
+    min_self_stake_exceptions: Vec<Pubkey>,
+
     /// Validators with more than this amount of active stake are not eligible for a delegation
     max_active_stake_lamports: u64,
 
@@ -316,6 +320,8 @@ impl Config {
             bad_cluster_average_skip_rate: 50,
             min_epoch_credit_percentage_of_average: 50,
             min_self_stake_lamports: 0,
+            // TODO: this should be empty
+            min_self_stake_exceptions: vec![],
             max_active_stake_lamports: u64::MAX,
             enforce_min_self_stake: false,
             enforce_testnet_participation: false,
@@ -583,6 +589,21 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .help("Enforce the minimum self-stake requirement")
         )
         .arg(
+            Arg::with_name("min_self_stake_exceptions_file")
+                .long("min-self-stake-exceptions-file")
+                .takes_value(true)
+                .value_name("YAML_PATH")
+                .help("Validators in this yaml file do not have to have min self stake")
+        )
+        // NOTE: This encryption scheme really only provides obfuscation. If someone cares about people knowing their validator is in the exception file, their validator should not be placed in the file.
+        .arg(
+            Arg::with_name("min_self_stake_exceptions_key")
+                .long("min-self-stake-exceptions-key")
+                .takes_value(true)
+                .value_name("KEY")
+                .help("OpenSSL RSA private key (b64 encoded der), to decrypt exception list (not super secure...)")
+        )
+        .arg(
             Arg::with_name("min_testnet_participation")
                 .long("min-testnet-participation")
                 .value_name("N M")
@@ -704,6 +725,42 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
 
     let enforce_min_self_stake = matches.is_present("enforce_min_self_stake");
     let min_self_stake_lamports = lamports_of_sol(&matches, "min_self_stake").unwrap();
+
+    let min_self_stake_exceptions = match matches.value_of("min_self_stake_exceptions_file") {
+        Some(filename) => {
+            let mut file = File::open(filename)?;
+
+            let mut list: Vec<String> = match matches.value_of("min_self_stake_exceptions_key") {
+                Some(key_str) => {
+                    info!("Attempting to decrypt {:?}", filename);
+
+                    let metadata = fs::metadata(&filename).expect("unable to read metadata");
+                    let mut file_buffer = vec![0; metadata.len() as usize];
+                    file.read_exact(&mut file_buffer)?;
+
+                    let key = base64::decode(key_str)?;
+                    let rsa = Rsa::private_key_from_der(&*key)?;
+                    let mut out_buffer: Vec<u8> = vec![0; rsa.size() as usize];
+                    let _ = rsa
+                        .private_decrypt(&*file_buffer, &mut out_buffer, Padding::PKCS1)
+                        .unwrap();
+                    let text = String::from_utf8(out_buffer)?;
+                    info!("File decrypted");
+
+                    serde_yaml::from_str(&text)?
+                }
+                _ => serde_yaml::from_reader(file)?,
+            };
+
+            list.drain(..)
+                .filter_map(|ref s| Pubkey::from_str(s).ok())
+                .collect()
+        }
+        _ => vec![],
+    };
+
+    debug!("min_self_stake_exceptions: {:?}", min_self_stake_exceptions);
+
     let max_active_stake_lamports = lamports_of_sol(&matches, "max_active_stake").unwrap();
 
     let enforce_testnet_participation = matches.is_present("enforce_testnet_participation");
@@ -819,6 +876,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         bad_cluster_average_skip_rate,
         min_epoch_credit_percentage_of_average,
         min_self_stake_lamports,
+        min_self_stake_exceptions,
         max_active_stake_lamports,
         enforce_min_self_stake,
         enforce_testnet_participation,
@@ -1489,12 +1547,6 @@ fn classify(
                     }
                 });
 
-            let insufficent_self_stake_msg =
-                format!("Insufficient self stake: {}", Sol(self_stake));
-            if !config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
-                validator_notes.push(insufficent_self_stake_msg.clone());
-            }
-
             let insufficent_testnet_participation =
                 testnet_participation
                     .as_ref()
@@ -1524,7 +1576,13 @@ fn classify(
                         num_epochs_commission_increased_above_max
                     ),
                 )
-            } else if config.enforce_min_self_stake && self_stake < config.min_self_stake_lamports {
+            } else if config.enforce_min_self_stake
+                && self_stake < config.min_self_stake_lamports
+                && !config.min_self_stake_exceptions.contains(&identity)
+            {
+                let insufficent_self_stake_msg =
+                    format!("Insufficient self stake: {}", Sol(self_stake));
+                validator_notes.push(insufficent_self_stake_msg.clone());
                 (ValidatorStakeState::None, insufficent_self_stake_msg)
             } else if active_stake > config.max_active_stake_lamports {
                 (
