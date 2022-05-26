@@ -593,15 +593,13 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .long("min-self-stake-exceptions-file")
                 .takes_value(true)
                 .value_name("YAML_PATH")
-                .help("Validators in this yaml file do not have to have min self stake")
         )
-        // NOTE: This encryption scheme really only provides obfuscation. If someone cares about people knowing their validator is in the exception file, their validator should not be placed in the file.
         .arg(
             Arg::with_name("min_self_stake_exceptions_key")
                 .long("min-self-stake-exceptions-key")
                 .takes_value(true)
                 .value_name("KEY")
-                .help("OpenSSL RSA private key (b64 encoded der), to decrypt exception list (not super secure...)")
+                .help("Private key")
         )
         .arg(
             Arg::with_name("min_testnet_participation")
