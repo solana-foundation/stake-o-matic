@@ -4,7 +4,9 @@
 #
 set -ex
 
-"$(dirname "$0")"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
+DIR="$(dirname "$0")"
+
+"$DIR"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
 
 if [[ -n $FOLLOWER ]]; then
   REQUIRE_CLASSIFICATION="--require-classification"
@@ -54,6 +56,8 @@ MAINNET_BETA_ARGS=(
   $TESTNET_PARTICIPATION
   --enforce-testnet-participation
   --enforce-min-self-stake
+  --min-self-stake-exceptions-file ${DIR:?}/assets/exclude.yml.enc
+  --min-self-stake-exceptions-key ${SELF_STAKE_EXCEPTIONS_KEY:?}
 )
 
 # shellcheck disable=SC2206
