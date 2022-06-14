@@ -13,7 +13,7 @@ name = "solana-foundation-delegation-program"
 path = "src/main.rs"
 
 [dependencies]
-clap = "2.33.3"
+clap = "3.2.1"
 solana-account-decoder = "=1.7.11"
 solana-clap-utils = "=1.7.11"
 solana-cli-config = "=1.7.11"
