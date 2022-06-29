@@ -34,7 +34,7 @@ TESTNET_ARGS=(
   --max-poor-block-producer-percentage 20
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
-  --infrastructure-concentration-affects destake-new
+  --infrastructure-concentration-affects destake-overflow
   --min-release-version 1.10.25
   --max-old-release-version-percentage 20
 )
@@ -51,7 +51,7 @@ MAINNET_BETA_ARGS=(
   --max-commission 10
   --min-release-version 1.10.25
   --max-infrastructure-concentration 10
-  --infrastructure-concentration-affects destake-new
+  --infrastructure-concentration-affects destake-overflow
   --min-self-stake 100
   $TESTNET_PARTICIPATION
   --enforce-testnet-participation
