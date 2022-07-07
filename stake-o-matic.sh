@@ -37,6 +37,8 @@ TESTNET_ARGS=(
   --infrastructure-concentration-affects destake-new
   --min-release-version 1.10.27
   --max-old-release-version-percentage 20
+  --performance-db-url ${PERFORMANCE_DB_URL:?}
+  --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
 )
 
 # shellcheck disable=SC2206
@@ -58,6 +60,8 @@ MAINNET_BETA_ARGS=(
   --enforce-min-self-stake
   --min-self-stake-exceptions-file ${DIR:?}/assets/exclude.yml.enc
   --min-self-stake-exceptions-key ${SELF_STAKE_EXCEPTIONS_KEY:?}
+  --performance-db-url ${PERFORMANCE_DB_URL:?}
+  --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
 )
 
 # shellcheck disable=SC2206

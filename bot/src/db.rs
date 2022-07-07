@@ -68,6 +68,14 @@ pub struct ValidatorClassification {
     // the end of a subsequent epoch
     // Note that we only started counting this around April/May 2022
     pub num_epochs_commission_increased_above_max: Option<u8>,
+
+    // Whether the validator reported stats during the epoch
+    // If false, String gives the reason for passing or failing
+    pub self_reported_metrics: Option<(bool, String)>,
+
+    /// Whether the validator meets the requirements for self-reporting metrics, and the reason why
+    /// Note that this will be set whether self-reported metrics are required or not
+    pub self_reported_metrics_summary: Option<(bool, String)>,
 }
 
 pub type ValidatorClassificationByIdentity =
@@ -169,6 +177,7 @@ impl EpochClassification {
 
     // Loads the first epoch older than `epoch` that contains `Some(validator_classifications)`.
     // Returns `Ok(None)` if no previous epochs are available
+    // Note that the epoch returned is the epoch _after_ the epoch being evaluated in the file
     pub fn load_previous<P>(epoch: Epoch, path: P) -> Result<Option<(Epoch, Self)>, io::Error>
     where
         P: AsRef<Path>,
