@@ -1,4 +1,5 @@
 use crate::data_center_info::{DataCenterInfo, DataCenters};
+use crate::performance_db_utils::get_reported_performance_metrics;
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
@@ -52,6 +53,7 @@ mod data_center_info;
 mod db;
 mod generic_stake_pool;
 mod noop_stake_pool;
+mod performance_db_utils;
 mod rpc_client_utils;
 mod stake_pool;
 mod stake_pool_v0;
@@ -243,6 +245,10 @@ pub struct Config {
 
     /// Stake amount earned for baseline
     baseline_stake_amount_lamports: Option<u64>,
+
+    /// URL and token for the performance influxdb
+    performance_db_url: Option<String>,
+    performance_db_token: Option<String>,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -283,6 +289,8 @@ impl Config {
             enforce_testnet_participation: false,
             min_testnet_participation: None,
             baseline_stake_amount_lamports: None,
+            performance_db_url: None,
+            performance_db_token: None,
         }
     }
 
@@ -576,6 +584,20 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .help("Enforce the minimum testnet participation requirement.\n
                        This setting is ignored if the --cluster is not `mainnet-beta`")
         )
+        .arg(
+            Arg::with_name("performance_db_url")
+                .long("performance-db-url")
+                .takes_value(true)
+                .value_name("URL")
+                .help("URL of InfluxDB used to collect self-reported performance data")
+        )
+        .arg(
+            Arg::with_name("performance_db_token")
+                .long("performance-db-token")
+                .takes_value(true)
+                .value_name("TOKEN")
+                .help("Token used to authenticate for InfluxDB connection")
+        )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
                 .arg(
@@ -759,6 +781,9 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     )
     .unwrap();
 
+    let performance_db_url = matches.value_of("performance_db_url").map(str::to_string);
+    let performance_db_token = matches.value_of("performance_db_token").map(str::to_string);
+
     let default_json_rpc_url = match cluster {
         Cluster::MainnetBeta => DEFAULT_MAINNET_BETA_JSON_RPC_URL,
         Cluster::Testnet => DEFAULT_TESTNET_JSON_RPC_URL,
@@ -836,6 +861,8 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         enforce_testnet_participation,
         min_testnet_participation,
         baseline_stake_amount_lamports: None,
+        performance_db_url,
+        performance_db_token,
     };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
@@ -1211,10 +1238,18 @@ fn classify(
     validator_list: &ValidatorList,
     identity_to_participant: &IdentityToParticipant,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
+    all_participants: HashMap<Pubkey, Participant>,
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
     let testnet_participation = get_testnet_participation(config, &epoch)?;
+
+    let performance_reporting = get_reported_performance_metrics(
+        config,
+        &config.cluster,
+        validator_list,
+        &all_participants,
+    )?;
 
     let data_centers = match data_center_info::get(config.cluster) {
         Ok(data_centers) => {
@@ -1500,6 +1535,11 @@ fn classify(
                         num_epochs_commission_increased_above_max
                     ),
                 )
+            } else if let Some(Some(poor_reporter_reason)) = performance_reporting
+                .as_ref()
+                .map(|list| list.get(&identity))
+            {
+                (ValidatorStakeState::None, poor_reporter_reason.clone())
             } else if config.enforce_min_self_stake
                 && self_stake < config.min_self_stake_lamports
                 && !config.min_self_stake_exceptions.contains(&identity)
@@ -1881,17 +1921,30 @@ fn main() -> BoxResult<()> {
     info!("Loading participants...");
     let participants = get_participants_with_state(
         &RpcClient::new(config.participant_json_rpc_url.clone()),
-        Some(ParticipantState::Approved),
+        None,
     )?;
+
+    let (approved_participants, non_rejected_validators) = participants.iter().fold(
+        (HashMap::new(), HashMap::new()),
+        |(mut approved_validators, mut not_rejected_validators), (pubkey, participant)| {
+            if participant.state == ParticipantState::Approved {
+                approved_validators.insert(*pubkey, participant.clone());
+            };
+            if participant.state != ParticipantState::Rejected {
+                not_rejected_validators.insert(*pubkey, participant.clone());
+            };
+            (approved_validators, not_rejected_validators)
+        },
+    );
 
     let (mainnet_identity_to_participant, testnet_identity_to_participant): (
         IdentityToParticipant,
         IdentityToParticipant,
-    ) = participants
+    ) = approved_participants
         .iter()
         .map(
             |(
-                participant,
+                participant_pk,
                 Participant {
                     mainnet_identity,
                     testnet_identity,
@@ -1899,25 +1952,33 @@ fn main() -> BoxResult<()> {
                 },
             )| {
                 (
-                    (*mainnet_identity, *participant),
-                    (*testnet_identity, *participant),
+                    (*mainnet_identity, *participant_pk),
+                    (*testnet_identity, *participant_pk),
                 )
             },
         )
         .unzip();
 
-    info!("{} participants loaded", participants.len());
-    assert!(participants.len() > 450); // Hard coded sanity check...
+    info!("{} participants loaded", approved_participants.len());
+    assert!(approved_participants.len() > 450); // Hard coded sanity check...
 
     let (validator_list, identity_to_participant) = match config.cluster {
         Cluster::MainnetBeta => (
             mainnet_identity_to_participant.keys().cloned().collect(),
             mainnet_identity_to_participant,
         ),
-        Cluster::Testnet => (
-            validator_list::testnet_validators().into_iter().collect(),
-            testnet_identity_to_participant,
-        ),
+        Cluster::Testnet => {
+            let approved_for_validator_list = validator_list::testnet_validators();
+
+            (
+                non_rejected_validators
+                    .iter()
+                    .map(|(_k, v)| v.testnet_identity)
+                    .filter(|pk| approved_for_validator_list.contains(pk))
+                    .collect(),
+                testnet_identity_to_participant,
+            )
+        }
     };
 
     let notifier = if config.dry_run {
@@ -1962,6 +2023,7 @@ fn main() -> BoxResult<()> {
                     previous_epoch_classification
                         .validator_classifications
                         .as_ref(),
+                    approved_participants,
                 )?,
                 true,
                 true,
