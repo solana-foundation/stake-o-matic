@@ -1,5 +1,9 @@
 use crate::data_center_info::{DataCenterInfo, DataCenters};
+use crate::performance_db_utils::{
+    get_reported_performance_metrics, NUM_SAMPLED_REPORTING_EPOCHS, SUCCESS_MIN_PERCENT,
+};
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
+use crate::Cluster::{MainnetBeta, Testnet};
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
     chrono::{Duration as ChronoDuration, Utc},
@@ -52,6 +56,7 @@ mod data_center_info;
 mod db;
 mod generic_stake_pool;
 mod noop_stake_pool;
+mod performance_db_utils;
 mod rpc_client_utils;
 mod stake_pool;
 mod stake_pool_v0;
@@ -243,6 +248,13 @@ pub struct Config {
 
     /// Stake amount earned for baseline
     baseline_stake_amount_lamports: Option<u64>,
+
+    /// Whether to require that validators report their performance metrics
+    require_performance_metrics_reporting: bool,
+
+    /// URL and token for the performance metrics  influxdb
+    performance_db_url: Option<String>,
+    performance_db_token: Option<String>,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -283,6 +295,9 @@ impl Config {
             enforce_testnet_participation: false,
             min_testnet_participation: None,
             baseline_stake_amount_lamports: None,
+            performance_db_url: None,
+            performance_db_token: None,
+            require_performance_metrics_reporting: false,
         }
     }
 
@@ -576,6 +591,26 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .help("Enforce the minimum testnet participation requirement.\n
                        This setting is ignored if the --cluster is not `mainnet-beta`")
         )
+        .arg(
+            Arg::with_name("require_performance_metrics_reporting")
+                .long("require-performance-metrics-reporting")
+                .takes_value(false)
+                .help("Require that validators report their performance metrics`")
+        )
+        .arg(
+            Arg::with_name("performance_db_url")
+                .long("performance-db-url")
+                .takes_value(true)
+                .value_name("URL")
+                .help("URL of InfluxDB used to collect self-reported performance data")
+        )
+        .arg(
+            Arg::with_name("performance_db_token")
+                .long("performance-db-token")
+                .takes_value(true)
+                .value_name("TOKEN")
+                .help("Token used to authenticate for InfluxDB connection")
+        )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
                 .arg(
@@ -759,6 +794,12 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     )
     .unwrap();
 
+    let require_performance_metrics_reporting =
+        matches.is_present("require_performance_metrics_reporting");
+
+    let performance_db_url = matches.value_of("performance_db_url").map(str::to_string);
+    let performance_db_token = matches.value_of("performance_db_token").map(str::to_string);
+
     let default_json_rpc_url = match cluster {
         Cluster::MainnetBeta => DEFAULT_MAINNET_BETA_JSON_RPC_URL,
         Cluster::Testnet => DEFAULT_TESTNET_JSON_RPC_URL,
@@ -836,6 +877,9 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         enforce_testnet_participation,
         min_testnet_participation,
         baseline_stake_amount_lamports: None,
+        require_performance_metrics_reporting,
+        performance_db_url,
+        performance_db_token,
     };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
@@ -1211,6 +1255,7 @@ fn classify(
     validator_list: &ValidatorList,
     identity_to_participant: &IdentityToParticipant,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
+    all_participants: HashMap<Pubkey, Participant>,
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
@@ -1396,6 +1441,151 @@ fn classify(
         let all_commission_changes =
             validators_app_client.get_all_commision_changes_since(five_days_ago)?;
 
+        let performance_metrics_for_this_epoch: Option<HashMap<Pubkey, (bool, String)>> =
+            if let (Some(performance_db_url), Some(performance_db_token)) =
+                (&config.performance_db_url, &config.performance_db_token)
+            {
+                Some(get_reported_performance_metrics(
+                    performance_db_url,
+                    performance_db_token,
+                    &config.cluster,
+                    rpc_client,
+                    &(epoch - 1),
+                    &all_participants,
+                )?)
+            } else {
+                None
+            };
+
+        let mut reporting_counts: HashMap<Pubkey, HashMap<Epoch, bool>> = HashMap::new();
+
+        if let Some(metrics) = performance_metrics_for_this_epoch.as_ref() {
+            metrics.iter().for_each(|(pk, (passed, _b))| {
+                reporting_counts.insert(*pk, HashMap::from([(epoch, *passed)]));
+            })
+        };
+
+        debug!("reporting_counts: {:?}", reporting_counts);
+
+        let mut number_sampled_epochs: u64 = 0;
+        let mut number_loops = 0;
+
+        while number_sampled_epochs < NUM_SAMPLED_REPORTING_EPOCHS as u64 {
+            let reporting_epoch = epoch - 2 - number_loops;
+
+            let mut found_self_reporting = false;
+            // Fetch from wiki repo
+            if let Some(epoch_classification) = EpochClassification::load_if_validators_classified(
+                reporting_epoch,
+                &config.cluster_db_path(),
+            )? {
+                epoch_classification
+                    .into_current()
+                    .validator_classifications
+                    .unwrap()
+                    .iter()
+                    .for_each(|(pk, classification)| {
+                        found_self_reporting = true;
+                        if let Some((passed, _reason)) =
+                            classification.self_reported_metrics.as_ref()
+                        {
+                            let entry = reporting_counts.entry(*pk).or_insert_with(HashMap::new);
+                            entry.insert(reporting_epoch, *passed);
+                        }
+                    });
+
+                number_sampled_epochs += 1;
+            }
+            if !found_self_reporting {
+                // self-reporting data only goes back so far. If no self-reporting data was found, stop looping
+                break;
+            }
+            number_loops += 1;
+        }
+
+        // Map of poor reporters
+        let mut poor_reporters: HashMap<Pubkey, String> = HashMap::new();
+
+        // if mainnet, get list of validators that have been poor reporters on testnet
+        let poor_testnet_reporters: Option<Vec<Pubkey>> = if config.cluster == MainnetBeta {
+            let testnet_rpc_client = RpcClient::new_with_timeout(
+                DEFAULT_TESTNET_JSON_RPC_URL.into(), // TODO: should be configurable
+                Duration::from_secs(180),
+            );
+            let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
+            Some(
+                EpochClassification::load_previous(
+                    testnet_epoch,
+                    &config.cluster_db_path_for(Testnet),
+                )?
+                .map(|(_epoch, epoch_classification)| epoch_classification)
+                .unwrap()
+                .into_current()
+                .validator_classifications
+                .unwrap()
+                .iter()
+                .filter_map(|(pk, vc)| {
+                    vc.self_reported_metrics_summary
+                        .as_ref()
+                        .and_then(|(pass, _expl)| {
+                            if *pass {
+                                None
+                            } else {
+                                // get corresponding mainnet validator pk
+                                let mainnet_pk = all_participants
+                                    .iter()
+                                    .find(|(_pk, participant)| participant.testnet_identity == *pk)
+                                    .unwrap()
+                                    .1
+                                    .mainnet_identity;
+                                Some(mainnet_pk)
+                            }
+                        })
+                })
+                .collect(),
+            )
+        } else {
+            None
+        };
+
+        let performance_reporting: HashMap<Pubkey, (bool, String)> = reporting_counts
+            .iter()
+            .map(|(pk, reports)| {
+                let failed_epochs: Vec<&Epoch> = reports
+                    .iter()
+                    .filter_map(|(epoch, passed)| if !passed { Some(epoch) } else { None })
+                    .collect();
+
+                let num_passed = reports.len() - failed_epochs.len();
+
+                let percent_passed = num_passed as f32 / reports.len() as f32;
+
+                if percent_passed >= SUCCESS_MIN_PERCENT {
+                    let pass_reason = format!(
+                        "Reported correctly in {:?}/{:?} epochs",
+                        num_passed,
+                        reports.len()
+                    );
+                    (*pk, (true, pass_reason))
+                } else if poor_testnet_reporters
+                    .as_ref()
+                    .map(|ptr| ptr.contains(pk))
+                    .is_some()
+                {
+                    (*pk, (false, "Poor reporting on testnet".into()))
+                } else {
+                    let failure_reason = format!(
+                        "Only reported correctly in {:?}/{:?} epochs. Non-reporting epochs: {:?}",
+                        num_passed,
+                        reports.len(),
+                        failed_epochs.iter().map(|v| v.to_string()).join(", ")
+                    );
+                    poor_reporters.insert(*pk, failure_reason.clone());
+                    (*pk, (false, failure_reason))
+                }
+            })
+            .collect();
+
         for VoteAccountInfo {
             identity,
             vote_address,
@@ -1499,6 +1689,13 @@ fn classify(
                         "Commission increased above max_commission for {} epochs. Permanently destaked.",
                         num_epochs_commission_increased_above_max
                     ),
+                )
+            } else if config.require_performance_metrics_reporting
+                && poor_reporters.contains_key(&identity)
+            {
+                (
+                    ValidatorStakeState::None,
+                    poor_reporters.get(&identity).unwrap().clone(),
                 )
             } else if config.enforce_min_self_stake
                 && self_stake < config.min_self_stake_lamports
@@ -1645,6 +1842,12 @@ fn classify(
                     num_epochs_commission_increased_above_max: Some(
                         num_epochs_commission_increased_above_max,
                     ),
+                    self_reported_metrics: performance_metrics_for_this_epoch.as_ref().and_then(
+                        |metrics| metrics.get(&identity).and_then(|v| Option::from(v.clone())),
+                    ),
+                    self_reported_metrics_summary: performance_reporting
+                        .get(&identity)
+                        .and_then(|v| Option::from(v.clone())),
                 },
             );
         }
@@ -1879,19 +2082,38 @@ fn main() -> BoxResult<()> {
     let (config, rpc_client, mut stake_pool) = get_config()?;
 
     info!("Loading participants...");
-    let participants = get_participants_with_state(
+    let all_participants = get_participants_with_state(
         &RpcClient::new(config.participant_json_rpc_url.clone()),
-        Some(ParticipantState::Approved),
+        None,
     )?;
+
+    let (approved_participants, non_rejected_participants) = all_participants.iter().fold(
+        (HashMap::new(), HashMap::new()),
+        |(mut approved_validators, mut not_rejected_validators), (pubkey, participant)| {
+            if participant.state == ParticipantState::Approved {
+                approved_validators.insert(*pubkey, participant.clone());
+            };
+            if participant.state != ParticipantState::Rejected {
+                not_rejected_validators.insert(*pubkey, participant.clone());
+            };
+            (approved_validators, not_rejected_validators)
+        },
+    );
+
+    debug!("{:?} approved participants", approved_participants.len());
+    debug!(
+        "{:?} non-rejected participants",
+        non_rejected_participants.len()
+    );
 
     let (mainnet_identity_to_participant, testnet_identity_to_participant): (
         IdentityToParticipant,
         IdentityToParticipant,
-    ) = participants
+    ) = approved_participants
         .iter()
         .map(
             |(
-                participant,
+                participant_pk,
                 Participant {
                     mainnet_identity,
                     testnet_identity,
@@ -1899,26 +2121,35 @@ fn main() -> BoxResult<()> {
                 },
             )| {
                 (
-                    (*mainnet_identity, *participant),
-                    (*testnet_identity, *participant),
+                    (*mainnet_identity, *participant_pk),
+                    (*testnet_identity, *participant_pk),
                 )
             },
         )
         .unzip();
 
-    info!("{} participants loaded", participants.len());
-    assert!(participants.len() > 450); // Hard coded sanity check...
+    info!("{} participants loaded", approved_participants.len());
+    assert!(approved_participants.len() > 450); // Hard coded sanity check...
 
-    let (validator_list, identity_to_participant) = match config.cluster {
-        Cluster::MainnetBeta => (
-            mainnet_identity_to_participant.keys().cloned().collect(),
-            mainnet_identity_to_participant,
-        ),
-        Cluster::Testnet => (
-            validator_list::testnet_validators().into_iter().collect(),
-            testnet_identity_to_participant,
-        ),
-    };
+    let (validator_list, identity_to_participant): (ValidatorList, HashMap<Pubkey, Pubkey>) =
+        match config.cluster {
+            Cluster::MainnetBeta => (
+                mainnet_identity_to_participant.keys().cloned().collect(),
+                mainnet_identity_to_participant,
+            ),
+            Cluster::Testnet => {
+                let approved_for_validator_list = validator_list::testnet_validators();
+
+                (
+                    non_rejected_participants
+                        .iter()
+                        .map(|(_k, v)| v.testnet_identity)
+                        .filter(|pk| approved_for_validator_list.contains(pk))
+                        .collect(),
+                    testnet_identity_to_participant,
+                )
+            }
+        };
 
     let notifier = if config.dry_run {
         Notifier::new("DRYRUN")
@@ -1962,6 +2193,7 @@ fn main() -> BoxResult<()> {
                     previous_epoch_classification
                         .validator_classifications
                         .as_ref(),
+                    non_rejected_participants,
                 )?,
                 true,
                 true,
@@ -2074,6 +2306,7 @@ fn main() -> BoxResult<()> {
 }
 
 fn generate_csv(epoch: Epoch, config: &Config) -> BoxResult<()> {
+    info!("generate_csv()");
     let mut list = vec![(
         epoch,
         EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
