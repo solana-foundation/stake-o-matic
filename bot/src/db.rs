@@ -128,6 +128,7 @@ pub struct EpochConfig {
     pub enforce_testnet_participation: Option<bool>,
     pub min_testnet_participation: Option<(/*n:*/ usize, /*m:*/ usize)>,
     pub baseline_stake_amount_lamports: Option<u64>,
+    pub require_performance_metrics_reporting: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

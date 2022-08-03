@@ -39,6 +39,7 @@ TESTNET_ARGS=(
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
+  --require-performance-metrics-reporting
 )
 
 # shellcheck disable=SC2206
@@ -62,6 +63,7 @@ MAINNET_BETA_ARGS=(
   --min-self-stake-exceptions-key ${SELF_STAKE_EXCEPTIONS_KEY:?}
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
+  --require-performance-metrics-reporting
 )
 
 # shellcheck disable=SC2206
