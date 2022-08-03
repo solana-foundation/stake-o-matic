@@ -1901,6 +1901,7 @@ fn classify(
         enforce_testnet_participation: Some(config.enforce_testnet_participation),
         min_testnet_participation: config.min_testnet_participation,
         baseline_stake_amount_lamports: config.baseline_stake_amount_lamports,
+        require_performance_metrics_reporting: Some(config.require_performance_metrics_reporting),
     };
 
     let epoch_stats = EpochStats {
