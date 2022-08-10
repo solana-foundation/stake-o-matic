@@ -1459,26 +1459,28 @@ fn classify(
 
         let mut reporting_counts: HashMap<Pubkey, HashMap<Epoch, bool>> = HashMap::new();
 
+        let mut number_sampled_epochs: u64 = 0;
         if let Some(metrics) = performance_metrics_for_this_epoch.as_ref() {
             metrics.iter().for_each(|(pk, (passed, _b))| {
-                reporting_counts.insert(*pk, HashMap::from([(epoch, *passed)]));
-            })
+                reporting_counts.insert(*pk, HashMap::from([(epoch - 1, *passed)]));
+            });
+            number_sampled_epochs = 1;
         };
 
         debug!("reporting_counts: {:?}", reporting_counts);
 
-        let mut number_sampled_epochs: u64 = 0;
         let mut number_loops = 0;
 
         while number_sampled_epochs < NUM_SAMPLED_REPORTING_EPOCHS as u64 {
             let reporting_epoch = epoch - 2 - number_loops;
 
-            let mut found_self_reporting = false;
             // Fetch from wiki repo
             if let Some(epoch_classification) = EpochClassification::load_if_validators_classified(
-                reporting_epoch,
+                reporting_epoch + 1,
                 &config.cluster_db_path(),
             )? {
+                let mut found_self_reporting = false;
+
                 epoch_classification
                     .into_current()
                     .validator_classifications
@@ -1495,10 +1497,11 @@ fn classify(
                     });
 
                 number_sampled_epochs += 1;
-            }
-            if !found_self_reporting {
-                // self-reporting data only goes back so far. If no self-reporting data was found, stop looping
-                break;
+
+                if !found_self_reporting {
+                    // self-reporting data only goes back so far. If no self-reporting data was found, stop looping
+                    break;
+                }
             }
             number_loops += 1;
         }
@@ -1507,7 +1510,8 @@ fn classify(
         let mut poor_reporters: HashMap<Pubkey, String> = HashMap::new();
 
         // if mainnet, get list of validators that have been poor reporters on testnet
-        let poor_testnet_reporters: Option<Vec<Pubkey>> = if config.cluster == MainnetBeta {
+        let poor_testnet_reporters: Option<Vec<(Pubkey, String)>> = if config.cluster == MainnetBeta
+        {
             let testnet_rpc_client = RpcClient::new_with_timeout(
                 DEFAULT_TESTNET_JSON_RPC_URL.into(), // TODO: should be configurable
                 Duration::from_secs(180),
@@ -1518,7 +1522,10 @@ fn classify(
                     testnet_epoch,
                     &config.cluster_db_path_for(Testnet),
                 )?
-                .map(|(_epoch, epoch_classification)| epoch_classification)
+                .map(|(epoch, epoch_classification)| {
+                    info!("Using epoch {:?} for testnet classifications", epoch - 1);
+                    epoch_classification
+                })
                 .unwrap()
                 .into_current()
                 .validator_classifications
@@ -1527,7 +1534,7 @@ fn classify(
                 .filter_map(|(pk, vc)| {
                     vc.self_reported_metrics_summary
                         .as_ref()
-                        .and_then(|(pass, _expl)| {
+                        .and_then(|(pass, explanation)| {
                             if *pass {
                                 None
                             } else {
@@ -1538,7 +1545,9 @@ fn classify(
                                     .unwrap()
                                     .1
                                     .mainnet_identity;
-                                Some(mainnet_pk)
+                                let failure_explanation =
+                                    format!("Poor reporting on testnet: {:}", explanation);
+                                Some((mainnet_pk, failure_explanation))
                             }
                         })
                 })
@@ -1551,28 +1560,29 @@ fn classify(
         let performance_reporting: HashMap<Pubkey, (bool, String)> = reporting_counts
             .iter()
             .map(|(pk, reports)| {
-                let failed_epochs: Vec<&Epoch> = reports
+                let mut failed_epochs: Vec<&Epoch> = reports
                     .iter()
                     .filter_map(|(epoch, passed)| if !passed { Some(epoch) } else { None })
-                    .collect();
+                    .collect::<Vec<&Epoch>>();
+                failed_epochs.sort();
 
                 let num_passed = reports.len() - failed_epochs.len();
 
                 let percent_passed = num_passed as f32 / reports.len() as f32;
 
-                if percent_passed >= SUCCESS_MIN_PERCENT {
+                if let Some(reason) = poor_testnet_reporters.as_ref().and_then(|ptr| {
+                    ptr.iter()
+                        .find(|(failed_pk, _r)| pk == failed_pk)
+                        .map(|(_pk, reason)| reason.clone())
+                }) {
+                    (*pk, (false, reason))
+                } else if percent_passed >= SUCCESS_MIN_PERCENT {
                     let pass_reason = format!(
                         "Reported correctly in {:?}/{:?} epochs",
                         num_passed,
                         reports.len()
                     );
                     (*pk, (true, pass_reason))
-                } else if poor_testnet_reporters
-                    .as_ref()
-                    .map(|ptr| ptr.contains(pk))
-                    .is_some()
-                {
-                    (*pk, (false, "Poor reporting on testnet".into()))
                 } else {
                     let failure_reason = format!(
                         "Only reported correctly in {:?}/{:?} epochs. Non-reporting epochs: {:?}",
