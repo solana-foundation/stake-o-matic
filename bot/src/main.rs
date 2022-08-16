@@ -2169,7 +2169,7 @@ fn main() -> BoxResult<()> {
     };
 
     let epoch = rpc_client.get_epoch_info()?.epoch;
-    info!("Epoch: {:?}", epoch);
+    info!("Current epoch: {:?}", epoch);
     if epoch == 0 {
         return Ok(());
     }
