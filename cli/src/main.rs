@@ -537,6 +537,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("sign-message")
+                .about("Sign message with validator key")
+                .arg(
+                    Arg::with_name("message")
+                        .required(true)
+                        .value_name("MESSAGE")
+                        .help("Message to be signed"),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("admin")
                 .about("Administration commands")
                 .setting(AppSettings::SubcommandRequiredElseHelp)
@@ -740,6 +750,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             process_list(&config, &rpc_client, state)?;
         }
+        ("sign-message", Some(arg_matches)) => match arg_matches.value_of("message") {
+            Some(message) => {
+                let message_signature = config.default_signer.sign_message(message.as_bytes());
+                println!("{}", message_signature);
+            }
+            None => {
+                println!("NO WALLET ADDRESS: ");
+            }
+        },
         ("admin", Some(admin_matches)) => {
             let admin_signer = match signer_of(admin_matches, "authority", &mut wallet_manager) {
                 Err(err) => {
