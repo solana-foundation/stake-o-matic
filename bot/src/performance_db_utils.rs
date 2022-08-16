@@ -138,7 +138,7 @@ fn find_reporters_for_epoch(
     // and 75%, and if the validator reported correctly during any one  of the sample periodsd, the validator passes.
     for n in 0..4 {
         let slot_to_try: i64 = match cluster {
-            MainnetBeta => (DEFAULT_SLOTS_PER_EPOCH as i64) * ((*epoch - 1) as i64),
+            MainnetBeta => (DEFAULT_SLOTS_PER_EPOCH as i64) * (*epoch as i64),
             // Testnet epoch boundaries aren't on multiples of DEFAULT_SLOTS_PER_EPOCH for some reason
             // Epoch 341 starts at slot 141788256; use that as our anchor.
             // Testnet => (141_788_256 as u64).wrapping_add( DEFAULT_SLOTS_PER_EPOCH.wrapping_mul((341 as u64).wrapping_sub(*epoch)))
