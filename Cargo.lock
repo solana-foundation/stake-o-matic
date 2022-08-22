@@ -2364,12 +2364,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 
 [[package]]
-name = "nacl"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30aefc44d813c51b5e7952950e87c17f2e0e1a3274d63c8281a701e05323d548"
-
-[[package]]
 name = "native-tls"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4105,7 +4099,6 @@ name = "solana-foundation-delegation-program-cli"
 version = "1.0.5"
 dependencies = [
  "clap",
- "nacl",
  "solana-account-decoder",
  "solana-clap-utils",
  "solana-cli-config",
