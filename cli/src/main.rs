@@ -756,7 +756,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", message_signature);
             }
             None => {
-                println!("NO WALLET ADDRESS: ");
+                unreachable!();
             }
         },
         ("admin", Some(admin_matches)) => {
