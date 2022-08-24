@@ -1,8 +1,8 @@
 [package]
 name = "solana-foundation-delegation-program-cli"
-version = "1.0.5"
+version = "1.0.6"
 edition = "2018"
-authors = ["Solana Maintainers <maintainers@solana.foundation>"]
+authors = ["Solana Maintainers <maintainers@solana.org>"]
 license = "Apache-2.0"
 description = "Solana Foundation Delegation Program Command-line Utility"
 repository = "https://github.com/solana-labs/stake-o-matic"
