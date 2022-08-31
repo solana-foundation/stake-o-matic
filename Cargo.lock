@@ -630,10 +630,34 @@ dependencies = [
  "ansi_term",
  "atty",
  "bitflags",
- "strsim",
- "textwrap",
+ "strsim 0.8.0",
+ "textwrap 0.11.0",
  "unicode-width",
  "vec_map",
+]
+
+[[package]]
+name = "clap"
+version = "3.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68d43934757334b5c0519ff882e1ab9647ac0258b47c24c4f490d78e42697fd5"
+dependencies = [
+ "atty",
+ "bitflags",
+ "clap_lex",
+ "indexmap",
+ "strsim 0.10.0",
+ "termcolor",
+ "textwrap 0.15.0",
+]
+
+[[package]]
+name = "clap_lex"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2850f2f5a82cbf437dd5af4d49848fbdfc27c157c3d010345776f952765261c5"
+dependencies = [
+ "os_str_bytes",
 ]
 
 [[package]]
@@ -2580,6 +2604,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "os_str_bytes"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ff7415e9ae3fff1225851df9e0d9e4e5479f947619774677a63572e55e80eff"
+
+[[package]]
 name = "ouroboros"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3892,7 +3922,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ff790bd97dee3be05ec879b176875f0bb0ef0eb62e5e11e6b269a2d7dc8bf10"
 dependencies = [
  "chrono",
- "clap",
+ "clap 2.34.0",
  "rpassword",
  "solana-remote-wallet",
  "solana-sdk",
@@ -3925,7 +3955,7 @@ dependencies = [
  "base64 0.13.0",
  "bincode",
  "bs58 0.3.1",
- "clap",
+ "clap 2.34.0",
  "indicatif 0.15.0",
  "jsonrpc-core",
  "log 0.4.17",
@@ -4079,7 +4109,7 @@ checksum = "45ce6d1994d0bdcb0571eeaad0718c540b89b626c24df2bdf6987f80837af4c5"
 dependencies = [
  "bincode",
  "byteorder",
- "clap",
+ "clap 2.34.0",
  "log 0.4.17",
  "serde",
  "serde_derive",
@@ -4098,7 +4128,7 @@ dependencies = [
 name = "solana-foundation-delegation-program-cli"
 version = "1.0.6"
 dependencies = [
- "clap",
+ "clap 3.2.19",
  "solana-account-decoder",
  "solana-clap-utils",
  "solana-cli-config",
@@ -4173,7 +4203,7 @@ checksum = "6bd074ef3382f9d83dbf5db936fbfd9d5ef78cf2a598ac54dc993c98d678ca1c"
 dependencies = [
  "bincode",
  "bv",
- "clap",
+ "clap 2.34.0",
  "flate2",
  "indexmap",
  "itertools 0.9.0",
@@ -4315,7 +4345,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2be3ee1237d9013cbd11f0d0af69a4473c703b700165e6c39b49cf0c0554d6f9"
 dependencies = [
  "bincode",
- "clap",
+ "clap 2.34.0",
  "log 0.4.17",
  "nix",
  "rand 0.7.3",
@@ -4647,7 +4677,7 @@ dependencies = [
  "borsh 0.9.3",
  "bs58 0.4.0",
  "chrono",
- "clap",
+ "clap 3.2.19",
  "csv",
  "indicatif 0.16.2",
  "itertools 0.10.3",
@@ -4767,7 +4797,7 @@ version = "1.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da0ba5f0bd21d5142c9b9237f807a28856cd00417233013a8d664bf659f11280"
 dependencies = [
- "clap",
+ "clap 2.34.0",
  "libc",
  "log 0.4.17",
  "nix",
@@ -4812,7 +4842,7 @@ dependencies = [
  "base64 0.12.3",
  "bincode",
  "chrono",
- "clap",
+ "clap 2.34.0",
  "console 0.14.1",
  "core_affinity",
  "fd-lock",
@@ -5058,6 +5088,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
 
 [[package]]
+name = "strsim"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
+
+[[package]]
 name = "subtle"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5209,6 +5245,12 @@ checksum = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 dependencies = [
  "unicode-width",
 ]
+
+[[package]]
+name = "textwrap"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1141d4d61095b28419e22cb0bbf02755f5e54e0526f97f1e3d1d160e60885fb"
 
 [[package]]
 name = "thiserror"
