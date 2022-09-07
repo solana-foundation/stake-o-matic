@@ -19,8 +19,9 @@ use {
     },
 };
 
-// Minimum amount of lamports in a stake pool account
-pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL;
+// Minimum amount of lamports in a stake pool account. 2282880 is for rent. Without it, we will be
+// below the miniumum delegation amount, and will get InsufficientDelegation errors
+pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL + 2282880;
 
 // Don't bother adjusting stake if less than this amount of lamports will be affected
 // (must be >= MIN_STAKE_ACCOUNT_BALANCE)
@@ -810,6 +811,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::lamports_to_sol;
     use {
         super::*,
         crate::rpc_client_utils::test::*,
@@ -895,7 +897,7 @@ mod test {
                 validator_stake_balance(
                     &rpc_client,
                     stake_pool.authorized_staker.pubkey(),
-                    validator
+                    validator,
                 ),
                 expected_validator_stake_balance
             );
@@ -962,7 +964,7 @@ mod test {
                     get_available_reserve_stake_balance(
                         &rpc_client,
                         reserve_stake_address,
-                        min_reserve_stake_balance
+                        min_reserve_stake_balance,
                     )
                     .unwrap(),
                     total_stake_amount
@@ -1020,7 +1022,7 @@ mod test {
                 validator_stake_balance(
                     &rpc_client,
                     stake_pool.authorized_staker.pubkey(),
-                    validator
+                    validator,
                 ),
                 MIN_STAKE_ACCOUNT_BALANCE
             );
@@ -1101,13 +1103,17 @@ mod test {
 
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
         // needs one more epoch for the additional bonus stake to arrive
-        for (validator, expected_sol_balance) in validators.iter().zip(&[1., 10., 110.]) {
+        for (validator, expected_sol_balance) in
+            validators
+                .iter()
+                .zip(&[lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE), 10., 110.])
+        {
             assert_eq!(
                 sol_to_lamports(*expected_sol_balance),
                 validator_stake_balance(
                     &rpc_client,
                     stake_pool.authorized_staker.pubkey(),
-                    validator
+                    validator,
                 ),
                 "stake balance mismatch for validator {}, expected {}",
                 validator.identity,
@@ -1140,13 +1146,17 @@ mod test {
         );
 
         // after the second epoch, validator 2 is now has all the bonus stake
-        for (validator, expected_sol_balance) in validators.iter().zip(&[1., 10., 319.]) {
+        for (validator, expected_sol_balance) in validators.iter().zip(&[
+            lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE),
+            10.,
+            320. - lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE),
+        ]) {
             assert_eq!(
                 sol_to_lamports(*expected_sol_balance),
                 validator_stake_balance(
                     &rpc_client,
                     stake_pool.authorized_staker.pubkey(),
-                    validator
+                    validator,
                 ),
                 "stake balance mismatch for validator {}",
                 validator.identity
