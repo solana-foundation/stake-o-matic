@@ -6,7 +6,7 @@ use {
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
-        native_token::{Sol},
+        native_token::Sol,
         pubkey::Pubkey,
         signature::{Keypair, Signer},
         stake::{self, instruction as stake_instruction},
