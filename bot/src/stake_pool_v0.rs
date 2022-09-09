@@ -6,7 +6,7 @@ use {
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
-        native_token::{Sol, LAMPORTS_PER_SOL},
+        native_token::{Sol},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
         stake::{self, instruction as stake_instruction},
@@ -19,9 +19,14 @@ use {
     },
 };
 
-// Minimum amount of lamports in a stake pool account. 2282880 is for rent. Without it, we will be
+// Value of RpcClient::get_stake_minimum_delegation(); need to upgrade solana-client to get access to this function
+const MIN_STAKE_DELEGATION: u64 = 1000000000;
+// Delegation rent amount. Need
+const DELEGATION_RENT: u64 = 2282880;
+
+// Minimum amount of lamports in a stake pool account. Without DELEGATION_RENT, we will be
 // below the miniumum delegation amount, and will get InsufficientDelegation errors
-pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = LAMPORTS_PER_SOL + 2282880;
+pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = MIN_STAKE_DELEGATION + DELEGATION_RENT;
 
 // Don't bother adjusting stake if less than this amount of lamports will be affected
 // (must be >= MIN_STAKE_ACCOUNT_BALANCE)
