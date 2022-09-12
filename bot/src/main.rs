@@ -338,7 +338,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         .unwrap()
         .to_string();
     let app_version = &*app_version();
-    let min_stake_account_balance = &*MIN_STAKE_ACCOUNT_BALANCE.to_string();
+    let min_stake_account_balance = &*lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE).to_string();
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(app_version)
