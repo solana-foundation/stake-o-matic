@@ -2,6 +2,7 @@ use crate::data_center_info::{DataCenterInfo, DataCenters};
 use crate::performance_db_utils::{
     get_reported_performance_metrics, NUM_SAMPLED_REPORTING_EPOCHS, SUCCESS_MIN_PERCENT,
 };
+use crate::stake_pool_v0::MIN_STAKE_ACCOUNT_BALANCE;
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
 use crate::Cluster::{MainnetBeta, Testnet};
 use {
@@ -337,6 +338,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         .unwrap()
         .to_string();
     let app_version = &*app_version();
+    let min_stake_account_balance = &*MIN_STAKE_ACCOUNT_BALANCE.to_string();
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(app_version)
@@ -675,7 +677,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                         .long("min-reserve-stake-balance")
                         .value_name("SOL")
                         .takes_value(true)
-                        .default_value("1")
+                        .default_value(min_stake_account_balance)
                         .validator(is_amount)
                         .help("The minimum balance to keep in the reserve stake account")
                 )
