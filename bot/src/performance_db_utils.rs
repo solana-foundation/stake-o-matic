@@ -3,6 +3,7 @@ use crate::{Cluster, Epoch, Pubkey, ValidatorList};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use itertools::Itertools;
 use log::{debug, trace};
+use regex::Regex;
 use solana_client::client_error::ClientErrorKind;
 use solana_client::rpc_client::RpcClient;
 use solana_foundation_delegation_program_registry::state::Participant;
@@ -223,7 +224,15 @@ fn fetch_data(
         .send()?
         .text()?;
 
-    let mut reader = csv::Reader::from_reader(body.as_bytes());
+    let ignore_line_regex = Regex::new(r"^,result")?;
+
+    // filter out influxDB headers
+    let filtered_body = body
+        .lines()
+        .filter(|l| !ignore_line_regex.is_match(l))
+        .join("\n");
+
+    let mut reader = csv::ReaderBuilder::new().from_reader(filtered_body.as_bytes());
 
     for result in reader.records() {
         let record = result?;
