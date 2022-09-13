@@ -40,7 +40,6 @@ TESTNET_ARGS=(
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
   --require-performance-metrics-reporting
-  --min-reserve-stake-balance 2.00456576
 )
 
 # shellcheck disable=SC2206
