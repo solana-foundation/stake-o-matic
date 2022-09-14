@@ -3,7 +3,6 @@ use crate::{Cluster, Epoch, Pubkey, ValidatorList};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use itertools::Itertools;
 use log::{debug, trace};
-use regex::Regex;
 use solana_client::client_error::ClientErrorKind;
 use solana_client::rpc_client::RpcClient;
 use solana_foundation_delegation_program_registry::state::Participant;
@@ -197,13 +196,11 @@ fn fetch_data(
     let query = format!(
         "from(bucket:\"{}\")
         |> range(start: {}, stop: {})
-        |> filter(fn: (r) => r[\"_measurement\"] == \"optimistic_slot\")
-        |> filter(fn: (r) => r[\"_field\"] == \"slot\")
+        |> filter(fn: (r) => r[\"_measurement\"] == \"optimistic_slot\" and r[\"_field\"] == \"slot\")
         |> group(columns: [\"host_id\"])
         |> max(column: \"_time\")
-        |> group(columns: [\"host_id\"])
-        |> max()
-        |> yield(name: \"mean\")",
+        |> keep(columns: [\"host_id\", \"_value\"])
+        |> group()",
         cluster,
         date_time.timestamp(),
         (date_time + ChronoDuration::minutes(1)).timestamp(),
@@ -224,24 +221,16 @@ fn fetch_data(
         .send()?
         .text()?;
 
-    let ignore_line_regex = Regex::new(r"^,result")?;
-
-    // filter out influxDB headers
-    let filtered_body = body
-        .lines()
-        .filter(|l| !ignore_line_regex.is_match(l))
-        .join("\n");
-
-    let mut reader = csv::ReaderBuilder::new().from_reader(filtered_body.as_bytes());
+    let mut reader = csv::ReaderBuilder::new().from_reader(body.as_bytes());
 
     for result in reader.records() {
         let record = result?;
         let optimistic_slot: i32 = record
-            .get(6)
+            .get(3)
             .ok_or("Could not parse CSV record")?
             .parse()
             .unwrap();
-        let pk = Pubkey::from_str(record.get(9).ok_or("Could not parse CSV record")?)?;
+        let pk = Pubkey::from_str(record.get(4).ok_or("Could not parse CSV record")?)?;
         return_data.insert(pk, optimistic_slot);
     }
 
