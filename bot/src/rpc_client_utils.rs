@@ -193,8 +193,10 @@ pub fn send_and_confirm_transactions_with_spinner(
                                 if let Some((i, _)) = pending_transactions.remove(signature) {
                                     confirmed_transactions += 1;
                                     if status.err.is_some() {
-                                        progress_bar
-                                            .println(format!("Failed transaction: {:?}", status));
+                                        progress_bar.println(format!(
+                                            "Failed transaction {}: {:?}",
+                                            signature, status
+                                        ));
                                     }
                                     transaction_errors[i] = status.err;
                                 }
