@@ -1447,14 +1447,24 @@ fn classify(
             if let (Some(performance_db_url), Some(performance_db_token)) =
                 (&config.performance_db_url, &config.performance_db_token)
             {
-                Some(get_reported_performance_metrics(
+                let reported_performance_metrics = get_reported_performance_metrics(
                     performance_db_url,
                     performance_db_token,
                     &config.cluster,
                     rpc_client,
                     &(epoch - 1),
                     &all_participants,
-                )?)
+                );
+
+                if let Ok(metrics) = reported_performance_metrics {
+                    Some(metrics)
+                } else {
+                    info!(
+                        "Could not get reported performance metrics: {:?}",
+                        reported_performance_metrics.err().unwrap()
+                    );
+                    None
+                }
             } else {
                 None
             };
@@ -1468,8 +1478,6 @@ fn classify(
             });
             number_sampled_epochs = 1;
         };
-
-        debug!("reporting_counts: {:?}", reporting_counts);
 
         let mut number_loops = 0;
 
