@@ -2,7 +2,7 @@ use crate::Cluster::{MainnetBeta, Testnet};
 use crate::{Cluster, Epoch, Pubkey, ValidatorList};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use itertools::Itertools;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use solana_client::client_error::ClientErrorKind;
 use solana_client::rpc_client::RpcClient;
 use solana_foundation_delegation_program_registry::state::Participant;
@@ -157,6 +157,11 @@ fn find_reporters_for_epoch(
 
         let reported_data =
             fetch_data(performance_db_url, performance_db_token, cluster, slot_time)?;
+
+        if reported_data.is_empty() {
+            info!("No records found for time {:?}", slot_time);
+            continue;
+        }
 
         let optimistic_slot_modes = get_modes(reported_data.values().cloned().collect());
         let min_optimistic_slot = optimistic_slot_modes
