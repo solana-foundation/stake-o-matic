@@ -2,6 +2,7 @@ use crate::data_center_info::{DataCenterInfo, DataCenters};
 use crate::performance_db_utils::{
     get_reported_performance_metrics, NUM_SAMPLED_REPORTING_EPOCHS, SUCCESS_MIN_PERCENT,
 };
+use crate::stake_pool_v0::MIN_STAKE_ACCOUNT_BALANCE;
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
 use crate::Cluster::{MainnetBeta, Testnet};
 use {
@@ -337,6 +338,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         .unwrap()
         .to_string();
     let app_version = &*app_version();
+    let min_stake_account_balance = &*lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE).to_string();
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(app_version)
@@ -636,7 +638,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                         .long("min-reserve-stake-balance")
                         .value_name("SOL")
                         .takes_value(true)
-                        .default_value("1")
+                        .default_value(min_stake_account_balance)
                         .validator(is_amount)
                         .help("The minimum balance to keep in the reserve stake account")
                 )
@@ -675,7 +677,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                         .long("min-reserve-stake-balance")
                         .value_name("SOL")
                         .takes_value(true)
-                        .default_value("1")
+                        .default_value(min_stake_account_balance)
                         .validator(is_amount)
                         .help("The minimum balance to keep in the reserve stake account")
                 )
@@ -1445,14 +1447,24 @@ fn classify(
             if let (Some(performance_db_url), Some(performance_db_token)) =
                 (&config.performance_db_url, &config.performance_db_token)
             {
-                Some(get_reported_performance_metrics(
+                let reported_performance_metrics = get_reported_performance_metrics(
                     performance_db_url,
                     performance_db_token,
                     &config.cluster,
                     rpc_client,
                     &(epoch - 1),
                     &all_participants,
-                )?)
+                );
+
+                if let Ok(metrics) = reported_performance_metrics {
+                    Some(metrics)
+                } else {
+                    info!(
+                        "Could not get reported performance metrics: {:?}",
+                        reported_performance_metrics.err().unwrap()
+                    );
+                    None
+                }
             } else {
                 None
             };
@@ -1466,8 +1478,6 @@ fn classify(
             });
             number_sampled_epochs = 1;
         };
-
-        debug!("reporting_counts: {:?}", reporting_counts);
 
         let mut number_loops = 0;
 
