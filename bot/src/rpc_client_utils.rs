@@ -40,7 +40,7 @@ fn new_tpu_client_with_retry(
     rpc_client: &Arc<RpcClient>,
     websocket_url: &str,
 ) -> Result<TpuClient, TpuSenderError> {
-    let mut retries = 5;
+    let mut retries = 10;
     let sleep_seconds = 5;
     while retries > 0 {
         match TpuClient::new(
