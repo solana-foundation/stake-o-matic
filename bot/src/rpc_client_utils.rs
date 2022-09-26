@@ -40,7 +40,7 @@ fn new_tpu_client_with_retry(
     rpc_client: &Arc<RpcClient>,
     websocket_url: &str,
 ) -> Result<TpuClient, TpuSenderError> {
-    let mut retries = 10;
+    let mut retries = 5;
     let sleep_seconds = 5;
     while retries > 0 {
         match TpuClient::new(
@@ -79,7 +79,7 @@ pub fn send_and_confirm_transactions_with_spinner(
         return Ok(vec![]);
     }
     let progress_bar = new_spinner_progress_bar();
-    let mut expired_blockhash_retries = 5;
+    let mut expired_blockhash_retries = 10;
     let send_transaction_interval = Duration::from_millis(10); /* Send at ~100 TPS */
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
