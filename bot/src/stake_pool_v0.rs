@@ -963,7 +963,7 @@ mod test {
         let (test_validator, authorized_staker) = test_validator_genesis.start();
 
         let websocket_url = &test_validator.rpc_pubsub_url();
-        let (rpc_client, _recent_blockhash, _fee_calculator) = test_validator.rpc_client();
+        let rpc_client = test_validator.get_rpc_client();
         let rpc_client = Arc::new(rpc_client);
 
         let authorized_staker_address = authorized_staker.pubkey();
