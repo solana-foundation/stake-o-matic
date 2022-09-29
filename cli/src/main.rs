@@ -53,11 +53,9 @@ fn send_and_confirm_message<T: Signers>(
     additional_funds_required: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fee_payer = message.account_keys[0];
-    let (recent_blockhash, fee_calculator) = rpc_client
-        .get_recent_blockhash()
-        .map_err(|err| format!("error: unable to get recent blockhash: {}", err))?;
+    let recent_blockhash = rpc_client.get_latest_blockhash()?;
     let funds_required =
-        fee_calculator.calculate_fee(&message) + additional_funds_required.unwrap_or_default();
+        rpc_client.get_fee_for_message(&message)? + additional_funds_required.unwrap_or_default();
 
     let balance = rpc_client.get_balance(&fee_payer)?;
 

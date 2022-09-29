@@ -5,7 +5,7 @@ edition = "2018"
 authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 license = "Apache-2.0"
 description = "Solana Foundation Delegation Program Registry"
-repository = "https://github.com/solana-labs/stake-o-matic"
+repository = "https://github.com/solana-foundation/stake-o-matic"
 
 [dependencies]
 borsh = "0.9"

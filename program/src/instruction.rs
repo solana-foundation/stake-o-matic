@@ -160,20 +160,27 @@ mod tests {
     }
     #[test]
     fn serialize() {
+        let testnet_identity = Pubkey::new_unique();
+        let mainnet_identity = Pubkey::new_unique();
+
+        let expected_instruction: Vec<u8> = [4] // RegistryInstruction::Rewrite
+            .iter()
+            .chain(testnet_identity.to_bytes().iter())
+            .chain(mainnet_identity.to_bytes().iter())
+            .chain([3].iter()) // ParticipantState::Approved
+            .cloned()
+            .collect();
+
         assert_eq!(RegistryInstruction::Apply.try_to_vec().unwrap(), vec![0]);
         assert_eq!(
             RegistryInstruction::Rewrite(Participant {
                 state: ParticipantState::Approved,
-                testnet_identity: Pubkey::new_unique(),
-                mainnet_identity: Pubkey::new_unique()
+                testnet_identity,
+                mainnet_identity,
             })
             .try_to_vec()
             .unwrap(),
-            [
-                4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 3
-            ]
+            expected_instruction
         );
     }
 
