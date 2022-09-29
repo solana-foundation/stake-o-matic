@@ -1233,7 +1233,7 @@ fn get_self_stake_by_vote_account(
                     let effective_stake = stake
                         .delegation
                         .stake_activating_and_deactivating(epoch, Some(&stake_history))
-                        .0;
+                        .effective;
                     if effective_stake > 0 {
                         *self_stake_by_vote_account.entry(*vote_address).or_default() +=
                             effective_stake;
@@ -1322,7 +1322,7 @@ fn classify(
     let last_epoch = epoch - 1;
 
     let testnet_rpc_client = RpcClient::new_with_timeout(
-        DEFAULT_TESTNET_JSON_RPC_URL.into(), // TODO: should be configurable
+        DEFAULT_TESTNET_JSON_RPC_URL.to_string(), // TODO: should be configurable
         Duration::from_secs(180),
     );
     let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
@@ -1620,6 +1620,7 @@ fn classify(
         // if mainnet, get list of validators that have been poor reporters on testnet
         let poor_testnet_reporters: Option<Vec<(Pubkey, String)>> = if config.cluster == MainnetBeta
         {
+            let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
             Some(
                 EpochClassification::load_previous(
                     testnet_epoch,
