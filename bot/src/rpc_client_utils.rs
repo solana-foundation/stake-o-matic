@@ -79,7 +79,7 @@ pub fn send_and_confirm_transactions_with_spinner(
         return Ok(vec![]);
     }
     let progress_bar = new_spinner_progress_bar();
-    let mut expired_blockhash_retries = 10;
+    let mut expired_blockhash_retries = 20;
     let send_transaction_interval = Duration::from_millis(10); /* Send at ~100 TPS */
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
