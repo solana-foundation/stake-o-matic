@@ -35,7 +35,7 @@ TESTNET_ARGS=(
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
-  --min-release-version 1.14.2
+  --min-release-version 1.14.4
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
@@ -52,7 +52,7 @@ MAINNET_BETA_ARGS=(
   --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
-  --min-release-version 1.10.39
+  --min-release-version 1.13.3
   --max-infrastructure-concentration 10
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
