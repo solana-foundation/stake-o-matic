@@ -1186,10 +1186,10 @@ fn get_self_stake_by_vote_account(
     Ok(self_stake_by_vote_account)
 }
 
-// Returns HashMap<identity, whether the validator met the min_testnet_participation criterion>
+// Returns HashMap<testnet_validator_identity, whether the validator met the min_testnet_participation criterion>
 fn get_testnet_participation(
     config: &Config,
-    current_epoch: &Epoch,
+    testnet_epoch: &Epoch,
 ) -> BoxResult<Option<HashMap<Pubkey, bool>>> {
     if let Some((n, m)) = &config.min_testnet_participation {
         assert_eq!(config.cluster, Cluster::MainnetBeta);
@@ -1198,12 +1198,11 @@ fn get_testnet_participation(
 
         let mut validator_stake_count: HashMap<Pubkey, usize> = HashMap::new();
         let mut num_classified_epochs = 0;
-        let mut current_epoch = *current_epoch;
+        let mut epoch = *testnet_epoch;
 
         while num_classified_epochs < *m {
-            current_epoch -= 1;
             if let Some(epoch_classification) =
-                EpochClassification::load_if_validators_classified(current_epoch, db_testnet_path)?
+                EpochClassification::load_if_validators_classified(epoch, db_testnet_path)?
             {
                 if let Some(validator_classifications) = epoch_classification
                     .into_current()
@@ -1212,13 +1211,14 @@ fn get_testnet_participation(
                     num_classified_epochs += 1;
                     for (_pubkey, validator_classification) in validator_classifications {
                         let identity = validator_classification.identity;
+                        let count = *validator_stake_count.entry(identity).or_insert(0);
                         if validator_classification.stake_state != ValidatorStakeState::None {
-                            let count = *validator_stake_count.entry(identity).or_insert(0);
                             validator_stake_count.insert(identity, count + 1);
                         }
                     }
                 }
             }
+            epoch -= 1;
         }
 
         let testnet_participation: HashMap<Pubkey, bool> = validator_stake_count
@@ -1257,11 +1257,47 @@ fn classify(
     validator_list: &ValidatorList,
     identity_to_participant: &IdentityToParticipant,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
-    all_participants: HashMap<Pubkey, Participant>,
+    non_rejected_participants: HashMap<Pubkey, Participant>,
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
-    let testnet_participation = get_testnet_participation(config, &epoch)?;
+    let testnet_rpc_client = RpcClient::new_with_timeout(
+        DEFAULT_TESTNET_JSON_RPC_URL.into(), // TODO: should be configurable
+        Duration::from_secs(180),
+    );
+    let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
+    info!(
+        "Using testnet epoch {:?} as most recent epoch for testnet metrics",
+        testnet_epoch
+    );
+
+    let testnet_participation: Option<HashMap<Pubkey, bool>> =
+        match get_testnet_participation(config, &testnet_epoch)? {
+            Some(tn_participation) => {
+                // We have a map from testnet pubkey to whether testnet participation requirements were met. Convert to a map from
+                // mainnet pubkeys to whether testnet requirements were met
+                let mb_to_tn: HashMap<Pubkey, Pubkey> = non_rejected_participants
+                    .iter()
+                    .map(|(_, participant)| {
+                        (participant.testnet_identity, participant.mainnet_identity)
+                    })
+                    .collect();
+
+                Some(
+                    tn_participation
+                        .iter()
+                        .filter_map(|(tn_pubkey, passed)| {
+                            mb_to_tn
+                                .get(tn_pubkey)
+                                .map(|mb_pubkey| (*mb_pubkey, *passed))
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        };
+
+    info!("testnet_participation: {:?}", testnet_participation);
 
     let data_centers = match data_center_info::get(config.cluster) {
         Ok(data_centers) => {
@@ -1453,7 +1489,7 @@ fn classify(
                     &config.cluster,
                     rpc_client,
                     &(epoch - 1),
-                    &all_participants,
+                    &non_rejected_participants,
                 );
 
                 if let Ok(metrics) = reported_performance_metrics {
@@ -1522,11 +1558,6 @@ fn classify(
         // if mainnet, get list of validators that have been poor reporters on testnet
         let poor_testnet_reporters: Option<Vec<(Pubkey, String)>> = if config.cluster == MainnetBeta
         {
-            let testnet_rpc_client = RpcClient::new_with_timeout(
-                DEFAULT_TESTNET_JSON_RPC_URL.into(), // TODO: should be configurable
-                Duration::from_secs(180),
-            );
-            let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
             Some(
                 EpochClassification::load_previous(
                     testnet_epoch,
@@ -1549,15 +1580,17 @@ fn classify(
                                 None
                             } else {
                                 // get corresponding mainnet validator pk
-                                let mainnet_pk = all_participants
+                                match non_rejected_participants
                                     .iter()
                                     .find(|(_pk, participant)| participant.testnet_identity == *pk)
-                                    .unwrap()
-                                    .1
-                                    .mainnet_identity;
-                                let failure_explanation =
-                                    format!("Poor reporting on testnet: {:}", explanation);
-                                Some((mainnet_pk, failure_explanation))
+                                {
+                                    Some((_, participant)) => {
+                                        let failure_explanation =
+                                            format!("Poor reporting on testnet: {:}", explanation);
+                                        Some((participant.mainnet_identity, failure_explanation))
+                                    }
+                                    None => None,
+                                }
                             }
                         })
                 })
@@ -1685,22 +1718,21 @@ fn classify(
                 validator_notes.push(insufficent_self_stake_msg.clone());
             }
 
-            let insufficent_testnet_participation =
-                testnet_participation
-                    .as_ref()
-                    .and_then(|testnet_participation| {
-                        if let Some(participant) = participant {
-                            if !testnet_participation.get(&participant).unwrap_or(&true) {
-                                let note = "Insufficient testnet participation".to_string();
-                                if config.enforce_testnet_participation {
-                                    return Some(note);
-                                } else {
-                                    validator_notes.push(note);
-                                }
+            let insufficent_testnet_participation: Option<String> = testnet_participation
+                .as_ref()
+                .and_then(|testnet_participation| {
+                    testnet_participation.get(&identity).and_then(|passed| {
+                        if !passed {
+                            let note = "Insufficient testnet participation".to_string();
+                            if config.enforce_testnet_participation {
+                                return Some(note);
+                            } else {
+                                validator_notes.push(note);
                             }
                         }
                         None
-                    });
+                    })
+                });
 
             let (stake_state, reason) = if num_epochs_commission_increased_above_max > 1 {
                 (
