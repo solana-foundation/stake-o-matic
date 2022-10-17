@@ -1257,7 +1257,7 @@ fn classify(
     validator_list: &ValidatorList,
     identity_to_participant: &IdentityToParticipant,
     previous_epoch_validator_classifications: Option<&ValidatorClassificationByIdentity>,
-    all_participants: HashMap<Pubkey, Participant>,
+    non_rejected_participants: HashMap<Pubkey, Participant>,
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
@@ -1453,7 +1453,7 @@ fn classify(
                     &config.cluster,
                     rpc_client,
                     &(epoch - 1),
-                    &all_participants,
+                    &non_rejected_participants,
                 );
 
                 if let Ok(metrics) = reported_performance_metrics {
@@ -1549,15 +1549,17 @@ fn classify(
                                 None
                             } else {
                                 // get corresponding mainnet validator pk
-                                let mainnet_pk = all_participants
+                                match non_rejected_participants
                                     .iter()
                                     .find(|(_pk, participant)| participant.testnet_identity == *pk)
-                                    .unwrap()
-                                    .1
-                                    .mainnet_identity;
-                                let failure_explanation =
-                                    format!("Poor reporting on testnet: {:}", explanation);
-                                Some((mainnet_pk, failure_explanation))
+                                {
+                                    Some((_, participant)) => {
+                                        let failure_explanation =
+                                            format!("Poor reporting on testnet: {:}", explanation);
+                                        Some((participant.mainnet_identity, failure_explanation))
+                                    }
+                                    None => None,
+                                }
                             }
                         })
                 })
