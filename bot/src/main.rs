@@ -1186,21 +1186,24 @@ fn get_self_stake_by_vote_account(
     Ok(self_stake_by_vote_account)
 }
 
-// Returns HashMap<testnet_validator_identity, whether the validator met the min_testnet_participation criterion>
+/// Figures out which validators had sufficient testnet participation (non-None stake for n/m of the most recent testnet epochs we have info for)
+/// Returns (HashMap<testnet_validator_identity, (whether the validator met the min_testnet_participation criterion, testnet epochs validator failed in)>
+#[allow(clippy::type_complexity)]
 fn get_testnet_participation(
     config: &Config,
     testnet_epoch: &Epoch,
-) -> BoxResult<Option<HashMap<Pubkey, bool>>> {
-    if let Some((n, m)) = &config.min_testnet_participation {
+) -> BoxResult<Option<HashMap<Pubkey, (bool, Vec<Epoch>)>>> {
+    if let Some((numerator, denominator)) = &config.min_testnet_participation {
         assert_eq!(config.cluster, Cluster::MainnetBeta);
 
         let db_testnet_path = &config.cluster_db_path_for(Cluster::Testnet);
 
-        let mut validator_stake_count: HashMap<Pubkey, usize> = HashMap::new();
+        let mut validator_stake_count: HashMap<Pubkey, Vec<Epoch>> = HashMap::new();
         let mut num_classified_epochs = 0;
         let mut epoch = *testnet_epoch;
+        let mut epochs: Vec<Epoch> = Vec::new();
 
-        while num_classified_epochs < *m {
+        while num_classified_epochs < *denominator && epoch > 0 {
             if let Some(epoch_classification) =
                 EpochClassification::load_if_validators_classified(epoch, db_testnet_path)?
             {
@@ -1209,11 +1212,13 @@ fn get_testnet_participation(
                     .validator_classifications
                 {
                     num_classified_epochs += 1;
+                    epochs.push(epoch - 1);
                     for (_pubkey, validator_classification) in validator_classifications {
                         let identity = validator_classification.identity;
-                        let count = *validator_stake_count.entry(identity).or_insert(0);
-                        if validator_classification.stake_state != ValidatorStakeState::None {
-                            validator_stake_count.insert(identity, count + 1);
+                        let none_count =
+                            validator_stake_count.entry(identity).or_insert(Vec::new());
+                        if validator_classification.stake_state == ValidatorStakeState::None {
+                            none_count.insert(0, epoch - 1);
                         }
                     }
                 }
@@ -1221,13 +1226,21 @@ fn get_testnet_participation(
             epoch -= 1;
         }
 
-        let testnet_participation: HashMap<Pubkey, bool> = validator_stake_count
+        let min_none_allowed = denominator - numerator;
+        let testnet_participation: HashMap<Pubkey, (bool, Vec<Epoch>)> = validator_stake_count
             .iter()
-            .map(|(pubkey, c)| (*pubkey, c >= n))
+            .map(|(pubkey, none_epochs)| {
+                (
+                    *pubkey,
+                    (none_epochs.len() <= min_none_allowed, none_epochs.clone()),
+                )
+            })
             .collect();
 
-        let num_poor_testnet_participants =
-            testnet_participation.iter().filter(|(_, v)| !*v).count();
+        let num_poor_testnet_participants = testnet_participation
+            .iter()
+            .filter(|(_, (passed, _))| !*passed)
+            .count();
 
         let poor_testnet_particiant_percentage = if testnet_participation.is_empty() {
             100
@@ -1235,6 +1248,10 @@ fn get_testnet_participation(
             num_poor_testnet_participants * 100 / testnet_participation.len()
         };
 
+        info!(
+            "Epochs examined for determining testnet participation: {:?}",
+            epochs
+        );
         info!(
             "Total testnet participation: {}",
             testnet_participation.len()
@@ -1271,7 +1288,7 @@ fn classify(
         testnet_epoch
     );
 
-    let testnet_participation: Option<HashMap<Pubkey, bool>> =
+    let testnet_participation: Option<HashMap<Pubkey, (bool, Vec<Epoch>)>> =
         match get_testnet_participation(config, &testnet_epoch)? {
             Some(tn_participation) => {
                 // We have a map from testnet pubkey to whether testnet participation requirements were met. Convert to a map from
@@ -1289,15 +1306,13 @@ fn classify(
                         .filter_map(|(tn_pubkey, passed)| {
                             mb_to_tn
                                 .get(tn_pubkey)
-                                .map(|mb_pubkey| (*mb_pubkey, *passed))
+                                .map(|mb_pubkey| (*mb_pubkey, passed.clone()))
                         })
                         .collect(),
                 )
             }
             _ => None,
         };
-
-    info!("testnet_participation: {:?}", testnet_participation);
 
     let data_centers = match data_center_info::get(config.cluster) {
         Ok(data_centers) => {
@@ -1721,17 +1736,26 @@ fn classify(
             let insufficent_testnet_participation: Option<String> = testnet_participation
                 .as_ref()
                 .and_then(|testnet_participation| {
-                    testnet_participation.get(&identity).and_then(|passed| {
-                        if !passed {
-                            let note = "Insufficient testnet participation".to_string();
-                            if config.enforce_testnet_participation {
-                                return Some(note);
-                            } else {
-                                validator_notes.push(note);
+                    testnet_participation
+                        .get(&identity)
+                        .and_then(|(passed, failed_epochs)| {
+                            if !passed {
+                                let note = format!(
+                                    "Insufficient testnet participation in epochs {:?}",
+                                    failed_epochs
+                                        .iter()
+                                        .map(|e| e.to_string())
+                                        .collect::<Vec<String>>()
+                                        .join(", ")
+                                );
+                                if config.enforce_testnet_participation {
+                                    return Some(note);
+                                } else {
+                                    validator_notes.push(note);
+                                }
                             }
-                        }
-                        None
-                    })
+                            None
+                        })
                 });
 
             let (stake_state, reason) = if num_epochs_commission_increased_above_max > 1 {
