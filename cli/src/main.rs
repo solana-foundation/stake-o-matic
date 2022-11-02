@@ -3,6 +3,7 @@ use {
         crate_description, crate_name, crate_version, value_t_or_exit, App, AppSettings, Arg,
         SubCommand,
     },
+    serde_json::json,
     solana_clap_utils::{
         input_parsers::{pubkey_of, signer_of},
         input_validators::{
@@ -37,6 +38,12 @@ struct Config {
     default_signer: Box<dyn Signer>,
     json_rpc_url: String,
     verbose: bool,
+}
+
+#[derive(PartialEq, Eq)]
+enum OutputFormat {
+    Print,
+    Json,
 }
 
 fn send_and_confirm_message<T: Signers>(
@@ -253,18 +260,40 @@ fn process_list(
     config: &Config,
     rpc_client: &RpcClient,
     state: Option<ParticipantState>,
+    format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let participants = get_participants_with_state(rpc_client, state)?;
 
-    for (participant_address, participant) in &participants {
-        if config.verbose {
-            println!("Participant: {}", participant_address);
+    match format {
+        OutputFormat::Print => {
+            for (participant_address, participant) in &participants {
+                if config.verbose {
+                    println!("Participant: {}", participant_address);
+                }
+                print_participant(participant);
+                println!();
+            }
+            println!("{} entries found", participants.len());
         }
-        print_participant(participant);
-        println!();
-    }
+        OutputFormat::Json => {
+            let json_participants: Vec<_> = participants
+                .iter()
+                .map(|(_participant_address, participant)| {
+                    let state = format!("{:?}", participant.state);
+                    json!({
+                        "state": state,
+                        "mainnet_identity": format!("{}", participant.mainnet_identity),
+                        "testnet_identity": format!("{}", participant.testnet_identity),
+                    })
+                })
+                .collect();
 
-    println!("{} entries found", participants.len());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_participants).unwrap()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -534,6 +563,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .possible_values(&["all", "pending", "approved", "rejected"])
                         .default_value("all")
                         .help("Restrict the list to registrations in the specified state"),
+                )
+                .arg(
+                    Arg::with_name("output_format")
+                        .long("output-format")
+                        .value_name("FORMAT")
+                        .takes_value(true)
+                        .possible_values(&["json"])
+                        .help(
+                            "Print the registrations in specified output, \
+                            format, if unspecified, use",
+                        ),
                 ),
         )
         .subcommand(
@@ -748,7 +788,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => unreachable!(),
             };
 
-            process_list(&config, &rpc_client, state)?;
+            let output_format = match arg_matches.value_of("output_format") {
+                None => OutputFormat::Print,
+                Some(output_format_string) => match output_format_string {
+                    "json" => OutputFormat::Json,
+                    _ => {
+                        eprintln!(
+                            "Unidentified --output-format type: {}",
+                            output_format_string
+                        );
+                        exit(1);
+                    }
+                },
+            };
+
+            process_list(&config, &rpc_client, state, output_format)?;
         }
         ("sign-message", Some(arg_matches)) => match arg_matches.value_of("message") {
             Some(message) => {
