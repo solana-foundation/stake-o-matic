@@ -1639,6 +1639,9 @@ fn classify(
             })
             .collect();
 
+        // Hetzner
+        let blacklisted_datacenter_asns: Vec<u64> = vec![24940];
+
         for VoteAccountInfo {
             identity,
             vote_address,
@@ -1740,6 +1743,14 @@ fn classify(
                     format!(
                         "Commission increased above max_commission for {} epochs. Permanently destaked.",
                         num_epochs_commission_increased_above_max
+                    ),
+                )
+            } else if blacklisted_datacenter_asns.contains(&current_data_center.asn) {
+                (
+                    ValidatorStakeState::None,
+                    format!(
+                        "Validator in blacklisted data center: {}",
+                        current_data_center
                     ),
                 )
             } else if config.require_performance_metrics_reporting
