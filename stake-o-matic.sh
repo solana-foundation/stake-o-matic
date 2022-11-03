@@ -15,6 +15,11 @@ else
   EPOCH_CLASSIFICATION="--epoch-classification first"
 fi
 
+if [[ -n $NO_WIKI_OUPUT ]]; then
+  CSV_OUTPUT_MODE="--csv-output-mode no"
+  EPOCH_CLASSIFICATION="--epoch-classification no"
+fi
+
 if [[ -n $SHORT_TESTNET_PARTICIPATION ]]; then
   TESTNET_PARTICIPATION="--min-testnet-participation 2 4"
 else
