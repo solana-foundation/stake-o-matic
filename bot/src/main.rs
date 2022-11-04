@@ -256,6 +256,7 @@ pub struct Config {
     /// URL and token for the performance metrics  influxdb
     performance_db_url: Option<String>,
     performance_db_token: Option<String>,
+    blocklist_datacenter_asns: Option<Vec<u64>>,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -299,6 +300,7 @@ impl Config {
             performance_db_url: None,
             performance_db_token: None,
             require_performance_metrics_reporting: false,
+            blocklist_datacenter_asns: None,
         }
     }
 
@@ -613,6 +615,14 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .value_name("TOKEN")
                 .help("Token used to authenticate for InfluxDB connection")
         )
+        .arg(
+            Arg::with_name("blocklist_datacenter_asns")
+                .multiple(true)
+                .long("blocklist-datacenter-asns")
+                .takes_value(true)
+                .value_name("ASNS")
+                .help("List of data center ASNS. Validators in these data centers will be destaked")
+        )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
                 .arg(
@@ -802,6 +812,8 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     let performance_db_url = matches.value_of("performance_db_url").map(str::to_string);
     let performance_db_token = matches.value_of("performance_db_token").map(str::to_string);
 
+    let blocklist_datacenter_asns = values_t!(matches, "blocklist_datacenter_asns", u64).ok();
+
     let default_json_rpc_url = match cluster {
         Cluster::MainnetBeta => DEFAULT_MAINNET_BETA_JSON_RPC_URL,
         Cluster::Testnet => DEFAULT_TESTNET_JSON_RPC_URL,
@@ -882,6 +894,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         require_performance_metrics_reporting,
         performance_db_url,
         performance_db_token,
+        blocklist_datacenter_asns,
     };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
@@ -1639,9 +1652,6 @@ fn classify(
             })
             .collect();
 
-        // Hetzner
-        let blacklisted_datacenter_asns: Vec<u64> = vec![24940];
-
         for VoteAccountInfo {
             identity,
             vote_address,
@@ -1745,13 +1755,14 @@ fn classify(
                         num_epochs_commission_increased_above_max
                     ),
                 )
-            } else if blacklisted_datacenter_asns.contains(&current_data_center.asn) {
+            } else if config
+                .blocklist_datacenter_asns
+                .as_ref()
+                .map_or(false, |asns| asns.contains(&current_data_center.asn))
+            {
                 (
                     ValidatorStakeState::None,
-                    format!(
-                        "Validator in blacklisted data center: {}",
-                        current_data_center
-                    ),
+                    format!("Validator in blocked data center: {}", current_data_center),
                 )
             } else if config.require_performance_metrics_reporting
                 && poor_reporters.contains_key(&identity)
