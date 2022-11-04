@@ -26,6 +26,10 @@ else
   TESTNET_PARTICIPATION="--min-testnet-participation 5 10"
 fi
 
+if [[ -n $BLOCKLIST_DATACENTER_ASNS ]]; then
+  BLOCKLIST="--blocklist-datacenter-asns ${BLOCKLIST_DATACENTER_ASNS}"
+fi
+
 if [[ ! -d db ]]; then
   git clone git@github.com:solana-labs/stake-o-matic.wiki.git db
 fi
@@ -73,6 +77,7 @@ MAINNET_BETA_ARGS=(
 
 # shellcheck disable=SC2206
 NOT_A_STAKE_POOL_ARGS=(
+  $BLOCKLIST
   $CSV_OUTPUT_MODE
   $EPOCH_CLASSIFICATION
   $CONFIRM
@@ -86,6 +91,7 @@ NOT_A_STAKE_POOL_ARGS=(
 
 # shellcheck disable=SC2206
 STAKE_POOL_ARGS=(
+  $BLOCKLIST
   $EPOCH_CLASSIFICATION
   $CONFIRM
   $REQUIRE_CLASSIFICATION
