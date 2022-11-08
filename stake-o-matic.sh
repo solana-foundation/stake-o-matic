@@ -40,7 +40,7 @@ TESTNET_ARGS=(
   --participant-url ${PARTICIPANT_URL:?}
   --cluster testnet
   --quality-block-producer-percentage 30
-  --max-poor-block-producer-percentage 20
+  --max-poor-block-producer-percentage 30
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
@@ -57,7 +57,7 @@ MAINNET_BETA_ARGS=(
   --participant-url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
-  --max-poor-block-producer-percentage 20
+  --max-poor-block-producer-percentage 30
   --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
