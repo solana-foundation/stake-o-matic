@@ -34,13 +34,17 @@ if [[ ! -d db ]]; then
   git clone git@github.com:solana-labs/stake-o-matic.wiki.git db
 fi
 
+if [[ -n $MAX_POOR_BLOCK_PRODUCER_PERCENTAGE ]]; then
+  MAX_POOR_BLOCK_PRODUCER_PERCENTAGE="--max-poor-block-producer-percentage $MAX_POOR_BLOCK_PRODUCER_PERCENTAGE"
+fi
+
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
   --url ${URL:?}
   --participant-url ${PARTICIPANT_URL:?}
   --cluster testnet
   --quality-block-producer-percentage 30
-  --max-poor-block-producer-percentage 30
+  ${MAX_POOR_BLOCK_PRODUCER_PERCENTAGE}
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
@@ -57,7 +61,7 @@ MAINNET_BETA_ARGS=(
   --participant-url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
-  --max-poor-block-producer-percentage 30
+  ${MAX_POOR_BLOCK_PRODUCER_PERCENTAGE}
   --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
