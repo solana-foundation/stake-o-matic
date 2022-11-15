@@ -668,7 +668,7 @@ where
             ValidatorStakeState::Bonus => bonus_stake_amount,
         };
         if desired_balance < balance {
-            total_desired_stake_removal += desired_balance - balance;
+            total_desired_stake_removal += desired_balance.wrapping_sub(balance);
         }
 
         let list = if validator_stake.priority {
