@@ -1,3 +1,4 @@
+use std::cmp;
 use {
     crate::{
         generic_stake_pool::*,
@@ -23,6 +24,9 @@ use {
 const MIN_STAKE_DELEGATION: u64 = 1000000000;
 // Delegation rent amount. Need
 const DELEGATION_RENT: u64 = 2282880;
+
+// Do not move more than this amount of stake per epoch
+const MAX_SOL_MOVEMENT_PER_EPOCH: u64 = 5_000_000;
 
 // Minimum amount of lamports in a stake pool account. Without DELEGATION_RENT, we will be
 // below the miniumum delegation amount, and will get InsufficientDelegation errors
@@ -633,6 +637,9 @@ where
     let mut baseline_stake = vec![];
     let mut bonus_stake = vec![];
 
+    // keep track of how much stake is to be removed from validator stake accounts
+    let mut total_desired_stake_removal = 0;
+
     for validator_stake in desired_validator_stake {
         let stake_address =
             validator_stake_address(authorized_staker.pubkey(), validator_stake.vote_address);
@@ -655,6 +662,15 @@ where
                 )
             })?;
 
+        let desired_balance = match validator_stake.stake_state {
+            ValidatorStakeState::None => MIN_STAKE_ACCOUNT_BALANCE,
+            ValidatorStakeState::Baseline => baseline_stake_amount,
+            ValidatorStakeState::Bonus => bonus_stake_amount,
+        };
+        if desired_balance < balance {
+            total_desired_stake_removal += desired_balance - balance;
+        }
+
         let list = if validator_stake.priority {
             &mut priority_stake
         } else {
@@ -669,8 +685,17 @@ where
             stake_address,
             transient_stake_address,
             validator_stake,
+            desired_balance,
         ));
     }
+
+    info!(
+        "Total desired stake removal: {} SOL",
+        total_desired_stake_removal
+    );
+    let stake_removal_multiplier =
+        cmp::max(1, MAX_SOL_MOVEMENT_PER_EPOCH / total_desired_stake_removal);
+    info!("Stake removal multiplier: {}", stake_removal_multiplier);
 
     // Sort from lowest to highest balance
     priority_stake.sort_by_key(|k| k.0);
@@ -689,22 +714,18 @@ where
             vote_address,
             priority,
         },
+        desired_balance,
     ) in priority_stake
         .into_iter()
         .chain(min_stake)
         .chain(baseline_stake)
         .chain(bonus_stake)
     {
-        let desired_balance = match stake_state {
-            ValidatorStakeState::None => MIN_STAKE_ACCOUNT_BALANCE,
-            ValidatorStakeState::Baseline => baseline_stake_amount,
-            ValidatorStakeState::Bonus => bonus_stake_amount,
-        };
         let transient_stake_address_seed = validator_transient_stake_address_seed(vote_address);
 
         #[allow(clippy::comparison_chain)]
         let op_msg = if balance > desired_balance {
-            let amount_to_remove = balance - desired_balance;
+            let amount_to_remove = stake_removal_multiplier * (balance - desired_balance);
             if amount_to_remove < MIN_STAKE_CHANGE_AMOUNT {
                 format!("not removing {} (amount too small)", Sol(amount_to_remove))
             } else {
