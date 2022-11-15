@@ -694,11 +694,10 @@ where
         "Total desired stake removal: {} SOL",
         total_desired_stake_removal
     );
-    let stake_removal_multiplier = if total_desired_stake_removal == 0 {
-        1
-    } else {
-        cmp::max(1, MAX_SOL_MOVEMENT_PER_EPOCH / total_desired_stake_removal)
-    };
+    let stake_removal_multiplier = MAX_SOL_MOVEMENT_PER_EPOCH
+        .checked_div(total_desired_stake_removal)
+        .unwrap_or(1)
+        .max(1);
     info!("Stake removal multiplier: {}", stake_removal_multiplier);
 
     // Sort from lowest to highest balance
