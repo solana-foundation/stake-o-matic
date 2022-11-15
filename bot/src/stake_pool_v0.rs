@@ -638,7 +638,7 @@ where
     let mut bonus_stake = vec![];
 
     // keep track of how much stake is to be removed from validator stake accounts
-    let mut total_desired_stake_removal = 0;
+    let mut total_desired_stake_removal: u64 = 0;
 
     for validator_stake in desired_validator_stake {
         let stake_address =
@@ -668,7 +668,8 @@ where
             ValidatorStakeState::Bonus => bonus_stake_amount,
         };
         if desired_balance < balance {
-            total_desired_stake_removal += desired_balance.wrapping_sub(balance);
+            total_desired_stake_removal =
+                total_desired_stake_removal.wrapping_add(desired_balance.wrapping_sub(balance));
         }
 
         let list = if validator_stake.priority {
