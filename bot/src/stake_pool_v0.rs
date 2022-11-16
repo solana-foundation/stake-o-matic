@@ -473,6 +473,7 @@ fn merge_transient_stake_accounts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_validator_stake_accounts(
     rpc_client: Arc<RpcClient>,
     websocket_url: &str,
