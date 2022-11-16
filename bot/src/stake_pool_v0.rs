@@ -153,6 +153,7 @@ impl GenericStakePool for StakePool {
             &self.authorized_staker,
             &all_stake_addresses - &inuse_stake_addresses,
             self.reserve_stake_address,
+            dry_run,
         )?;
 
         info!("Merge transient stake back into either the reserve or validator stake");
@@ -163,6 +164,7 @@ impl GenericStakePool for StakePool {
             desired_validator_stake,
             self.reserve_stake_address,
             &mut validator_stake_actions,
+            dry_run,
         )?;
 
         info!("Create validator stake accounts if needed");
@@ -174,6 +176,7 @@ impl GenericStakePool for StakePool {
             self.reserve_stake_address,
             self.min_reserve_stake_balance,
             &mut validator_stake_actions,
+            dry_run,
         )?;
 
         // `total_stake_amount` excludes the amount that always remains in the reserve account
@@ -306,6 +309,7 @@ fn merge_orphaned_stake_accounts(
     authorized_staker: &Keypair,
     source_stake_addresses: HashSet<Pubkey>,
     reserve_stake_address: Pubkey,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     for stake_address in source_stake_addresses {
@@ -351,7 +355,7 @@ fn merge_orphaned_stake_accounts(
     if send_and_confirm_transactions_with_spinner(
         rpc_client,
         websocket_url,
-        false,
+        dry_run,
         transactions,
         authorized_staker,
     )?
@@ -371,6 +375,7 @@ fn merge_transient_stake_accounts(
     desired_validator_stake: &[ValidatorStake],
     reserve_stake_address: Pubkey,
     validator_stake_actions: &mut ValidatorStakeActions,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     for ValidatorStake {
@@ -452,7 +457,7 @@ fn merge_transient_stake_accounts(
     if send_and_confirm_transactions_with_spinner(
         rpc_client,
         websocket_url,
-        false,
+        dry_run,
         transactions,
         authorized_staker,
     )?
@@ -465,6 +470,7 @@ fn merge_transient_stake_accounts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_validator_stake_accounts(
     rpc_client: Arc<RpcClient>,
     websocket_url: &str,
@@ -473,6 +479,7 @@ fn create_validator_stake_accounts(
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
     validator_stake_actions: &mut ValidatorStakeActions,
+    dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
     let mut reserve_stake_balance = get_available_reserve_stake_balance(
         &rpc_client,
@@ -595,7 +602,7 @@ fn create_validator_stake_accounts(
     if send_and_confirm_transactions_with_spinner(
         rpc_client,
         websocket_url,
-        false,
+        dry_run,
         transactions,
         authorized_staker,
     )?

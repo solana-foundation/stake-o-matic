@@ -707,6 +707,10 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         .get_matches();
 
     let dry_run = !matches.is_present("confirm");
+    if dry_run {
+        info!("Doing a dry run; stake will not be distributed");
+    }
+
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
         "testnet" => Cluster::Testnet,
