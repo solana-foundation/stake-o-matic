@@ -7,7 +7,7 @@ REPO=https://github.com/solana-labs/stake-o-matic
 #
 #DEFAULT_TO_MASTER=1
 
-if [[ -n $BUILD_IT_DO_NOT_DONWLOAD_IT ]]; then
+if [[ -n $BUILD_IT_DO_NOT_DOWNLOAD_IT ]]; then
   echo "Building locally"
   cargo build --release
   cp ./target/release/solana-stake-o-matic .
