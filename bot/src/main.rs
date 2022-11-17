@@ -1314,8 +1314,6 @@ fn classify(
             _ => None,
         };
 
-    info!("testnet_participation: {:?}", testnet_participation);
-
     let data_centers = match data_center_info::get(config.cluster) {
         Ok(data_centers) => {
             // Sanity check the infrastructure stake percent data.  More than 35% indicates there's
@@ -1682,7 +1680,7 @@ fn classify(
             let commission_at_end_of_epoch = calculate_commission_at_end_of_epoch(
                 epoch,
                 commission,
-                all_commission_changes.get(&vote_address),
+                all_commission_changes.get(&identity),
             );
             let num_epochs_max_commission_exceeded = previous_classification
                 .and_then(|vc| vc.num_epochs_max_commission_exceeded)
@@ -1698,7 +1696,7 @@ fn classify(
             let commission_increased_above_max = commission_at_end_of_epoch > config.max_commission
                 && previous_classification
                     .and_then(|pc| pc.commission)
-                    .map_or(false, |commission| commission < config.max_commission);
+                    .map_or(false, |commission| commission <= config.max_commission);
 
             let num_epochs_commission_increased_above_max = previous_classification
                 .and_then(|vc| vc.num_epochs_commission_increased_above_max)
