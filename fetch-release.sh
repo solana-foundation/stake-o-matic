@@ -7,6 +7,14 @@ REPO=https://github.com/solana-labs/stake-o-matic
 #
 #DEFAULT_TO_MASTER=1
 
+if [[ -n $BUILD_IT_DO_NOT_DONWLOAD_IT ]]; then
+  echo "Building locally"
+  cargo build --release
+  cp ./target/release/solana-stake-o-matic .
+  solana-stake-o-matic --version
+  exit 0
+fi
+
 case "$(uname)" in
 Linux)
   TARGET=x86_64-unknown-linux-gnu
