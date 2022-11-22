@@ -2442,6 +2442,7 @@ fn generate_csv(epoch: Epoch, config: &Config) -> BoxResult<()> {
 }
 
 /// Given a validator's current commission and history of commission changes, returns the validator's commission at the end of `epoch`
+/// Only works if the commission change history includes all changes for `epoch` and `epoch + 1`.
 fn calculate_commission_at_end_of_epoch(
     epoch: u64,
     current_commission: u8,
@@ -2449,22 +2450,33 @@ fn calculate_commission_at_end_of_epoch(
 ) -> u8 {
     match commission_change_history {
         Some(records) => {
-            let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
-                .iter()
-                .filter(|r| r.commission_before.is_some() && r.epoch == epoch)
-                .collect();
+            // First check if there is a commission change record in `epoch`. The last one will
+            // give us the commision at the end of the epoch.
+            let mut rs: Vec<&CommissionChangeIndexHistoryEntry> =
+                records.iter().filter(|r| r.epoch == epoch).collect();
 
-            if rs.is_empty() {
-                current_commission
+            if !rs.is_empty() {
+                rs.sort_by(|a, b| a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap());
+                info!("{:?}", rs);
+                rs.last().unwrap().commission_after as u8
             } else {
-                rs.sort_by(|a, b| {
-                    a.epoch
-                        .cmp(&b.epoch)
-                        .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
-                });
-                rs.first().unwrap().commission_before.unwrap() as u8
+                // If we didn't find a commission change in `epoch`, check for commission changes in
+                // `epoch + 1`. The first one will give us the commission at the end of `epoch`.
+                let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
+                    .iter()
+                    .filter(|r| r.commission_before.is_some() && r.epoch == epoch + 1)
+                    .collect();
+                if rs.is_empty() {
+                    // no commission changes in epoch `epoch + 1`; commission is the current
+                    // commission.
+                    current_commission
+                } else {
+                    rs.sort_by(|a, b| a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap());
+                    rs.first().unwrap().commission_before.unwrap() as u8
+                }
             }
         }
+        // If there are no commission changes, the commission is the current commission
         None => current_commission,
     }
 }
@@ -2593,7 +2605,7 @@ mod test {
         // null -> 10 10% through epoch 123
         // 10 -> 100 90% through epoch 123
         // 100 -> 50 10% through epoch 124
-        // 100 -> 40 50% through epoch 124
+        // 50 -> 40 50% through epoch 124
         //
         // records deliberately placed out of chronological order
         let history = [
@@ -2618,7 +2630,7 @@ mod test {
                 commission_before: Some(10.0),
                 commission_after: expected_commission,
                 epoch,
-                epoch_completion: 90.0,
+                epoch_completion: 99.0,
                 ..Default::default()
             },
             // third
@@ -2662,18 +2674,28 @@ mod test {
     #[test]
     fn test_calculate_commission_at_end_of_epoch_irrelevant_history() {
         let epoch: u64 = 123;
-        let current_commission = 100.0;
+        let current_commission = 10.0;
         let expected_commission = 100.0;
 
         // Changes:
-        // 100 -> 10 10% through epoch 124
-        let history = [CommissionChangeIndexHistoryEntry {
-            commission_before: Some(0.0),
-            commission_after: expected_commission,
-            epoch,
-            epoch_completion: 50.0,
-            ..Default::default()
-        }]
+        // 100 -> 10 50% through epoch 124.
+        // 10 -> 50 60% through epoch 124. Shouldn't matter.
+        let history = [
+            CommissionChangeIndexHistoryEntry {
+                commission_before: Some(expected_commission),
+                commission_after: 10.0,
+                epoch: epoch + 1,
+                epoch_completion: 50.0,
+                ..Default::default()
+            },
+            CommissionChangeIndexHistoryEntry {
+                commission_before: Some(10.0),
+                commission_after: 50.0,
+                epoch: epoch + 1,
+                epoch_completion: 60.0,
+                ..Default::default()
+            },
+        ]
         .to_vec();
 
         let commission_at_end =
