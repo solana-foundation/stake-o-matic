@@ -2451,7 +2451,7 @@ fn calculate_commission_at_end_of_epoch(
         Some(records) => {
             let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
                 .iter()
-                .filter(|r| r.commission_before.is_some() && r.epoch == epoch + 1)
+                .filter(|r| r.commission_before.is_some() && r.epoch == epoch)
                 .collect();
 
             if rs.is_empty() {
