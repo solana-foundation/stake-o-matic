@@ -2453,25 +2453,32 @@ fn calculate_commission_at_end_of_epoch(
             // First check if there is a commission change record in `epoch`. The last one will
             // give us the commision at the end of the epoch.
             let mut rs: Vec<&CommissionChangeIndexHistoryEntry> =
-                records.iter().filter(|r| r.epoch == epoch).collect();
+                records.iter().filter(|r| r.epoch <= epoch).collect();
 
             if !rs.is_empty() {
-                rs.sort_by(|a, b| a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap());
-                info!("{:?}", rs);
+                rs.sort_by(|a, b| {
+                    a.epoch
+                        .cmp(&b.epoch)
+                        .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
+                });
                 rs.last().unwrap().commission_after as u8
             } else {
                 // If we didn't find a commission change in `epoch`, check for commission changes in
                 // `epoch + 1`. The first one will give us the commission at the end of `epoch`.
                 let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
                     .iter()
-                    .filter(|r| r.commission_before.is_some() && r.epoch == epoch + 1)
+                    .filter(|r| r.commission_before.is_some() && r.epoch > epoch)
                     .collect();
                 if rs.is_empty() {
                     // no commission changes in epoch `epoch + 1`; commission is the current
                     // commission.
                     current_commission
                 } else {
-                    rs.sort_by(|a, b| a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap());
+                    rs.sort_by(|a, b| {
+                        a.epoch
+                            .cmp(&b.epoch)
+                            .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
+                    });
                     rs.first().unwrap().commission_before.unwrap() as u8
                 }
             }
@@ -2597,12 +2604,34 @@ mod test {
     }
 
     #[test]
+    fn test_calculate_commission_at_end_of_epoch_recent_change() {
+        let expected_commission = 100;
+        let epoch: u64 = 123;
+
+        let history = [
+            // If there is a commission change in an epoch > `epoch + 1`, that should also be used
+            CommissionChangeIndexHistoryEntry {
+                commission_before: Some(expected_commission as f32),
+                commission_after: 10.0,
+                epoch: epoch + 2,
+                epoch_completion: 50.0,
+                ..Default::default()
+            },
+        ]
+        .to_vec();
+        assert_eq!(
+            expected_commission,
+            calculate_commission_at_end_of_epoch(epoch, 10, Some(&history)) as u8
+        );
+    }
+
+    #[test]
     fn test_calculate_commission_at_end_of_epoch_long_history() {
         let epoch: u64 = 123;
         let expected_commission = 100.0;
 
         // Changes:
-        // null -> 10 10% through epoch 123
+        // null -> 10 10% through epoch 120
         // 10 -> 100 90% through epoch 123
         // 100 -> 50 10% through epoch 124
         // 50 -> 40 50% through epoch 124
@@ -2621,7 +2650,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: None,
                 commission_after: 10.0,
-                epoch,
+                epoch: 120,
                 epoch_completion: 10.0,
                 ..Default::default()
             },
