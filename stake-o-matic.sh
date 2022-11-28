@@ -52,7 +52,7 @@ TESTNET_ARGS=(
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
-  --require-performance-metrics-reporting
+#  --require-performance-metrics-reporting
 )
 
 # shellcheck disable=SC2206
