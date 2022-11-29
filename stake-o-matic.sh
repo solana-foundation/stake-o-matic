@@ -48,7 +48,7 @@ TESTNET_ARGS=(
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
-  --min-release-version 1.14.4
+  --min-release-version 1.14.9
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
