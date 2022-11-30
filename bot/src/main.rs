@@ -1528,11 +1528,15 @@ fn classify(
                 reporting_counts.insert(*pk, HashMap::from([(epoch - 1, *passed)]));
             });
             number_sampled_epochs = 1;
+        } else {
+            notes.push("Could not get reported performance metrics".to_string());
         };
 
         let mut number_loops = 0;
-
-        while number_sampled_epochs < NUM_SAMPLED_REPORTING_EPOCHS as u64 {
+        let max_epochs_to_check = 20;
+        while number_sampled_epochs < NUM_SAMPLED_REPORTING_EPOCHS as u64
+            && number_loops < max_epochs_to_check
+        {
             let reporting_epoch = epoch - 2 - number_loops;
 
             // Fetch from wiki repo
@@ -1540,7 +1544,10 @@ fn classify(
                 reporting_epoch + 1,
                 &config.cluster_db_path(),
             )? {
+                // Whether any "passed" records are found. If none are found, don't use the epoch.
                 let mut found_self_reporting = false;
+
+                let mut this_epoch_reporting_counts: HashMap<Pubkey, bool> = HashMap::new();
 
                 epoch_classification
                     .into_current()
@@ -1548,27 +1555,26 @@ fn classify(
                     .unwrap()
                     .iter()
                     .for_each(|(pk, classification)| {
-                        found_self_reporting = true;
                         if let Some((passed, _reason)) =
                             classification.self_reported_metrics.as_ref()
                         {
-                            let entry = reporting_counts.entry(*pk).or_insert_with(HashMap::new);
-                            entry.insert(reporting_epoch, *passed);
+                            if *passed {
+                                found_self_reporting = true;
+                            }
+                            this_epoch_reporting_counts.insert(*pk, *passed);
                         }
                     });
 
-                number_sampled_epochs += 1;
-
-                if !found_self_reporting {
-                    // self-reporting data only goes back so far. If no self-reporting data was found, stop looping
-                    break;
+                if found_self_reporting {
+                    this_epoch_reporting_counts.iter().for_each(|(pk, passed)| {
+                        let entry = reporting_counts.entry(*pk).or_insert_with(HashMap::new);
+                        entry.insert(reporting_epoch, *passed);
+                    });
+                    number_sampled_epochs += 1;
                 }
             }
             number_loops += 1;
         }
-
-        // Map of poor reporters
-        let mut poor_reporters: HashMap<Pubkey, String> = HashMap::new();
 
         // if mainnet, get list of validators that have been poor reporters on testnet
         let poor_testnet_reporters: Option<Vec<(Pubkey, String)>> = if config.cluster == MainnetBeta
@@ -1615,6 +1621,9 @@ fn classify(
             None
         };
 
+        // Map of poor reporters
+        let mut poor_reporters: HashMap<Pubkey, String> = HashMap::new();
+
         let performance_reporting: HashMap<Pubkey, (bool, String)> = reporting_counts
             .iter()
             .map(|(pk, reports)| {
@@ -1653,6 +1662,10 @@ fn classify(
                 }
             })
             .collect();
+
+        if config.require_performance_metrics_reporting && poor_reporters.is_empty() {
+            notes.push("Could not fetch reporting metrics (or everyone reported); not applying the require-performance-metrics-reporting requirement".to_string());
+        }
 
         for VoteAccountInfo {
             identity,
@@ -1767,6 +1780,7 @@ fn classify(
                     format!("Validator in blocked data center: {}", current_data_center),
                 )
             } else if config.require_performance_metrics_reporting
+                && !poor_reporters.is_empty() // if poor_reporters empty, either everyone is a good reporter, or we did not get any reporting metrics so need to skip this requirement
                 && poor_reporters.contains_key(&identity)
             {
                 (
