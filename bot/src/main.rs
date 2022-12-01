@@ -1533,19 +1533,15 @@ fn classify(
         };
 
         let mut number_loops = 0;
-        let max_epochs_to_check = 20;
-        while number_sampled_epochs < NUM_SAMPLED_REPORTING_EPOCHS as u64
-            && number_loops < max_epochs_to_check
-        {
-            let reporting_epoch = epoch - 2 - number_loops;
-
+        let mut reporting_epoch = epoch - 2;
+        while number_sampled_epochs < NUM_SAMPLED_REPORTING_EPOCHS as u64 && reporting_epoch > 0 {
             // Fetch from wiki repo
             if let Some(epoch_classification) = EpochClassification::load_if_validators_classified(
                 reporting_epoch + 1,
                 &config.cluster_db_path(),
             )? {
                 // Whether any "passed" records are found. If none are found, don't use the epoch.
-                let mut found_self_reporting = false;
+                let mut some_validators_reported = false;
 
                 let mut this_epoch_reporting_counts: HashMap<Pubkey, bool> = HashMap::new();
 
@@ -1559,13 +1555,14 @@ fn classify(
                             classification.self_reported_metrics.as_ref()
                         {
                             if *passed {
-                                found_self_reporting = true;
+                                some_validators_reported = true;
                             }
                             this_epoch_reporting_counts.insert(*pk, *passed);
                         }
                     });
 
-                if found_self_reporting {
+                // if some validators reported, we use the epoch to determine if validators reported in n/10 of the last epochs
+                if some_validators_reported {
                     this_epoch_reporting_counts.iter().for_each(|(pk, passed)| {
                         let entry = reporting_counts.entry(*pk).or_insert_with(HashMap::new);
                         entry.insert(reporting_epoch, *passed);
@@ -1574,6 +1571,7 @@ fn classify(
                 }
             }
             number_loops += 1;
+            reporting_epoch = epoch - 2 - number_loops;
         }
 
         // if mainnet, get list of validators that have been poor reporters on testnet
@@ -1622,7 +1620,7 @@ fn classify(
         };
 
         // Map of poor reporters
-        let mut poor_reporters: HashMap<Pubkey, String> = HashMap::new();
+        let mut poor_reporters_last_10_epochs: HashMap<Pubkey, String> = HashMap::new();
 
         let performance_reporting: HashMap<Pubkey, (bool, String)> = reporting_counts
             .iter()
@@ -1657,13 +1655,14 @@ fn classify(
                         reports.len(),
                         failed_epochs.iter().map(|v| v.to_string()).join(", ")
                     );
-                    poor_reporters.insert(*pk, failure_reason.clone());
+                    poor_reporters_last_10_epochs.insert(*pk, failure_reason.clone());
                     (*pk, (false, failure_reason))
                 }
             })
             .collect();
 
-        if config.require_performance_metrics_reporting && poor_reporters.is_empty() {
+        if config.require_performance_metrics_reporting && poor_reporters_last_10_epochs.is_empty()
+        {
             notes.push("Could not fetch reporting metrics (or everyone reported); not applying the require-performance-metrics-reporting requirement".to_string());
         }
 
@@ -1780,12 +1779,15 @@ fn classify(
                     format!("Validator in blocked data center: {}", current_data_center),
                 )
             } else if config.require_performance_metrics_reporting
-                && !poor_reporters.is_empty() // if poor_reporters empty, either everyone is a good reporter, or we did not get any reporting metrics so need to skip this requirement
-                && poor_reporters.contains_key(&identity)
+                && !poor_reporters_last_10_epochs.is_empty() // if poor_reporters empty, either everyone is a good reporter, or we did not get any reporting metrics so need to skip this requirement
+                && poor_reporters_last_10_epochs.contains_key(&identity)
             {
                 (
                     ValidatorStakeState::None,
-                    poor_reporters.get(&identity).unwrap().clone(),
+                    poor_reporters_last_10_epochs
+                        .get(&identity)
+                        .unwrap()
+                        .clone(),
                 )
             } else if config.enforce_min_self_stake
                 && self_stake < config.min_self_stake_lamports
