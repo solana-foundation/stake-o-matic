@@ -1583,7 +1583,10 @@ fn classify(
                     &config.cluster_db_path_for(Testnet),
                 )?
                 .map(|(epoch, epoch_classification)| {
-                    info!("Using epoch {:?} for testnet classifications", epoch - 1);
+                    let note = format!("Using epoch {:?} for testnet classifications", epoch - 1);
+                    notes.push(note.to_string());
+                    info!("{}", note);
+
                     epoch_classification
                 })
                 .unwrap()
@@ -1640,6 +1643,7 @@ fn classify(
                         .find(|(failed_pk, _r)| pk == failed_pk)
                         .map(|(_pk, reason)| reason.clone())
                 }) {
+                    poor_reporters_last_10_epochs.insert(*pk, reason.clone());
                     (*pk, (false, reason))
                 } else if percent_passed >= SUCCESS_MIN_PERCENT {
                     let pass_reason = format!(
