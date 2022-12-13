@@ -1,8 +1,8 @@
-use crate::InfrastructureConcentrationAffects;
 use {
     crate::{
         data_center_info::{DataCenterId, DataCenterInfo},
         generic_stake_pool::ValidatorStakeState,
+        InfrastructureConcentrationAffects,
     },
     log::*,
     semver::Version,
@@ -235,6 +235,46 @@ impl EpochClassification {
             }
         }
         Ok(None)
+    }
+
+    pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
+    where
+        P: AsRef<Path>,
+    {
+        let serialized = serde_yaml::to_string(self)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))?;
+
+        fs::create_dir_all(&path)?;
+        let mut file = File::create(Self::file_name(epoch, path))?;
+        file.write_all(&serialized.into_bytes())?;
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct DryRunStats {
+    pub none_count: u64,
+    pub baseline_count: u64,
+    pub bonus_count: u64,
+}
+
+/**
+ Holds information about dry runs.
+*/
+impl DryRunStats {
+    fn file_name<P>(epoch: Epoch, path: P) -> PathBuf
+    where
+        P: AsRef<Path>,
+    {
+        path.as_ref().join(format!("epoch-{}-dryrun.yml", epoch))
+    }
+
+    pub fn exists<P>(epoch: Epoch, path: P) -> bool
+    where
+        P: AsRef<Path>,
+    {
+        Path::new(&Self::file_name(epoch, path)).exists()
     }
 
     pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
