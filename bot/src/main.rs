@@ -257,6 +257,7 @@ pub struct Config {
     performance_db_url: Option<String>,
     performance_db_token: Option<String>,
     blocklist_datacenter_asns: Option<Vec<u64>>,
+    require_dry_run_to_distribute_stake: bool,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -301,6 +302,7 @@ impl Config {
             performance_db_token: None,
             require_performance_metrics_reporting: false,
             blocklist_datacenter_asns: None,
+            require_dry_run_to_distribute_stake: false,
         }
     }
 
@@ -623,6 +625,12 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .value_name("ASNS")
                 .help("List of data center ASNS. Validators in these data centers will be destaked")
         )
+        .arg(
+            Arg::with_name("require_dry_run_to_distribute_stake")
+                .long("require-dry-run-to-distribute-stake")
+                .takes_value(false)
+                .help("If set, only distribute stake if there is a dry run summary in the wiki repo")
+        )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
                 .arg(
@@ -818,6 +826,9 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
 
     let blocklist_datacenter_asns = values_t!(matches, "blocklist_datacenter_asns", u64).ok();
 
+    let require_dry_run_to_distribute_stake =
+        matches.is_present("require_dry_run_to_distribute_stake");
+
     let default_json_rpc_url = match cluster {
         Cluster::MainnetBeta => DEFAULT_MAINNET_BETA_JSON_RPC_URL,
         Cluster::Testnet => DEFAULT_TESTNET_JSON_RPC_URL,
@@ -899,6 +910,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         performance_db_url,
         performance_db_token,
         blocklist_datacenter_asns,
+        require_dry_run_to_distribute_stake,
     };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
@@ -2306,6 +2318,9 @@ fn main() -> BoxResult<()> {
             .validator_classifications
             .unwrap_or_default();
 
+        let mut min_stake_node_count = 0;
+        let mut bonus_stake_node_count = 0;
+        let mut baseline_stake_node_count = 0;
         let mut validator_stake_change_notes = vec![];
         let mut validator_notes = vec![];
         let desired_validator_stake: Vec<_> = validator_classifications
@@ -2332,6 +2347,12 @@ fn main() -> BoxResult<()> {
                     ));
                 }
 
+                match vc.stake_state {
+                    ValidatorStakeState::None => min_stake_node_count += 1,
+                    ValidatorStakeState::Bonus => bonus_stake_node_count += 1,
+                    ValidatorStakeState::Baseline => baseline_stake_node_count += 1,
+                }
+
                 ValidatorStake {
                     identity: vc.identity,
                     vote_address: vc.vote_address,
@@ -2344,6 +2365,21 @@ fn main() -> BoxResult<()> {
                 }
             })
             .collect();
+
+        if config.require_dry_run_to_distribute_stake
+            && !DryRunStats::exists(epoch, &config.cluster_db_path())
+        {
+            let dry_run_stats = DryRunStats {
+                none_count: min_stake_node_count,
+                baseline_count: baseline_stake_node_count,
+                bonus_count: bonus_stake_node_count,
+            };
+            dry_run_stats.save(epoch, &config.cluster_db_path())?;
+
+            info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
+
+            return Ok(());
+        }
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(
