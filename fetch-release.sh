@@ -40,7 +40,7 @@ for BIN in solana-stake-o-matic solana-foundation-delegation-program; do
   fi
 
   set -ex
-  curl -fL $URL -o $BIN
+  curl -fL "$URL" -o $BIN
   chmod +x $BIN
   ls -l $BIN
   ./$BIN --version
