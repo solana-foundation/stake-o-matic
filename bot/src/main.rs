@@ -2,9 +2,11 @@ use crate::data_center_info::{DataCenterInfo, DataCenters};
 use crate::performance_db_utils::{
     get_reported_performance_metrics, NUM_SAMPLED_REPORTING_EPOCHS, SUCCESS_MIN_PERCENT,
 };
+use crate::slack_utils::send_slack_channel_message;
 use crate::stake_pool_v0::MIN_STAKE_ACCOUNT_BALANCE;
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
 use crate::Cluster::{MainnetBeta, Testnet};
+use std::env;
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
     chrono::{Duration as ChronoDuration, Utc},
@@ -59,6 +61,7 @@ mod generic_stake_pool;
 mod noop_stake_pool;
 mod performance_db_utils;
 mod rpc_client_utils;
+mod slack_utils;
 mod stake_pool;
 mod stake_pool_v0;
 mod validator_list;
@@ -2377,6 +2380,22 @@ fn main() -> BoxResult<()> {
             dry_run_stats.save(epoch, &config.cluster_db_path())?;
 
             info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
+
+            let slack_message = format!(
+                "Dry run stake rewards distribution for {}/{}: \n\
+            None: {:?}\n\
+            Baseline: {:?}\n\
+            Bonus: {:?}",
+                config.cluster,
+                epoch,
+                dry_run_stats.none_count,
+                dry_run_stats.baseline_count,
+                dry_run_stats.bonus_count
+            );
+
+            if let Err(e) = send_slack_channel_message(&slack_message) {
+                info!("Could not send slack message: {:?}", e)
+            };
 
             return Ok(());
         }
