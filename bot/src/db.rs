@@ -252,7 +252,7 @@ impl EpochClassification {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DryRunStats {
     pub none_count: u64,
     pub baseline_count: u64,
