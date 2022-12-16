@@ -2194,6 +2194,8 @@ fn main() -> BoxResult<()> {
 
     let (config, rpc_client, mut stake_pool) = get_config()?;
 
+    send_slack_channel_message("Testing slack messaging")?;
+
     info!("Loading participants...");
     let all_participants = get_participants_with_state(
         &RpcClient::new(config.participant_json_rpc_url.clone()),
