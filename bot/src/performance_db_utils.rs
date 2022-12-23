@@ -1,5 +1,5 @@
 use crate::Cluster::{MainnetBeta, Testnet};
-use crate::{Cluster, Epoch, Pubkey, ValidatorList};
+use crate::{Cluster, Epoch, get_epoch_start_time, Pubkey, ValidatorList};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info, trace};
@@ -134,6 +134,16 @@ fn find_reporters_for_epoch(
     // List of validators and whether they reported correctly at least once
     let mut reporters: HashMap<Pubkey, bool> = HashMap::new();
 
+    let epoch_start_time = get_epoch_start_time(&rpc_client, &cluster, &epoch)?;
+    let epoch_end_time = get_epoch_start_time(&rpc_client, &cluster, &epoch + 1)?;
+
+    let reported_data =
+        fetch_data(performance_db_url, performance_db_token, cluster, epoch_start_time, epoch_end_time)?;
+
+    if reported_data.is_empty() {
+        info!("No records found for time {:?}", slot_time);
+    }
+
     // To check if a validator has been reporting during an epoch, we take four samples from the epoch at 0%, 25%, 50%,
     // and 75%, and if the validator reported correctly during any one  of the sample periodsd, the validator passes.
     for n in 0..4 {
@@ -196,8 +206,20 @@ fn fetch_data(
     performance_db_url: &String,
     performance_db_token: &String,
     cluster: &Cluster,
-    date_time: DateTime<Utc>,
+    start_date_time: DateTime<Utc>,
+    end_date_time: DateTime<Utc>,
 ) -> Result<HashMap<Pubkey, i32>, Box<dyn std::error::Error>> {
+
+
+    /*
+    from(bucket:"testnet")
+        |> range(start: 1671260458, stop: 1671438728) // tn 401
+        |> filter(fn: (r) => r["_measurement"] == "optimistic_slot" and r["_field"] == "slot")
+        |> window(every: 4h, period: 1m) // 1:30
+        |> keep(columns: ["_start", "host_id"])
+        |> group(columns: ["_start"])
+        |> unique(column: "host_id")
+        */
     let query = format!(
         "from(bucket:\"{}\")
         |> range(start: {}, stop: {})
@@ -259,42 +281,4 @@ fn get_modes(values: Vec<i32>) -> Vec<i32> {
         .map(|(k, _v)| k)
         .sorted()
         .collect()
-}
-
-/// gets the time of the slot in the epoch. If there was no block for the slot, checks the next slot
-fn get_slot_time(
-    slot: u64,
-    rpc_client: &RpcClient,
-) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
-    let mut idx = 0;
-    loop {
-        // try 200 times
-        if idx > 200 {
-            return Err(format!("Could not get slot time for slot {:?}", slot).into());
-        }
-        let slot_to_try = slot + idx;
-
-        debug!("Trying get_block_time for slot {:?}", slot_to_try);
-
-        let time_stamp = rpc_client.get_block_time(slot_to_try);
-
-        match time_stamp {
-            Ok(time) => {
-                return Ok(DateTime::<Utc>::from_utc(
-                    NaiveDateTime::from_timestamp(time, 0),
-                    Utc,
-                ));
-            }
-            Err(e) => match e.kind() {
-                ClientErrorKind::RpcError(_) => {
-                    // Not documented, but if the error is RpcError, there was no block for the slot, so we should try another slot
-                    trace!("No time found for slot {}", slot + idx);
-                    idx += 1;
-                }
-                _ => {
-                    return Err("Unknown error".into());
-                }
-            },
-        }
-    }
 }

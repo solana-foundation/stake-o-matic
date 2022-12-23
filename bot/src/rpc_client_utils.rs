@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use chrono::{DateTime, Utc};
 use {
     indicatif::{ProgressBar, ProgressStyle},
     log::*,
@@ -27,6 +28,8 @@ use {
         time::{Duration, Instant},
     },
 };
+use solana_foundation_delegation_program_registry::solana_program::clock::DEFAULT_SLOTS_PER_EPOCH;
+use crate::Cluster;
 
 fn new_spinner_progress_bar() -> ProgressBar {
     let progress_bar = ProgressBar::new(42);
@@ -181,12 +184,12 @@ pub fn send_and_confirm_transactions_with_spinner(
             // Collect statuses for the transactions, drop those that are confirmed
             let pending_signatures = pending_transactions.keys().cloned().collect::<Vec<_>>();
             for pending_signatures_chunk in
-                pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS)
+            pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS)
             {
                 if let Ok(result) = rpc_client.get_signature_statuses(pending_signatures_chunk) {
                     let statuses = result.value;
                     for (signature, status) in
-                        pending_signatures_chunk.iter().zip(statuses.into_iter())
+                    pending_signatures_chunk.iter().zip(statuses.into_iter())
                     {
                         if let Some(status) = status {
                             if status.satisfies_commitment(rpc_client.commitment()) {
@@ -288,7 +291,7 @@ pub fn get_vote_account_info(
 
                     if credits_last_four_epochs > 0 {
                         let epoch_credits = if let Some((_last_epoch, credits, prev_credits)) =
-                            epoch_credits.iter().find(|ec| ec.0 == epoch)
+                        epoch_credits.iter().find(|ec| ec.0 == epoch)
                         {
                             credits.saturating_sub(*prev_credits)
                         } else {
@@ -372,6 +375,66 @@ pub fn check_rpc_health(rpc_client: &RpcClient) -> Result<(), Box<dyn error::Err
             retry_delay.as_secs()
         );
         std::thread::sleep(retry_delay);
+    }
+}
+
+pub fn get_epoch_start_time(rpc_client: &RpcClient, cluster: &Cluster, epoch: &Epoch) -> Result<DateTime<Utc>, Box<dyn error::Error>> {
+    let slot_to_try: i64 = match cluster {
+        MainnetBeta => (DEFAULT_SLOTS_PER_EPOCH as i64) * (*epoch as i64),
+        // Testnet epoch boundaries aren't on multiples of DEFAULT_SLOTS_PER_EPOCH for some reason
+        // Epoch 341 starts at slot 141788256; use that as our anchor.
+        // Testnet => (141_788_256 as u64).wrapping_add( DEFAULT_SLOTS_PER_EPOCH.wrapping_mul((341 as u64).wrapping_sub(*epoch)))
+        Testnet => 141_788_256 + (DEFAULT_SLOTS_PER_EPOCH as i64) * ((*epoch as i64) - 341),
+    };
+
+    let slot_time = match get_slot_time(rpc_client, slot_to_try as u64) {
+        Ok(st) => st,
+        Err(_e) => {
+            debug!("Could not find slot time for {:?}", slot_to_try);
+        }
+    };
+
+    debug!("Found a time: {:?}", slot_time);
+
+    Ok(slot_time)
+}
+
+
+/// gets the time of the slot in the epoch. If there was no block for the slot, checks the next slot
+fn get_slot_time(
+    rpc_client: &RpcClient,
+    slot: u64,
+) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
+    let mut idx = 0;
+    loop {
+        // try 200 times
+        if idx > 200 {
+            return Err(format!("Could not get slot time for slot {:?}", slot).into());
+        }
+        let slot_to_try = slot + idx;
+
+        debug!("Trying get_block_time for slot {:?}", slot_to_try);
+
+        let time_stamp = rpc_client.get_block_time(slot_to_try);
+
+        match time_stamp {
+            Ok(time) => {
+                return Ok(DateTime::<Utc>::from_utc(
+                    NaiveDateTime::from_timestamp(time, 0),
+                    Utc,
+                ));
+            }
+            Err(e) => match e.kind() {
+                ClientErrorKind::RpcError(_) => {
+                    // Not documented, but if the error is RpcError, there was no block for the slot, so we should try another slot
+                    trace!("No time found for slot {}", slot + idx);
+                    idx += 1;
+                }
+                _ => {
+                    return Err("Unknown error".into());
+                }
+            },
+        }
     }
 }
 
@@ -557,7 +620,7 @@ pub mod test {
                     None,
                     0,
                 )
-                .unwrap(),
+                    .unwrap(),
             ],
             Some(&authorized_staker.pubkey()),
         );
@@ -595,7 +658,7 @@ pub mod test {
                     mint,
                     owner,
                 )
-                .unwrap(),
+                    .unwrap(),
             ],
             Some(&authorized_staker.pubkey()),
         );
