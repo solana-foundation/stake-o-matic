@@ -1,4 +1,3 @@
-use crate::send_slack_channel_message;
 use {
     crate::{
         generic_stake_pool::*,
@@ -269,12 +268,6 @@ impl GenericStakePool for StakePool {
             &mut validator_stake_actions,
             &mut unfunded_validators,
         )?;
-
-        let slack_message = "Stake bot LIVE run\n".to_owned() + &notes.join("\n");
-
-        if let Err(e) = send_slack_channel_message(&slack_message) {
-            info!("Could not send slack message: {:?}", e)
-        };
 
         Ok((
             notes,
