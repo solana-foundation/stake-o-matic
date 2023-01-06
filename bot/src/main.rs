@@ -2387,7 +2387,7 @@ fn main() -> BoxResult<()> {
             Baseline: {:?}\n\
             Bonus: {:?}",
                 config.cluster,
-                epoch,
+                epoch - 1,
                 dry_run_stats.none_count,
                 dry_run_stats.baseline_count,
                 dry_run_stats.bonus_count
@@ -2407,6 +2407,18 @@ fn main() -> BoxResult<()> {
                 config.dry_run,
                 &desired_validator_stake,
             )?;
+
+        if first_time {
+            let slack_message = format!(
+                "Stake bot LIVE run for {:?}/{:?}\n",
+                config.cluster,
+                epoch - 1
+            ) + &stake_pool_notes.join("\n");
+
+            if let Err(e) = send_slack_channel_message(&slack_message) {
+                info!("Could not send slack message: {:?}", e)
+            };
+        }
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
 
