@@ -6,6 +6,9 @@ set -ex
 
 DIR="$(dirname "$0")"
 
+# Convert space-delimited string into array
+URL=($URL)
+
 "$DIR"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
 
 if [[ -n $FOLLOWER ]]; then
