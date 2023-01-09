@@ -7,7 +7,7 @@ set -ex
 DIR="$(dirname "$0")"
 
 # Convert space-delimited string into array
-URL=($URL)
+URL=" " read -r -a URL <<< "$var"
 
 "$DIR"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
 
