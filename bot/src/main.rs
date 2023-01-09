@@ -357,8 +357,9 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .long("url")
                 .value_name("URL")
                 .takes_value(true)
+                .multiple(true)
                 .validator(is_url)
-                .help("JSON RPC URL for the cluster")
+                .help("JSON RPC URLs for the cluster. Bot will use first URL that works")
         )
         .arg(
             Arg::with_name("participant_json_rpc_url")
@@ -838,16 +839,14 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     }
     .to_string();
 
-    // Create a list of RPC URLs to try. If a URL is specified on the command-line, try that first.
-    // If the URL specified on the command-line is not "healthy," or if no URL was specified on the
-    // command-line, fall back to the public solana.com RPC url.
-    let json_rpc_urls_to_try: Vec<String> = match value_t!(matches, "json_rpc_url", String) {
-        Ok(url) => {
-            if url.eq(&default_json_rpc_url) {
-                vec![default_json_rpc_url]
-            } else {
-                vec![url, default_json_rpc_url]
-            }
+    // Create a list of RPC URLs to try. The first URL that returns a successful "getHealth" response
+    // will be used for all requests
+    let json_rpc_urls_to_try: Vec<String> = match values_t!(matches, "json_rpc_url", String) {
+        Ok(argument_urls) => {
+            let mut urls = argument_urls.clone();
+            urls.push(default_json_rpc_url);
+
+            urls
         }
         _ => {
             vec![default_json_rpc_url]
