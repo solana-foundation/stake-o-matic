@@ -843,7 +843,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     // will be used for all requests
     let json_rpc_urls_to_try: Vec<String> = match values_t!(matches, "json_rpc_url", String) {
         Ok(argument_urls) => {
-            let mut urls = argument_urls.clone();
+            let mut urls = argument_urls;
             urls.push(default_json_rpc_url);
 
             urls
