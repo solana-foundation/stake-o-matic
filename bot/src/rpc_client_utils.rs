@@ -132,9 +132,8 @@ pub fn send_and_confirm_transactions_with_spinner(
                 for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
                     let method = if dry_run {
                         "DRY RUN"
-                    // TODO: UNCOMMENT CODE AFTER RPC SEND TEST
-                    //} else if tpu_client.send_transaction(transaction) {
-                    //    "TPU"
+                    } else if tpu_client.send_transaction(transaction) {
+                        "TPU"
                     } else {
                         let _ = rpc_client.send_transaction_with_config(
                             transaction,
