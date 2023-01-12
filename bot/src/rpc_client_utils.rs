@@ -84,8 +84,7 @@ pub fn send_and_confirm_transactions_with_spinner(
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
     progress_bar.set_message("Connecting...");
-    // TODO: REMOVE initial _ in _tpu_client variable name
-    let _tpu_client = new_tpu_client_with_retry(&rpc_client, websocket_url)?;
+    let tpu_client = new_tpu_client_with_retry(&rpc_client, websocket_url)?;
 
     let mut transactions = transactions.into_iter().enumerate().collect::<Vec<_>>();
     let num_transactions = transactions.len() as f64;
