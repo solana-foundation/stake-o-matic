@@ -36,6 +36,48 @@ fn new_spinner_progress_bar() -> ProgressBar {
     progress_bar
 }
 
+#[cfg(test)]
+fn new_tpu_client_with_retry(
+    rpc_client: &Arc<RpcClient>,
+    websocket_url: &str,
+) -> Result<TpuClient, TpuSenderError> {
+    use solana_client::{
+        client_error::{ClientError, ClientErrorKind},
+        rpc_request::RpcError,
+    };
+    let mut retries = 50; // reconnecting with a 32-slot epoch can sometimes take awhile
+    let sleep_ms = 400;
+    while retries > 0 {
+        match TpuClient::new(
+            rpc_client.clone(),
+            websocket_url,
+            TpuClientConfig { fanout_slots: 1 },
+        ) {
+            // only retry on connection error or get slot leaders error
+            Err(TpuSenderError::PubsubError(PubsubClientError::ConnectionError(_)))
+            | Err(TpuSenderError::RpcError(ClientError {
+                kind: ClientErrorKind::RpcError(RpcError::RpcResponseError { code: -32602, .. }),
+                ..
+            })) => {
+                warn!(
+                    "Error creating Tpu Client, retrying in {}ms, {} retries remaining",
+                    sleep_ms, retries
+                );
+                retries -= 1;
+                sleep(Duration::from_millis(sleep_ms));
+            }
+            // everything else, Ok or Err, can pass through
+            result => return result,
+        }
+    }
+    TpuClient::new(
+        rpc_client.clone(),
+        websocket_url,
+        TpuClientConfig { fanout_slots: 1 },
+    )
+}
+
+#[cfg(not(test))]
 fn new_tpu_client_with_retry(
     rpc_client: &Arc<RpcClient>,
     websocket_url: &str,
