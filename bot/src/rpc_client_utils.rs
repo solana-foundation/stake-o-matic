@@ -222,27 +222,33 @@ pub fn send_and_confirm_transactions_with_spinner(
             for pending_signatures_chunk in
                 pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS)
             {
-                if let Ok(result) = rpc_client.get_signature_statuses(pending_signatures_chunk) {
-                    let statuses = result.value;
-                    for (signature, status) in
-                        pending_signatures_chunk.iter().zip(statuses.into_iter())
-                    {
-                        if let Some(status) = status {
-                            if status.satisfies_commitment(rpc_client.commitment()) {
-                                if let Some((i, _)) = pending_transactions.remove(signature) {
-                                    confirmed_transactions += 1;
-                                    if status.err.is_some() {
-                                        progress_bar.println(format!(
-                                            "Failed transaction {}: {:?}",
-                                            signature, status
-                                        ));
+                match rpc_client.get_signature_statuses(pending_signatures_chunk) {
+                    Ok(result) => {
+                        let statuses = result.value;
+                        for (signature, status) in
+                            pending_signatures_chunk.iter().zip(statuses.into_iter())
+                        {
+                            if let Some(status) = status {
+                                if status.satisfies_commitment(rpc_client.commitment()) {
+                                    if let Some((i, _)) = pending_transactions.remove(signature) {
+                                        confirmed_transactions += 1;
+                                        if status.err.is_some() {
+                                            progress_bar.println(format!(
+                                                "Failed transaction {}: {:?}",
+                                                signature, status
+                                            ));
+                                        }
+                                        transaction_errors[i] = status.err;
                                     }
-                                    transaction_errors[i] = status.err;
                                 }
                             }
                         }
                     }
+                    Err(e) => {
+                        error!("Could not get signature statuses: {:?}", e);
+                    }
                 }
+
                 set_message(
                     confirmed_transactions,
                     Some(block_height),
