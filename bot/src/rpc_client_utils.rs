@@ -161,6 +161,7 @@ pub fn send_and_confirm_transactions_with_spinner(
             transaction.try_sign(&[signer], blockhash)?;
             pending_transactions.insert(transaction.signatures[0], (i, transaction));
         }
+        info!("pending_transactions: {:?}", pending_transactions);
 
         let mut last_resend = Instant::now() - transaction_resend_interval;
         while block_height <= last_valid_block_height {
