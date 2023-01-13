@@ -1,7 +1,7 @@
 use {
     crate::{
         generic_stake_pool::*,
-        rpc_client_utils::{get_all_stake, send_and_confirm_transactions_with_spinner},
+        rpc_client_utils::{get_all_stake, send_and_confirm_transactions_rpc},
     },
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
@@ -353,7 +353,7 @@ fn merge_orphaned_stake_accounts(
         }
     }
 
-    if send_and_confirm_transactions_with_spinner(
+    if send_and_confirm_transactions_rpc(
         rpc_client,
         websocket_url,
         dry_run,
@@ -455,7 +455,7 @@ fn merge_transient_stake_accounts(
         }
     }
 
-    if send_and_confirm_transactions_with_spinner(
+    if send_and_confirm_transactions_rpc(
         rpc_client,
         websocket_url,
         dry_run,
@@ -600,7 +600,7 @@ fn create_validator_stake_accounts(
         }
     }
 
-    if send_and_confirm_transactions_with_spinner(
+    if send_and_confirm_transactions_rpc(
         rpc_client,
         websocket_url,
         dry_run,
@@ -804,7 +804,7 @@ where
     let ok = if dry_run {
         true
     } else {
-        !send_and_confirm_transactions_with_spinner(
+        !send_and_confirm_transactions_rpc(
             rpc_client,
             websocket_url,
             false,

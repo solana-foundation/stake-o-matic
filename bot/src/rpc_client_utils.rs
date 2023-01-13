@@ -110,6 +110,58 @@ fn new_tpu_client_with_retry(
     )
 }
 
+pub fn send_and_confirm_transactions_rpc(
+    rpc_client: Arc<RpcClient>,
+    _websocket_url: &str,
+    dry_run: bool,
+    transactions: Vec<Transaction>,
+    signer: &Keypair,
+) -> Result<Vec<Option<TransactionError>>, Box<dyn error::Error>> {
+    if transactions.is_empty() {
+        return Ok(vec![]);
+    }
+    let transactions_to_send = transactions.len();
+    let mut transactions_sent: usize = 0;
+    let progress_bar = new_spinner_progress_bar();
+    progress_bar.set_message("send_and_confirm_transactions_rpc...");
+    let mut transaction_errors: Vec<Option<TransactionError>> = vec![None; transactions.len()];
+
+    let mut transaction_number = 0;
+    for mut transaction in transactions {
+        transaction_number += 1;
+        progress_bar.set_message(format!(
+            "Sending transaction {}. Sent {}/{}",
+            transaction_number, transactions_sent, transactions_to_send
+        ));
+        if dry_run {
+            info!("Dry run: not sending")
+        } else {
+            let latest_blockhash = rpc_client.get_latest_blockhash().unwrap();
+            transaction.try_sign(&[signer], latest_blockhash)?;
+            match rpc_client.send_and_confirm_transaction(&transaction) {
+                Ok(_signature) => {
+                    transactions_sent += 1;
+                }
+                Err(client_error) => {
+                    // Should we retry on error?
+                    if let Some(transaction_error) = client_error.get_transaction_error() {
+                        transaction_errors.push(Some(transaction_error));
+                        break;
+                    } else {
+                        error!(
+                            "Failed to send transaction ({:?}): {:?}",
+                            client_error.kind,
+                            client_error.to_string()
+                        );
+                        return Err("Failed to send transaction".into());
+                    }
+                }
+            }
+        }
+    }
+    Ok(transaction_errors)
+}
+
 pub fn send_and_confirm_transactions_with_spinner(
     rpc_client: Arc<RpcClient>,
     websocket_url: &str,
@@ -161,7 +213,6 @@ pub fn send_and_confirm_transactions_with_spinner(
             transaction.try_sign(&[signer], blockhash)?;
             pending_transactions.insert(transaction.signatures[0], (i, transaction));
         }
-        info!("pending_transactions: {:?}", pending_transactions);
 
         let mut last_resend = Instant::now() - transaction_resend_interval;
         while block_height <= last_valid_block_height {
