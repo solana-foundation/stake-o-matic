@@ -1,3 +1,5 @@
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_sdk::instruction::Instruction;
 use {
     crate::{
         generic_stake_pool::*,
@@ -19,13 +21,16 @@ use {
     },
 };
 
+// Priority fee
+const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS: u64 = 20_000;
+
 // Value of RpcClient::get_stake_minimum_delegation(); need to upgrade solana-client to get access to this function
 const MIN_STAKE_DELEGATION: u64 = 1000000000;
 // Delegation rent amount. Need
 const DELEGATION_RENT: u64 = 2282880;
 
 // Minimum amount of lamports in a stake pool account. Without DELEGATION_RENT, we will be
-// below the miniumum delegation amount, and will get InsufficientDelegation errors
+// below the minimum delegation amount, and will get InsufficientDelegation errors
 pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = MIN_STAKE_DELEGATION + DELEGATION_RENT;
 
 // Don't bother adjusting stake if less than this amount of lamports will be affected
@@ -327,21 +332,26 @@ fn merge_orphaned_stake_accounts(
             StakeActivationState::Activating | StakeActivationState::Deactivating => {}
             StakeActivationState::Active => {
                 transactions.push(Transaction::new_with_payer(
-                    &[stake_instruction::deactivate_stake(
-                        &stake_address,
-                        &authorized_staker.pubkey(),
-                    )],
+                    &[
+                        priority_fee_instruction(),
+                        stake_instruction::deactivate_stake(
+                            &stake_address,
+                            &authorized_staker.pubkey(),
+                        ),
+                    ],
                     Some(&authorized_staker.pubkey()),
                 ));
                 debug!("Deactivating stake {}", stake_address);
             }
             StakeActivationState::Inactive => {
+                let mut instructions = vec![priority_fee_instruction()];
+                instructions.append(&mut stake_instruction::merge(
+                    &reserve_stake_address,
+                    &stake_address,
+                    &authorized_staker.pubkey(),
+                ));
                 transactions.push(Transaction::new_with_payer(
-                    &stake_instruction::merge(
-                        &reserve_stake_address,
-                        &stake_address,
-                        &authorized_staker.pubkey(),
-                    ),
+                    &instructions,
                     Some(&authorized_staker.pubkey()),
                 ));
 
@@ -421,12 +431,14 @@ fn merge_transient_stake_accounts(
                         })?;
 
                     if stake_activation.state == StakeActivationState::Active {
+                        let mut instructions = vec![priority_fee_instruction()];
+                        instructions.append(&mut stake_instruction::merge(
+                            &stake_address,
+                            &transient_stake_address,
+                            &authorized_staker.pubkey(),
+                        ));
                         transactions.push(Transaction::new_with_payer(
-                            &stake_instruction::merge(
-                                &stake_address,
-                                &transient_stake_address,
-                                &authorized_staker.pubkey(),
-                            ),
+                            &instructions,
                             Some(&authorized_staker.pubkey()),
                         ));
                         debug!("Merging active transient stake for {}", identity);
@@ -441,12 +453,14 @@ fn merge_transient_stake_accounts(
                     }
                 }
                 StakeActivationState::Inactive => {
+                    let mut instructions = vec![priority_fee_instruction()];
+                    instructions.append(&mut stake_instruction::merge(
+                        &reserve_stake_address,
+                        &transient_stake_address,
+                        &authorized_staker.pubkey(),
+                    ));
                     transactions.push(Transaction::new_with_payer(
-                        &stake_instruction::merge(
-                            &reserve_stake_address,
-                            &transient_stake_address,
-                            &authorized_staker.pubkey(),
-                        ),
+                        &instructions,
                         Some(&authorized_staker.pubkey()),
                     ));
                     debug!("Merging inactive transient stake for {}", identity);
@@ -545,11 +559,14 @@ fn create_validator_stake_accounts(
                     warn!("Busy validator {}: {}", *identity, action);
 
                     transactions.push(Transaction::new_with_payer(
-                        &[stake_instruction::delegate_stake(
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                            vote_address,
-                        )],
+                        &[
+                            priority_fee_instruction(),
+                            stake_instruction::delegate_stake(
+                                &stake_address,
+                                &authorized_staker.pubkey(),
+                                vote_address,
+                            ),
+                        ],
                         Some(&authorized_staker.pubkey()),
                     ));
                     debug!(
@@ -575,14 +592,15 @@ fn create_validator_stake_accounts(
                 // Create a stake account for the validator
                 reserve_stake_balance -= MIN_STAKE_ACCOUNT_BALANCE;
 
-                let mut instructions = stake_instruction::split_with_seed(
+                let mut instructions = vec![priority_fee_instruction()];
+                instructions.append(&mut stake_instruction::split_with_seed(
                     &reserve_stake_address,
                     &authorized_staker.pubkey(),
                     MIN_STAKE_ACCOUNT_BALANCE,
                     &stake_address,
                     &authorized_staker.pubkey(),
                     &validator_stake_address_seed(*vote_address),
-                );
+                ));
                 instructions.push(stake_instruction::delegate_stake(
                     &stake_address,
                     &authorized_staker.pubkey(),
@@ -820,6 +838,10 @@ where
     } else {
         Ok(())
     }
+}
+
+fn priority_fee_instruction() -> Instruction {
+    ComputeBudgetInstruction::set_compute_unit_price(COMPUTE_UNIT_PRICE_MICRO_LAMPORTS)
 }
 
 #[cfg(test)]
