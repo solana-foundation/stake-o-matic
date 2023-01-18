@@ -45,7 +45,7 @@ fn new_tpu_client_with_retry(
         client_error::{ClientError, ClientErrorKind},
         rpc_request::RpcError,
     };
-    let mut retries = 64; // connecting with a 32-slot epoch can sometimes take awhile
+    let mut retries = 128; // connecting with a 32-slot epoch can sometimes take awhile
     let sleep_ms = 200;
     while retries > 0 {
         match TpuClient::new(
@@ -70,11 +70,10 @@ fn new_tpu_client_with_retry(
             result => return result,
         }
     }
-    TpuClient::new(
-        rpc_client.clone(),
-        websocket_url,
-        TpuClientConfig { fanout_slots: 1 },
-    )
+    // Let's force using the TpuClient for the tests
+    Err(TpuSenderError::Custom(
+        "Could not create TpuClient; time out".into(),
+    ))
 }
 
 #[cfg(not(test))]
@@ -161,7 +160,6 @@ pub fn send_and_confirm_transactions_with_spinner(
             transaction.try_sign(&[signer], blockhash)?;
             pending_transactions.insert(transaction.signatures[0], (i, transaction));
         }
-        info!("pending_transactions: {:?}", pending_transactions);
 
         let mut last_resend = Instant::now() - transaction_resend_interval;
         while block_height <= last_valid_block_height {
