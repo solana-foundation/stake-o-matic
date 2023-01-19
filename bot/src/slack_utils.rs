@@ -1,4 +1,5 @@
 use crate::BoxResult;
+use log::info;
 use reqwest::Url;
 use std::collections::HashMap;
 use std::env;
@@ -6,6 +7,11 @@ use std::env;
 const SLACK_API_URL: &str = "https://slack.com/api/";
 
 pub fn send_slack_channel_message(message: &str) -> BoxResult<()> {
+    if env::var("SEND_SLACK_MESSAGES").is_err() {
+        info!("Slack message that was not sent: {:?}", message);
+        return Ok(());
+    }
+
     let (token, channel_id) = get_token_and_channel()?;
     let client = reqwest::blocking::Client::new();
 
