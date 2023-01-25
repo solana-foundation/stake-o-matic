@@ -148,7 +148,7 @@ impl GenericStakePool for StakePool {
             get_all_stake(&rpc_client, self.authorized_staker.pubkey())?;
 
         info!("Merge orphaned stake into the reserve");
-        merge_orphaned_stake_accounts(
+        let deactivated_merged_stake = merge_orphaned_stake_accounts(
             rpc_client.clone(),
             websocket_url,
             &self.authorized_staker,
@@ -253,6 +253,10 @@ impl GenericStakePool for StakePool {
                 "Validators by stake level: None={}, Baseline={}, Bonus={}",
                 min_stake_node_count, baseline_stake_node_count, bonus_stake_node_count
             ),
+            format!(
+                "Deactiving stake from orphaned stake accounts: ◎{}",
+                (lamports_to_sol(deactivated_merged_stake) as u64).to_formatted_string(&Locale::en)
+            ),
         ];
 
         let busy_validators = validator_stake_actions
@@ -278,11 +282,11 @@ impl GenericStakePool for StakePool {
         )?;
 
         notes.push(format!(
-            "Activating stake:  ◎{}",
+            "Activating stake: ◎{}",
             (lamports_to_sol(activating_stake) as u64).to_formatted_string(&Locale::en)
         ));
         notes.push(format!(
-            "Deactivating stake:  ◎{}",
+            "Deactivating stake: ◎{}",
             (lamports_to_sol(deactivating_stake) as u64).to_formatted_string(&Locale::en)
         ));
 
@@ -328,8 +332,11 @@ fn merge_orphaned_stake_accounts(
     source_stake_addresses: HashSet<Pubkey>,
     reserve_stake_address: Pubkey,
     dry_run: bool,
-) -> Result<(), Box<dyn error::Error>> {
+) -> Result<u64, Box<dyn error::Error>> {
     let mut transactions = vec![];
+
+    let mut deactivating_stake_lamports = 0;
+
     for stake_address in source_stake_addresses {
         let stake_activation = rpc_client
             .get_stake_activation(stake_address, None)
@@ -343,6 +350,7 @@ fn merge_orphaned_stake_accounts(
         match stake_activation.state {
             StakeActivationState::Activating | StakeActivationState::Deactivating => {}
             StakeActivationState::Active => {
+                deactivating_stake_lamports += stake_activation.active;
                 transactions.push(Transaction::new_with_payer(
                     &[stake_instruction::deactivate_stake(
                         &stake_address,
@@ -382,7 +390,7 @@ fn merge_orphaned_stake_accounts(
     {
         Err("Failed to merge orphaned stake accounts".into())
     } else {
-        Ok(())
+        Ok(deactivating_stake_lamports)
     }
 }
 
