@@ -2368,46 +2368,19 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        if config.require_dry_run_to_distribute_stake
-            && !DryRunStats::exists(epoch, &config.cluster_db_path())
-        {
-            let dry_run_stats = DryRunStats {
-                none_count: min_stake_node_count,
-                baseline_count: baseline_stake_node_count,
-                bonus_count: bonus_stake_node_count,
-            };
-            dry_run_stats.save(epoch, &config.cluster_db_path())?;
-
-            info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
-
-            let slack_message = format!(
-                "Dry run stake rewards distribution for {}/{}: \n\
-            None: {:?}\n\
-            Baseline: {:?}\n\
-            Bonus: {:?}",
-                config.cluster,
-                epoch - 1,
-                dry_run_stats.none_count,
-                dry_run_stats.baseline_count,
-                dry_run_stats.bonus_count
-            );
-
-            if let Err(e) = send_slack_channel_message(&slack_message) {
-                info!("Could not send slack message: {:?}", e)
-            };
-
-            return Ok(());
-        }
+        // if true, we are doing a preliminary dry run
+        let pre_run_dry_run = config.require_dry_run_to_distribute_stake
+            && !DryRunStats::exists(epoch, &config.cluster_db_path());
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(
                 rpc_client,
                 &config.websocket_url,
-                config.dry_run,
+                pre_run_dry_run || config.dry_run,
                 &desired_validator_stake,
             )?;
 
-        if first_time {
+        if first_time && !pre_run_dry_run {
             let slack_message = format!(
                 "Stake bot LIVE run for {:?}/{:?}\n",
                 config.cluster,
@@ -2418,6 +2391,30 @@ fn main() -> BoxResult<()> {
                 info!("Could not send slack message: {:?}", e)
             };
         }
+
+        if pre_run_dry_run {
+            let dry_run_stats = DryRunStats {
+                none_count: min_stake_node_count,
+                baseline_count: baseline_stake_node_count,
+                bonus_count: bonus_stake_node_count,
+            };
+            dry_run_stats.save(epoch, &config.cluster_db_path())?;
+
+            info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
+
+            let slack_message = format!(
+                "Stake bot DRY run estimates for {:?}/{:?}\n",
+                config.cluster,
+                epoch - 1
+            ) + &stake_pool_notes.join("\n");
+
+            if let Err(e) = send_slack_channel_message(&slack_message) {
+                info!("Could not send slack message: {:?}", e)
+            };
+
+            return Ok(());
+        }
+
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
 
