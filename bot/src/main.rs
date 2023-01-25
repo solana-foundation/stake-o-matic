@@ -2455,10 +2455,10 @@ fn main() -> BoxResult<()> {
         _ => {}
     }
 
-    if first_time && post_notifications {
+    for notification in notifications {
+        info!("notification: {}", notification);
         // Only notify the user if this is the first run for this epoch
-        for notification in notifications {
-            info!("notification: {}", notification);
+        if first_time && post_notifications {
             notifier.send(&notification);
         }
     }
