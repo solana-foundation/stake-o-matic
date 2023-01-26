@@ -136,7 +136,8 @@ pub struct CommissionChangeIndexHistoryEntry {
     pub created_at: String,
     // commission_before can be null; presumably for new validators that have set their commission for the first time
     pub commission_before: Option<f32>,
-    pub commission_after: f32,
+    // This has shown up as null in at least once case. Not sure what it indicates.
+    pub commission_after: Option<f32>,
     pub epoch: u64,
     pub network: String,
     pub id: i32,
@@ -152,7 +153,7 @@ impl Default for CommissionChangeIndexHistoryEntry {
         CommissionChangeIndexHistoryEntry {
             created_at: "".to_string(),
             commission_before: None,
-            commission_after: 0.0,
+            commission_after: None,
             epoch: 0,
             network: "".to_string(),
             id: 0,
@@ -321,8 +322,11 @@ impl Client {
             for record in results.commission_histories {
                 let pubkey = Pubkey::from_str(record.account.as_str())?;
 
-                let validator_records = return_map.entry(pubkey).or_insert_with(Vec::new);
-                validator_records.push(record);
+                // Ignore if there is no "after" value. Not sure if this is the right thing to do.
+                if record.commission_after.is_some() {
+                    let validator_records = return_map.entry(pubkey).or_insert_with(Vec::new);
+                    validator_records.push(record);
+                }
             }
 
             if page * records_per_page >= results.total_count {
