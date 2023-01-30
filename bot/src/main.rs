@@ -2318,6 +2318,7 @@ fn main() -> BoxResult<()> {
     {
         let previous_validator_classifications = previous_epoch_classification
             .validator_classifications
+            .clone()
             .unwrap_or_default();
 
         let mut min_stake_node_count = 0;
@@ -2392,6 +2393,68 @@ fn main() -> BoxResult<()> {
             };
         }
 
+        // Send Slack notification on dry run or first live run
+        if env::var("SEND_SLACK_MESSAGES").is_ok() && (first_time || pre_run_dry_run) {
+            let mut slack_message = if pre_run_dry_run {
+                "Stake bot DRY run estimates".to_string()
+            } else {
+                // first_time = true
+                "Stake bot LIVE run".to_string()
+            };
+
+            slack_message += &*format!(" for {:?}/{:?}\n", config.cluster, epoch - 1);
+
+            // Get previous epoch's stats so we can show the change
+            let mut prev_none_count = 0;
+            let mut prev_baseline_count = 0;
+            let mut prev_bonus_count = 0;
+            previous_epoch_classification
+                .validator_classifications
+                .unwrap()
+                .iter()
+                .for_each(|(_, classification)| match classification.stake_state {
+                    ValidatorStakeState::None => {
+                        prev_none_count += 1;
+                    }
+                    ValidatorStakeState::Baseline => {
+                        prev_baseline_count += 1;
+                    }
+                    ValidatorStakeState::Bonus => {
+                        prev_bonus_count += 1;
+                    }
+                });
+
+            slack_message = slack_message
+                + &*format!(
+                    "None: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    min_stake_node_count,
+                    prev_none_count,
+                    (100.0 * ((min_stake_node_count as f32 / prev_none_count as f32) - 1.0)).round()
+                        as i8
+                )
+                + &*format!(
+                    "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    baseline_stake_node_count,
+                    prev_baseline_count,
+                    (100.0
+                        * ((baseline_stake_node_count as f32 / prev_baseline_count as f32) - 1.0))
+                        .round() as i8
+                )
+                + &*format!(
+                    "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    bonus_stake_node_count,
+                    prev_bonus_count,
+                    (100.0 * ((bonus_stake_node_count as f32 / prev_bonus_count as f32) - 1.0))
+                        .round() as i8
+                )
+                + &*stake_pool_notes.join("\n");
+
+            if let Err(e) = send_slack_channel_message(&slack_message) {
+                info!("Could not send slack message: {:?}", e);
+                info!("Slack message: {:?}", slack_message)
+            };
+        }
+
         if pre_run_dry_run {
             let dry_run_stats = DryRunStats {
                 none_count: min_stake_node_count,
@@ -2401,17 +2464,6 @@ fn main() -> BoxResult<()> {
             dry_run_stats.save(epoch, &config.cluster_db_path())?;
 
             info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
-
-            let slack_message = format!(
-                "Stake bot DRY run estimates for {:?}/{:?}\n",
-                config.cluster,
-                epoch - 1
-            ) + &stake_pool_notes.join("\n");
-
-            if let Err(e) = send_slack_channel_message(&slack_message) {
-                info!("Could not send slack message: {:?}", e)
-            };
-
             return Ok(());
         }
 
