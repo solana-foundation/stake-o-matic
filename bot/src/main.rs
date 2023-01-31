@@ -2381,18 +2381,6 @@ fn main() -> BoxResult<()> {
                 &desired_validator_stake,
             )?;
 
-        if first_time && !pre_run_dry_run {
-            let slack_message = format!(
-                "Stake bot LIVE run for {:?}/{:?}\n",
-                config.cluster,
-                epoch - 1
-            ) + &stake_pool_notes.join("\n");
-
-            if let Err(e) = send_slack_channel_message(&slack_message) {
-                info!("Could not send slack message: {:?}", e)
-            };
-        }
-
         // Send Slack notification on dry run or first live run
         if env::var("SEND_SLACK_MESSAGES").is_ok() && (first_time || pre_run_dry_run) {
             let mut slack_message = if pre_run_dry_run {
