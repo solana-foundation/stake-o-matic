@@ -2318,6 +2318,7 @@ fn main() -> BoxResult<()> {
     {
         let previous_validator_classifications = previous_epoch_classification
             .validator_classifications
+            .clone()
             .unwrap_or_default();
 
         let mut min_stake_node_count = 0;
@@ -2368,9 +2369,81 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        if config.require_dry_run_to_distribute_stake
-            && !DryRunStats::exists(epoch, &config.cluster_db_path())
-        {
+        // if true, we are doing a preliminary dry run
+        let pre_run_dry_run = config.require_dry_run_to_distribute_stake
+            && !DryRunStats::exists(epoch, &config.cluster_db_path());
+
+        let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
+            stake_pool.apply(
+                rpc_client,
+                &config.websocket_url,
+                pre_run_dry_run || config.dry_run,
+                &desired_validator_stake,
+            )?;
+
+        // Send Slack notification on dry run or first live run
+        if env::var("SEND_SLACK_MESSAGES").is_ok() && (first_time || pre_run_dry_run) {
+            let mut slack_message = if pre_run_dry_run {
+                "Stake bot DRY run estimates".to_string()
+            } else {
+                // first_time = true
+                "Stake bot LIVE run".to_string()
+            };
+
+            slack_message += &*format!(" for {:?}/{:?}\n", config.cluster, epoch - 1);
+
+            // Get previous epoch's stats so we can show the change
+            let mut prev_none_count = 0;
+            let mut prev_baseline_count = 0;
+            let mut prev_bonus_count = 0;
+            previous_epoch_classification
+                .validator_classifications
+                .unwrap()
+                .iter()
+                .for_each(|(_, classification)| match classification.stake_state {
+                    ValidatorStakeState::None => {
+                        prev_none_count += 1;
+                    }
+                    ValidatorStakeState::Baseline => {
+                        prev_baseline_count += 1;
+                    }
+                    ValidatorStakeState::Bonus => {
+                        prev_bonus_count += 1;
+                    }
+                });
+
+            slack_message = slack_message
+                + &*format!(
+                    "None: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    min_stake_node_count,
+                    prev_none_count,
+                    (100.0 * ((min_stake_node_count as f32 / prev_none_count as f32) - 1.0)).round()
+                        as i8
+                )
+                + &*format!(
+                    "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    baseline_stake_node_count,
+                    prev_baseline_count,
+                    (100.0
+                        * ((baseline_stake_node_count as f32 / prev_baseline_count as f32) - 1.0))
+                        .round() as i8
+                )
+                + &*format!(
+                    "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    bonus_stake_node_count,
+                    prev_bonus_count,
+                    (100.0 * ((bonus_stake_node_count as f32 / prev_bonus_count as f32) - 1.0))
+                        .round() as i8
+                )
+                + &*stake_pool_notes.join("\n");
+
+            if let Err(e) = send_slack_channel_message(&slack_message) {
+                info!("Could not send slack message: {:?}", e);
+                info!("Slack message: {:?}", slack_message)
+            };
+        }
+
+        if pre_run_dry_run {
             let dry_run_stats = DryRunStats {
                 none_count: min_stake_node_count,
                 baseline_count: baseline_stake_node_count,
@@ -2379,45 +2452,9 @@ fn main() -> BoxResult<()> {
             dry_run_stats.save(epoch, &config.cluster_db_path())?;
 
             info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
-
-            let slack_message = format!(
-                "Dry run stake rewards distribution for {}/{}: \n\
-            None: {:?}\n\
-            Baseline: {:?}\n\
-            Bonus: {:?}",
-                config.cluster,
-                epoch - 1,
-                dry_run_stats.none_count,
-                dry_run_stats.baseline_count,
-                dry_run_stats.bonus_count
-            );
-
-            if let Err(e) = send_slack_channel_message(&slack_message) {
-                info!("Could not send slack message: {:?}", e)
-            };
-
             return Ok(());
         }
 
-        let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
-            stake_pool.apply(
-                rpc_client,
-                &config.websocket_url,
-                config.dry_run,
-                &desired_validator_stake,
-            )?;
-
-        if first_time {
-            let slack_message = format!(
-                "Stake bot LIVE run for {:?}/{:?}\n",
-                config.cluster,
-                epoch - 1
-            ) + &stake_pool_notes.join("\n");
-
-            if let Err(e) = send_slack_channel_message(&slack_message) {
-                info!("Could not send slack message: {:?}", e)
-            };
-        }
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
 
@@ -2458,10 +2495,10 @@ fn main() -> BoxResult<()> {
         _ => {}
     }
 
-    if first_time && post_notifications {
+    for notification in notifications {
+        info!("notification: {}", notification);
         // Only notify the user if this is the first run for this epoch
-        for notification in notifications {
-            info!("notification: {}", notification);
+        if first_time && post_notifications {
             notifier.send(&notification);
         }
     }
@@ -2548,7 +2585,7 @@ fn calculate_commission_at_end_of_epoch(
                         .cmp(&b.epoch)
                         .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
                 });
-                rs.last().unwrap().commission_after as u8
+                rs.last().unwrap().commission_after.unwrap() as u8
             } else {
                 // If we didn't find a commission change in `epoch`, check for commission changes in
                 // `epoch + 1`. The first one will give us the commission at the end of `epoch`.
@@ -2699,7 +2736,7 @@ mod test {
             // If there is a commission change in an epoch > `epoch + 1`, that should also be used
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(expected_commission as f32),
-                commission_after: 10.0,
+                commission_after: Some(10.0),
                 epoch: epoch + 2,
                 epoch_completion: 50.0,
                 ..Default::default()
@@ -2728,7 +2765,7 @@ mod test {
             // fourth
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(50.0),
-                commission_after: 40.0,
+                commission_after: Some(40.0),
                 epoch: epoch + 1,
                 epoch_completion: 50.0,
                 ..Default::default()
@@ -2736,7 +2773,7 @@ mod test {
             // first
             CommissionChangeIndexHistoryEntry {
                 commission_before: None,
-                commission_after: 10.0,
+                commission_after: Some(10.0),
                 epoch: 120,
                 epoch_completion: 10.0,
                 ..Default::default()
@@ -2744,7 +2781,7 @@ mod test {
             // second
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(10.0),
-                commission_after: expected_commission,
+                commission_after: Some(expected_commission),
                 epoch,
                 epoch_completion: 99.0,
                 ..Default::default()
@@ -2752,7 +2789,7 @@ mod test {
             // third
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(expected_commission),
-                commission_after: 50.0,
+                commission_after: Some(50.0),
                 epoch: epoch + 1,
                 epoch_completion: 10.0,
                 ..Default::default()
@@ -2775,7 +2812,7 @@ mod test {
         // 100 -> 10 10% through epoch 124
         let history = [CommissionChangeIndexHistoryEntry {
             commission_before: Some(expected_commission),
-            commission_after: current_commission,
+            commission_after: Some(current_commission),
             epoch: epoch + 1,
             epoch_completion: 50.0,
             ..Default::default()
@@ -2799,14 +2836,14 @@ mod test {
         let history = [
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(expected_commission),
-                commission_after: 10.0,
+                commission_after: Some(10.0),
                 epoch: epoch + 1,
                 epoch_completion: 50.0,
                 ..Default::default()
             },
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(10.0),
-                commission_after: 50.0,
+                commission_after: Some(50.0),
                 epoch: epoch + 1,
                 epoch_completion: 60.0,
                 ..Default::default()

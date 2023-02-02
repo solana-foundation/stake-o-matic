@@ -4,9 +4,10 @@ use {
         rpc_client_utils::{get_all_stake, send_and_confirm_transactions_with_spinner},
     },
     log::*,
+    num_format::{Locale, ToFormattedString},
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
     solana_sdk::{
-        native_token::Sol,
+        native_token::{lamports_to_sol, Sol},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
         stake::{self, instruction as stake_instruction},
@@ -147,7 +148,7 @@ impl GenericStakePool for StakePool {
             get_all_stake(&rpc_client, self.authorized_staker.pubkey())?;
 
         info!("Merge orphaned stake into the reserve");
-        merge_orphaned_stake_accounts(
+        let deactivated_merged_stake = merge_orphaned_stake_accounts(
             rpc_client.clone(),
             websocket_url,
             &self.authorized_staker,
@@ -233,17 +234,28 @@ impl GenericStakePool for StakePool {
             Sol(reserve_stake_balance)
         );
 
-        let notes = vec![
+        let mut notes = vec![
             format!(
-                "Stake pool size: {} (available for delegation: {})",
-                Sol(total_stake_amount),
-                Sol(reserve_stake_balance)
+                "Stake pool size: ◎{} (available for delegation: ◎{})",
+                (lamports_to_sol(total_stake_amount) as u64).to_formatted_string(&Locale::en),
+                (lamports_to_sol(reserve_stake_balance) as u64).to_formatted_string(&Locale::en)
             ),
-            format!("Baseline stake amount: {}", Sol(self.baseline_stake_amount)),
-            format!("Bonus stake amount: {}", Sol(bonus_stake_amount)),
+            format!(
+                "Baseline stake amount: ◎{}",
+                (lamports_to_sol(self.baseline_stake_amount) as u64)
+                    .to_formatted_string(&Locale::en)
+            ),
+            format!(
+                "Bonus stake amount: ◎{}",
+                (lamports_to_sol(bonus_stake_amount) as u64).to_formatted_string(&Locale::en)
+            ),
             format!(
                 "Validators by stake level: None={}, Baseline={}, Bonus={}",
                 min_stake_node_count, baseline_stake_node_count, bonus_stake_node_count
+            ),
+            format!(
+                "Deactiving stake from orphaned stake accounts: ◎{}",
+                (lamports_to_sol(deactivated_merged_stake) as u64).to_formatted_string(&Locale::en)
             ),
         ];
 
@@ -252,7 +264,7 @@ impl GenericStakePool for StakePool {
             .cloned()
             .collect::<HashSet<_>>();
         let mut unfunded_validators = HashSet::default();
-        distribute_validator_stake(
+        let (activating_stake, deactivating_stake) = distribute_validator_stake(
             rpc_client,
             websocket_url,
             dry_run,
@@ -268,6 +280,15 @@ impl GenericStakePool for StakePool {
             &mut validator_stake_actions,
             &mut unfunded_validators,
         )?;
+
+        notes.push(format!(
+            "Activating stake: ◎{}",
+            (lamports_to_sol(activating_stake) as u64).to_formatted_string(&Locale::en)
+        ));
+        notes.push(format!(
+            "Deactivating stake: ◎{}",
+            (lamports_to_sol(deactivating_stake) as u64).to_formatted_string(&Locale::en)
+        ));
 
         Ok((
             notes,
@@ -311,8 +332,11 @@ fn merge_orphaned_stake_accounts(
     source_stake_addresses: HashSet<Pubkey>,
     reserve_stake_address: Pubkey,
     dry_run: bool,
-) -> Result<(), Box<dyn error::Error>> {
+) -> Result<u64, Box<dyn error::Error>> {
     let mut transactions = vec![];
+
+    let mut deactivating_stake_lamports = 0;
+
     for stake_address in source_stake_addresses {
         let stake_activation = rpc_client
             .get_stake_activation(stake_address, None)
@@ -326,6 +350,7 @@ fn merge_orphaned_stake_accounts(
         match stake_activation.state {
             StakeActivationState::Activating | StakeActivationState::Deactivating => {}
             StakeActivationState::Active => {
+                deactivating_stake_lamports += stake_activation.active;
                 transactions.push(Transaction::new_with_payer(
                     &[stake_instruction::deactivate_stake(
                         &stake_address,
@@ -365,7 +390,7 @@ fn merge_orphaned_stake_accounts(
     {
         Err("Failed to merge orphaned stake accounts".into())
     } else {
-        Ok(())
+        Ok(deactivating_stake_lamports)
     }
 }
 
@@ -616,6 +641,7 @@ fn create_validator_stake_accounts(
     }
 }
 
+// returns (activating_stake, deactivating_stake)
 #[allow(clippy::too_many_arguments)]
 fn distribute_validator_stake<V>(
     rpc_client: Arc<RpcClient>,
@@ -629,7 +655,7 @@ fn distribute_validator_stake<V>(
     bonus_stake_amount: u64,
     validator_stake_actions: &mut ValidatorStakeActions,
     unfunded_validators: &mut HashSet<Pubkey>,
-) -> Result<(), Box<dyn error::Error>>
+) -> Result<(u64, u64), Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
 {
@@ -686,6 +712,9 @@ where
     baseline_stake.sort_by_key(|k| k.0);
     bonus_stake.sort_by_key(|k| k.0);
 
+    let mut deactivating_total = 0;
+    let mut activating_total = 0;
+
     let mut transactions = vec![];
     for (
         balance,
@@ -716,6 +745,8 @@ where
             if amount_to_remove < MIN_STAKE_CHANGE_AMOUNT {
                 format!("not removing {} (amount too small)", Sol(amount_to_remove))
             } else {
+                deactivating_total += amount_to_remove;
+
                 let mut instructions = stake_instruction::split_with_seed(
                     &stake_address,
                     &authorized_staker.pubkey(),
@@ -737,6 +768,8 @@ where
             }
         } else if balance < desired_balance {
             let mut amount_to_add = desired_balance - balance;
+
+            activating_total += amount_to_add;
 
             if amount_to_add < MIN_STAKE_CHANGE_AMOUNT {
                 format!("not adding {} (amount too small)", Sol(amount_to_add))
@@ -818,7 +851,7 @@ where
     if !ok {
         Err("One or more transactions failed to execute".into())
     } else {
-        Ok(())
+        Ok((activating_total, deactivating_total))
     }
 }
 
