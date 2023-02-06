@@ -2429,7 +2429,7 @@ fn main() -> BoxResult<()> {
                         .round() as i8
                 )
                 + &*format!(
-                    "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
+                    "Bonus: {:?} (prev epoch {:?}; {:?}% change)\n",
                     bonus_stake_node_count,
                     prev_bonus_count,
                     (100.0 * ((bonus_stake_node_count as f32 / prev_bonus_count as f32) - 1.0))
