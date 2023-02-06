@@ -261,6 +261,7 @@ pub struct Config {
     performance_db_token: Option<String>,
     blocklist_datacenter_asns: Option<Vec<u64>>,
     require_dry_run_to_distribute_stake: bool,
+    performance_waiver_release_version: Option<semver::Version>,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -306,6 +307,7 @@ impl Config {
             require_performance_metrics_reporting: false,
             blocklist_datacenter_asns: None,
             require_dry_run_to_distribute_stake: false,
+            performance_waiver_release_version: None,
         }
     }
 
@@ -482,6 +484,14 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .validator(is_release_version)
                 .help("Remove the base and bonus stake from validators with \
                        a release version older than this one")
+        )
+        .arg(
+            Arg::with_name("performance_waiver_release_version")
+                .long("performance-waiver-release-version")
+                .value_name("SEMVER")
+                .takes_value(true)
+                .validator(is_release_version)
+                .help("Validators running this release version or higher do not have to meet some performance requirements")
         )
         .arg(
             Arg::with_name("max_poor_voter_percentage")
@@ -739,6 +749,8 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     let max_old_release_version_percentage =
         value_t_or_exit!(matches, "max_old_release_version_percentage", usize);
     let min_release_version = release_version_of(&matches, "min_release_version");
+    let performance_waiver_release_version =
+        release_version_of(&matches, "performance_waiver_release_version");
 
     let enforce_min_self_stake = matches.is_present("enforce_min_self_stake");
     let min_self_stake_lamports = lamports_of_sol(&matches, "min_self_stake").unwrap();
@@ -913,6 +925,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         performance_db_token,
         blocklist_datacenter_asns,
         require_dry_run_to_distribute_stake,
+        performance_waiver_release_version,
     };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
@@ -1780,6 +1793,20 @@ fn classify(
                     })
                 });
 
+            let performance_requirements_waived =
+                if let (Some(performance_waiver_release_version), Some(release_version)) = (
+                    config.performance_waiver_release_version.clone(),
+                    release_versions.get(&identity),
+                ) {
+                    if release_version >= &performance_waiver_release_version {
+                        Some(release_version)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
             let (stake_state, reason) = if num_epochs_commission_increased_above_max > 1 {
                 (
                     ValidatorStakeState::None,
@@ -1833,6 +1860,14 @@ fn classify(
                 insufficent_testnet_participation
             {
                 (ValidatorStakeState::None, insufficent_testnet_participation)
+            } else if let Some(version) = performance_requirements_waived {
+                (
+                    ValidatorStakeState::Bonus,
+                    format!(
+                        "Performance requirements waived for running validator version {:?}",
+                        version.to_string()
+                    ),
+                )
             } else if poor_voters.contains(&identity) {
                 (
                     ValidatorStakeState::None,
@@ -2013,6 +2048,7 @@ fn classify(
         min_testnet_participation: config.min_testnet_participation,
         baseline_stake_amount_lamports: config.baseline_stake_amount_lamports,
         require_performance_metrics_reporting: Some(config.require_performance_metrics_reporting),
+        performance_waiver_release_version: config.performance_waiver_release_version.clone(),
     };
 
     let epoch_stats = EpochStats {
