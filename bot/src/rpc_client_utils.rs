@@ -84,7 +84,7 @@ pub fn send_and_confirm_transactions_with_spinner(
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
     progress_bar.set_message("Connecting...");
-    let tpu_client = new_tpu_client_with_retry(&rpc_client, websocket_url)?;
+    let _tpu_client = new_tpu_client_with_retry(&rpc_client, websocket_url)?;
 
     let mut transactions = transactions.into_iter().enumerate().collect::<Vec<_>>();
     let num_transactions = transactions.len() as f64;
@@ -132,17 +132,24 @@ pub fn send_and_confirm_transactions_with_spinner(
                 for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
                     let method = if dry_run {
                         "DRY RUN"
-                    } else if tpu_client.send_transaction(transaction) {
-                        "TPU"
+                    // } else if tpu_client.send_transaction(transaction) {
+                    //     "TPU"
                     } else {
-                        let _ = rpc_client.send_transaction_with_config(
+                        match rpc_client.send_transaction_with_config(
                             transaction,
                             RpcSendTransactionConfig {
-                                skip_preflight: true,
+                                // skip_preflight: true,
+                                skip_preflight: false,
                                 ..RpcSendTransactionConfig::default()
                             },
-                        );
-                        "RPC"
+                        ) {
+                            Ok(_) => "RPC",
+                            Err(e) => {
+                                error!("send error: {:?}", e);
+                                return Err("Could not send transaction".into());
+                            }
+                        }
+                        // "RPC"
                     };
                     set_message(
                         confirmed_transactions,
