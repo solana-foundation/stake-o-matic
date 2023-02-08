@@ -1,3 +1,6 @@
+use solana_client::client_error::ClientErrorKind;
+use solana_client::rpc_request::RpcError;
+use solana_client::rpc_request::RpcError::RpcResponseError;
 use std::borrow::Borrow;
 use {
     indicatif::{ProgressBar, ProgressStyle},
@@ -145,6 +148,22 @@ pub fn send_and_confirm_transactions_with_spinner(
                         ) {
                             Ok(_) => "RPC",
                             Err(e) => {
+                                // match e.kind {
+                                //     ClientErrorKind::RpcError(rpcError) => match rpcError {
+                                //         RpcResponseError {
+                                //             code,
+                                //             message,
+                                //             data,
+                                //         } => {
+                                //             if code == -32002 {
+                                //                 // response already sent; ignore
+                                //                 return "RPC-Already sent";
+                                //             }
+                                //         }
+                                //         _ => {}
+                                //     },
+                                //     _ => {}
+                                // };
                                 error!("send error: {:?}", e);
                                 return Err("Could not send transaction".into());
                             }

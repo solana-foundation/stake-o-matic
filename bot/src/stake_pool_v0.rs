@@ -454,7 +454,10 @@ fn merge_transient_stake_accounts(
                             ),
                             Some(&authorized_staker.pubkey()),
                         ));
-                        debug!("Merging active transient stake for {}", identity);
+                        debug!(
+                            "Merging active transient stake for {}; transient address {}",
+                            identity, transient_stake_address
+                        );
                     } else {
                         let action = format!(
                             "stake account {} busy because not active, while transient account {} is active",
@@ -474,7 +477,10 @@ fn merge_transient_stake_accounts(
                         ),
                         Some(&authorized_staker.pubkey()),
                     ));
-                    debug!("Merging inactive transient stake for {}", identity);
+                    debug!(
+                        "Merging inactive transient stake for {}; transient address {}",
+                        identity, transient_stake_address
+                    );
                 }
             }
         }
