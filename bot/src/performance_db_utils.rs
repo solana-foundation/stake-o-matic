@@ -281,7 +281,7 @@ fn get_slot_time(
         match time_stamp {
             Ok(time) => {
                 return Ok(DateTime::<Utc>::from_utc(
-                    NaiveDateTime::from_timestamp(time, 0),
+                    NaiveDateTime::from_timestamp_opt(time, 0).unwrap(),
                     Utc,
                 ));
             }
