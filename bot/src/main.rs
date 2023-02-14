@@ -868,9 +868,10 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     let (rpc_client, json_rpc_url) = json_rpc_urls_to_try
         .iter()
         .map(|url| {
-            let rpc_client = Arc::new(RpcClient::new_with_timeout(
+            let rpc_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
                 url.clone(),
                 Duration::from_secs(180),
+                CommitmentConfig::confirmed(),
             ));
             (rpc_client, url.clone())
         })
