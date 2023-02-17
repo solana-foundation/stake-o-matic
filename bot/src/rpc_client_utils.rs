@@ -46,7 +46,7 @@ fn new_tpu_client_with_retry(
         rpc_request::RpcError,
     };
     let mut retries = 128; // connecting with a 32-slot epoch can sometimes take awhile
-    let sleep_ms = 200;
+    let sleep_ms = 400;
     while retries > 0 {
         match TpuClient::new(
             rpc_client.clone(),
