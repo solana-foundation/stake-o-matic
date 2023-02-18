@@ -2,6 +2,7 @@ use {
     crate::{
         generic_stake_pool::*,
         rpc_client_utils::{get_all_stake, send_and_confirm_transactions_with_spinner},
+        Config,
     },
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
@@ -122,12 +123,12 @@ impl StakePoolOMatic {
     pub fn epoch_update(
         &mut self,
         rpc_client: Arc<RpcClient>,
-        websocket_url: &str,
+        config: &Config,
     ) -> Result<(), Box<dyn error::Error>> {
         self.update(&rpc_client)?;
         update_stake_pool(
             rpc_client.clone(),
-            websocket_url,
+            config,
             &self.authorized_staker,
             &self.stake_pool_address,
             &self.stake_pool,
@@ -159,7 +160,7 @@ impl GenericStakePool for StakePoolOMatic {
     fn apply(
         &mut self,
         rpc_client: Arc<RpcClient>,
-        websocket_url: &str,
+        config: &Config,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
@@ -197,13 +198,13 @@ impl GenericStakePool for StakePoolOMatic {
         info!("Withdraw inactive transient stake accounts to the staker");
         withdraw_inactive_stakes_to_staker(
             rpc_client.clone(),
-            websocket_url,
+            config,
             &self.authorized_staker,
             dry_run,
         )?;
 
         info!("Update the stake pool, merging transient stakes and orphaned accounts");
-        self.epoch_update(rpc_client.clone(), websocket_url)?;
+        self.epoch_update(rpc_client.clone(), config)?;
 
         let all_vote_addresses: HashSet<Pubkey> = self
             .validator_list
@@ -214,7 +215,7 @@ impl GenericStakePool for StakePoolOMatic {
         info!("Remove validators no longer present in the desired list");
         remove_validators_from_pool(
             rpc_client.clone(),
-            websocket_url,
+            config,
             &self.authorized_staker,
             &self.stake_pool_address,
             &self.stake_pool,
@@ -226,7 +227,7 @@ impl GenericStakePool for StakePoolOMatic {
         info!("Add new validators to pool");
         add_validators_to_pool(
             rpc_client.clone(),
-            websocket_url,
+            config,
             &self.authorized_staker,
             desired_validator_stake,
             &self.stake_pool_address,
@@ -340,7 +341,7 @@ impl GenericStakePool for StakePoolOMatic {
         let mut unfunded_validators = HashSet::default();
         distribute_validator_stake(
             rpc_client,
-            websocket_url,
+            config,
             dry_run,
             &self.authorized_staker,
             &self.stake_pool_address,
@@ -429,7 +430,7 @@ fn add_unmerged_transient_stake_accounts(
 /// and withdraws the entirety back to the staker.
 fn withdraw_inactive_stakes_to_staker(
     rpc_client: Arc<RpcClient>,
-    websocket_url: &str,
+    config: &Config,
     authorized_staker: &Keypair,
     dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
@@ -475,7 +476,7 @@ fn withdraw_inactive_stakes_to_staker(
         Ok(())
     } else if send_and_confirm_transactions_with_spinner(
         rpc_client,
-        websocket_url,
+        config,
         false,
         transactions,
         authorized_staker,
@@ -493,7 +494,7 @@ fn withdraw_inactive_stakes_to_staker(
 /// once per epoch to perform any operations on the stake pool.
 fn update_stake_pool(
     rpc_client: Arc<RpcClient>,
-    websocket_url: &str,
+    config: &Config,
     payer: &Keypair,
     stake_pool_address: &Pubkey,
     stake_pool: &StakePool,
@@ -520,7 +521,7 @@ fn update_stake_pool(
 
     if send_and_confirm_transactions_with_spinner(
         rpc_client.clone(),
-        websocket_url,
+        config,
         false,
         transactions,
         payer,
@@ -536,15 +537,9 @@ fn update_stake_pool(
         .map(|i| Transaction::new_with_payer(&[i], Some(&payer.pubkey())))
         .collect();
 
-    if send_and_confirm_transactions_with_spinner(
-        rpc_client,
-        websocket_url,
-        false,
-        transactions,
-        payer,
-    )?
-    .iter()
-    .any(|err| err.is_some())
+    if send_and_confirm_transactions_with_spinner(rpc_client, config, false, transactions, payer)?
+        .iter()
+        .any(|err| err.is_some())
     {
         Err("Failed to update stake pool".into())
     } else {
@@ -561,7 +556,7 @@ fn update_stake_pool(
 #[allow(clippy::too_many_arguments)]
 fn remove_validators_from_pool(
     rpc_client: Arc<RpcClient>,
-    websocket_url: &str,
+    config: &Config,
     authorized_staker: &Keypair,
     stake_pool_address: &Pubkey,
     stake_pool: &StakePool,
@@ -639,7 +634,7 @@ fn remove_validators_from_pool(
         Ok(())
     } else if send_and_confirm_transactions_with_spinner(
         rpc_client,
-        websocket_url,
+        config,
         false,
         transactions,
         authorized_staker,
@@ -658,7 +653,7 @@ fn remove_validators_from_pool(
 #[allow(clippy::too_many_arguments)]
 fn add_validators_to_pool(
     rpc_client: Arc<RpcClient>,
-    websocket_url: &str,
+    config: &Config,
     authorized_staker: &Keypair,
     desired_validator_stake: &[ValidatorStake],
     stake_pool_address: &Pubkey,
@@ -697,7 +692,7 @@ fn add_validators_to_pool(
         Ok(())
     } else if send_and_confirm_transactions_with_spinner(
         rpc_client,
-        websocket_url,
+        config,
         false,
         transactions,
         authorized_staker,
@@ -714,7 +709,7 @@ fn add_validators_to_pool(
 #[allow(clippy::too_many_arguments)]
 fn distribute_validator_stake<V>(
     rpc_client: Arc<RpcClient>,
-    websocket_url: &str,
+    config: &Config,
     dry_run: bool,
     authorized_staker: &Keypair,
     stake_pool_address: &Pubkey,
@@ -885,7 +880,7 @@ where
     } else {
         !send_and_confirm_transactions_with_spinner(
             rpc_client,
-            websocket_url,
+            config,
             false,
             transactions,
             authorized_staker,
@@ -941,7 +936,7 @@ mod test {
     fn uniform_stake_pool_apply(
         stake_o_matic: &mut StakePoolOMatic,
         rpc_client: Arc<RpcClient>,
-        websocket_url: &str,
+        config: &Config,
         validators: &[ValidatorAddressPair],
         stake_state: ValidatorStakeState,
         expected_validator_stake_balance: u64,
@@ -964,23 +959,13 @@ mod test {
             .collect::<Vec<_>>();
 
         stake_o_matic
-            .apply(
-                rpc_client.clone(),
-                websocket_url,
-                false,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client.clone(), config, false, &desired_validator_stake)
             .unwrap();
 
         assert!(num_stake_accounts(&rpc_client, pool_withdraw_authority) > 1 + validators.len());
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
-            .apply(
-                rpc_client.clone(),
-                websocket_url,
-                false,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client.clone(), config, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -1016,7 +1001,8 @@ mod test {
             .add_program("spl_stake_pool", spl_stake_pool::id());
         let (test_validator, authorized_staker) = test_validator_genesis.start();
 
-        let websocket_url = &test_validator.rpc_pubsub_url();
+        let mut config = Config::default_for_test();
+        config.websocket_url = test_validator.rpc_pubsub_url();
         let (rpc_client, _recent_blockhash, _fee_calculator) = test_validator.rpc_client();
         let rpc_client = Arc::new(rpc_client);
 
@@ -1124,7 +1110,7 @@ mod test {
         stake_o_matic
             .apply(
                 rpc_client.clone(),
-                websocket_url,
+                &config,
                 false,
                 &validators
                     .iter()
@@ -1186,7 +1172,7 @@ mod test {
         stake_o_matic
             .apply(
                 rpc_client.clone(),
-                websocket_url,
+                &config,
                 false,
                 &validators
                     .iter()
@@ -1234,7 +1220,7 @@ mod test {
         stake_o_matic
             .apply(
                 rpc_client.clone(),
-                websocket_url,
+                &config,
                 false,
                 &validators
                     .iter()
@@ -1254,7 +1240,7 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_o_matic,
             rpc_client.clone(),
-            websocket_url,
+            &config,
             &validators,
             ValidatorStakeState::Baseline,
             baseline_stake_amount,
@@ -1266,7 +1252,7 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_o_matic,
             rpc_client.clone(),
-            websocket_url,
+            &config,
             &validators,
             ValidatorStakeState::Bonus,
             baseline_stake_amount + bonus_stake_amount,
@@ -1297,21 +1283,11 @@ mod test {
         ];
 
         stake_o_matic
-            .apply(
-                rpc_client.clone(),
-                websocket_url,
-                false,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client.clone(), &config, false, &desired_validator_stake)
             .unwrap();
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
-            .apply(
-                rpc_client.clone(),
-                websocket_url,
-                false,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client.clone(), &config, false, &desired_validator_stake)
             .unwrap();
 
         info!("Check after first epoch");
@@ -1339,12 +1315,7 @@ mod test {
         info!("Check after second epoch");
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
-            .apply(
-                rpc_client.clone(),
-                websocket_url,
-                false,
-                &desired_validator_stake,
-            )
+            .apply(rpc_client.clone(), &config, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -1370,13 +1341,13 @@ mod test {
         info!("remove all validators");
         // deactivate all validator stake and remove from pool
         stake_o_matic
-            .apply(rpc_client.clone(), websocket_url, false, &[])
+            .apply(rpc_client.clone(), &config, false, &[])
             .unwrap();
 
         // withdraw removed validator stake into the staker
         let _epoch = wait_for_next_epoch(&rpc_client).unwrap();
         stake_o_matic
-            .apply(rpc_client.clone(), websocket_url, false, &[])
+            .apply(rpc_client.clone(), &config, false, &[])
             .unwrap();
         // all stake has been returned to the reserve account
         assert_reserve_account_only(

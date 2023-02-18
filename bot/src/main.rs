@@ -2413,7 +2413,7 @@ fn main() -> BoxResult<()> {
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(
                 rpc_client,
-                &config.websocket_url,
+                &config,
                 pre_run_dry_run || config.dry_run,
                 &desired_validator_stake,
             )?;
