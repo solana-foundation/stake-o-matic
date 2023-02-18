@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -e
+
 REPO=https://github.com/solana-labs/stake-o-matic
 
 # Uncomment if the latest `master` build should be fetched by default instead of
@@ -8,10 +10,14 @@ REPO=https://github.com/solana-labs/stake-o-matic
 #DEFAULT_TO_MASTER=1
 
 if [[ -n $BUILD_IT_DO_NOT_DOWNLOAD_IT ]]; then
+  if ! which cargo &>/dev/null; then
+    # shellcheck source=/dev/null
+    source ~/.profile
+  fi
   echo "Building locally"
   cargo build --release
   cp ./target/release/solana-stake-o-matic .
-  solana-stake-o-matic --version
+  ./solana-stake-o-matic --version
   exit 0
 fi
 
