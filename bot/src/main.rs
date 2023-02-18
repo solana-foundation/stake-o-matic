@@ -262,6 +262,7 @@ pub struct Config {
     blocklist_datacenter_asns: Option<Vec<u64>>,
     require_dry_run_to_distribute_stake: bool,
     performance_waiver_release_version: Option<semver::Version>,
+    use_rpc_tx_submission: bool,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -308,6 +309,7 @@ impl Config {
             blocklist_datacenter_asns: None,
             require_dry_run_to_distribute_stake: false,
             performance_waiver_release_version: None,
+            use_rpc_tx_submission: false,
         }
     }
 
@@ -645,6 +647,12 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
                 .takes_value(false)
                 .help("If set, only distribute stake if there is a dry run summary in the wiki repo")
         )
+        .arg(
+            Arg::with_name("use_rpc_tx_submission")
+                .long("use-rpc-tx-submission")
+                .takes_value(false)
+                .help("Submit transactions via RPC client instead of TPU client")
+        )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
                 .arg(
@@ -891,6 +899,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         .value_of("participant_json_rpc_url")
         .unwrap()
         .to_string();
+    let use_rpc_tx_submission = matches.is_present("use_rpc_tx_submission");
 
     let mut config = Config {
         json_rpc_url,
@@ -927,6 +936,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         blocklist_datacenter_asns,
         require_dry_run_to_distribute_stake,
         performance_waiver_release_version,
+        use_rpc_tx_submission,
     };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
