@@ -343,7 +343,7 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)> {
+fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -895,6 +895,10 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
     info!("using RPC URL: {}", json_rpc_url);
 
     let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
+    let tpu_client = new_tpu_client_with_retry(&rpc_client, &websocket_url).unwrap_or_else(|e| {
+        error!("Unable to connect to TPU at {websocket_url}: {e:?}");
+        process::exit(1);
+    });
     let participant_json_rpc_url = matches
         .value_of("participant_json_rpc_url")
         .unwrap()
@@ -990,7 +994,7 @@ fn get_config() -> BoxResult<(Config, Arc<RpcClient>, Box<dyn GenericStakePool>)
         _ => unreachable!(),
     };
 
-    Ok((config, rpc_client, stake_pool))
+    Ok((config, MultiClient::new(rpc_client, tpu_client), stake_pool))
 }
 
 type ClassifyResult = (
@@ -2238,7 +2242,7 @@ fn warn_validator_for_infrastructure_concentration(
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
 
-    let (config, rpc_client, mut stake_pool) = get_config()?;
+    let (config, client, mut stake_pool) = get_config()?;
 
     info!("Loading participants...");
     let all_participants = get_participants_with_state(
@@ -2316,7 +2320,7 @@ fn main() -> BoxResult<()> {
         Notifier::default()
     };
 
-    let epoch = rpc_client.get_epoch_info()?.epoch;
+    let epoch = client.get_epoch_info()?.epoch;
     info!("Current epoch: {:?}", epoch);
     if epoch == 0 {
         return Ok(());
@@ -2344,7 +2348,7 @@ fn main() -> BoxResult<()> {
             }
             (
                 classify(
-                    &rpc_client,
+                    &client,
                     &config,
                     epoch,
                     &validator_list,
@@ -2422,7 +2426,7 @@ fn main() -> BoxResult<()> {
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(
-                rpc_client,
+                &client,
                 &config,
                 pre_run_dry_run || config.dry_run,
                 &desired_validator_stake,
