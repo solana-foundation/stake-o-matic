@@ -22,6 +22,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         error,
+        ops::Deref,
         str::FromStr,
         sync::Arc,
         thread::sleep,
@@ -37,7 +38,38 @@ fn new_spinner_progress_bar() -> ProgressBar {
     progress_bar
 }
 
-fn new_tpu_client_with_retry(
+pub struct MultiClient {
+    rpc: Arc<RpcClient>,
+    tpu: TpuClient,
+}
+impl Deref for MultiClient {
+    type Target = RpcClient;
+    fn deref(&self) -> &Self::Target {
+        &self.rpc
+    }
+}
+impl MultiClient {
+    pub fn new(rpc: Arc<RpcClient>, tpu: TpuClient) -> Self {
+        Self { rpc, tpu }
+    }
+
+    pub fn send_transaction(&self, force_rpc: bool, transaction: &Transaction) -> &'static str {
+        if !force_rpc && self.tpu.send_transaction(transaction) {
+            "TPU"
+        } else {
+            let _ = self.rpc.send_transaction_with_config(
+                transaction,
+                RpcSendTransactionConfig {
+                    skip_preflight: true,
+                    ..RpcSendTransactionConfig::default()
+                },
+            );
+            "RPC"
+        }
+    }
+}
+
+pub fn new_tpu_client_with_retry(
     rpc_client: &Arc<RpcClient>,
     websocket_url: &str,
 ) -> Result<TpuClient, TpuSenderError> {
@@ -70,7 +102,7 @@ fn new_tpu_client_with_retry(
 }
 
 pub fn send_and_confirm_transactions_with_spinner(
-    rpc_client: Arc<RpcClient>,
+    client: &MultiClient,
     config: &Config,
     dry_run: bool,
     transactions: Vec<Transaction>,
@@ -85,7 +117,6 @@ pub fn send_and_confirm_transactions_with_spinner(
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
     progress_bar.set_message("Connecting...");
-    let tpu_client = new_tpu_client_with_retry(&rpc_client, &config.websocket_url)?;
 
     let mut transactions = transactions.into_iter().enumerate().collect::<Vec<_>>();
     let num_transactions = transactions.len() as f64;
@@ -110,13 +141,13 @@ pub fn send_and_confirm_transactions_with_spinner(
     };
 
     let mut confirmed_transactions = 0;
-    let mut block_height = rpc_client.get_block_height()?;
+    let mut block_height = client.get_block_height()?;
     while expired_blockhash_retries > 0 {
         let Fees {
             blockhash,
             fee_calculator: _,
             last_valid_block_height,
-        } = rpc_client.get_fees()?;
+        } = client.get_fees()?;
 
         let mut pending_transactions = HashMap::new();
         for (i, mut transaction) in transactions {
@@ -133,19 +164,8 @@ pub fn send_and_confirm_transactions_with_spinner(
                 for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
                     let method = if dry_run {
                         "DRY RUN"
-                    } else if !config.use_rpc_tx_submission
-                        && tpu_client.send_transaction(transaction)
-                    {
-                        "TPU"
                     } else {
-                        let _ = rpc_client.send_transaction_with_config(
-                            transaction,
-                            RpcSendTransactionConfig {
-                                skip_preflight: true,
-                                ..RpcSendTransactionConfig::default()
-                            },
-                        );
-                        "RPC"
+                        client.send_transaction(config.use_rpc_tx_submission, transaction)
                     };
                     set_message(
                         confirmed_transactions,
@@ -174,7 +194,7 @@ pub fn send_and_confirm_transactions_with_spinner(
             let mut new_block_height = block_height;
             while block_height == new_block_height {
                 sleep(Duration::from_millis(500));
-                new_block_height = rpc_client.get_block_height()?;
+                new_block_height = client.get_block_height()?;
             }
             block_height = new_block_height;
             if dry_run {
@@ -186,13 +206,13 @@ pub fn send_and_confirm_transactions_with_spinner(
             for pending_signatures_chunk in
                 pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS)
             {
-                if let Ok(result) = rpc_client.get_signature_statuses(pending_signatures_chunk) {
+                if let Ok(result) = client.get_signature_statuses(pending_signatures_chunk) {
                     let statuses = result.value;
                     for (signature, status) in
                         pending_signatures_chunk.iter().zip(statuses.into_iter())
                     {
                         if let Some(status) = status {
-                            if status.satisfies_commitment(rpc_client.commitment()) {
+                            if status.satisfies_commitment(client.commitment()) {
                                 if let Some((i, _)) = pending_transactions.remove(signature) {
                                     confirmed_transactions += 1;
                                     if status.err.is_some() {

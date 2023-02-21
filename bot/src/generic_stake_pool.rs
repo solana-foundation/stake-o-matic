@@ -1,12 +1,10 @@
 use {
-    crate::Config,
+    crate::{rpc_client_utils::MultiClient, Config},
     serde::{Deserialize, Serialize},
-    solana_client::rpc_client::RpcClient,
     solana_sdk::pubkey::Pubkey,
     std::{
         collections::{HashMap, HashSet},
         error,
-        sync::Arc,
     },
 };
 
@@ -39,7 +37,7 @@ pub trait GenericStakePool {
     /// Fourth value in returned tuple is the calculated bonus stake amount
     fn apply(
         &mut self,
-        rpc_client: Arc<RpcClient>,
+        client: &MultiClient,
         config: &Config,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
