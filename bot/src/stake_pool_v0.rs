@@ -4,7 +4,6 @@ use {
         rpc_client_utils::{
             get_all_stake, send_and_confirm_transactions_with_spinner, MultiClient,
         },
-        Config,
     },
     log::*,
     num_format::{Locale, ToFormattedString},
@@ -104,7 +103,6 @@ impl GenericStakePool for StakePool {
     fn apply(
         &mut self,
         client: &MultiClient,
-        config: &Config,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
@@ -152,7 +150,6 @@ impl GenericStakePool for StakePool {
         info!("Merge orphaned stake into the reserve");
         let deactivated_merged_stake = merge_orphaned_stake_accounts(
             client,
-            config,
             &self.authorized_staker,
             &all_stake_addresses - &inuse_stake_addresses,
             self.reserve_stake_address,
@@ -162,7 +159,6 @@ impl GenericStakePool for StakePool {
         info!("Merge transient stake back into either the reserve or validator stake");
         merge_transient_stake_accounts(
             client,
-            config,
             &self.authorized_staker,
             desired_validator_stake,
             self.reserve_stake_address,
@@ -173,7 +169,6 @@ impl GenericStakePool for StakePool {
         info!("Create validator stake accounts if needed");
         create_validator_stake_accounts(
             client,
-            config,
             &self.authorized_staker,
             desired_validator_stake,
             self.reserve_stake_address,
@@ -268,7 +263,6 @@ impl GenericStakePool for StakePool {
         let mut unfunded_validators = HashSet::default();
         let (activating_stake, deactivating_stake) = distribute_validator_stake(
             client,
-            config,
             dry_run,
             &self.authorized_staker,
             desired_validator_stake
@@ -329,7 +323,6 @@ fn get_available_reserve_stake_balance(
 
 fn merge_orphaned_stake_accounts(
     client: &MultiClient,
-    config: &Config,
     authorized_staker: &Keypair,
     source_stake_addresses: HashSet<Pubkey>,
     reserve_stake_address: Pubkey,
@@ -380,15 +373,9 @@ fn merge_orphaned_stake_accounts(
         }
     }
 
-    if send_and_confirm_transactions_with_spinner(
-        client,
-        config,
-        dry_run,
-        transactions,
-        authorized_staker,
-    )?
-    .iter()
-    .any(|err| err.is_some())
+    if send_and_confirm_transactions_with_spinner(client, dry_run, transactions, authorized_staker)?
+        .iter()
+        .any(|err| err.is_some())
     {
         Err("Failed to merge orphaned stake accounts".into())
     } else {
@@ -398,7 +385,6 @@ fn merge_orphaned_stake_accounts(
 
 fn merge_transient_stake_accounts(
     client: &MultiClient,
-    config: &Config,
     authorized_staker: &Keypair,
     desired_validator_stake: &[ValidatorStake],
     reserve_stake_address: Pubkey,
@@ -481,15 +467,9 @@ fn merge_transient_stake_accounts(
         }
     }
 
-    if send_and_confirm_transactions_with_spinner(
-        client,
-        config,
-        dry_run,
-        transactions,
-        authorized_staker,
-    )?
-    .iter()
-    .any(|err| err.is_some())
+    if send_and_confirm_transactions_with_spinner(client, dry_run, transactions, authorized_staker)?
+        .iter()
+        .any(|err| err.is_some())
     {
         Err("Failed to merge transient stake".into())
     } else {
@@ -500,7 +480,6 @@ fn merge_transient_stake_accounts(
 #[allow(clippy::too_many_arguments)]
 fn create_validator_stake_accounts(
     client: &MultiClient,
-    config: &Config,
     authorized_staker: &Keypair,
     desired_validator_stake: &[ValidatorStake],
     reserve_stake_address: Pubkey,
@@ -627,15 +606,9 @@ fn create_validator_stake_accounts(
         }
     }
 
-    if send_and_confirm_transactions_with_spinner(
-        client,
-        config,
-        dry_run,
-        transactions,
-        authorized_staker,
-    )?
-    .iter()
-    .any(|err| err.is_some())
+    if send_and_confirm_transactions_with_spinner(client, dry_run, transactions, authorized_staker)?
+        .iter()
+        .any(|err| err.is_some())
     {
         Err("Failed to create validator stake accounts".into())
     } else {
@@ -647,7 +620,6 @@ fn create_validator_stake_accounts(
 #[allow(clippy::too_many_arguments)]
 fn distribute_validator_stake<V>(
     client: &MultiClient,
-    config: &Config,
     dry_run: bool,
     authorized_staker: &Keypair,
     desired_validator_stake: V,
@@ -839,15 +811,9 @@ where
     let ok = if dry_run {
         true
     } else {
-        !send_and_confirm_transactions_with_spinner(
-            client,
-            config,
-            false,
-            transactions,
-            authorized_staker,
-        )?
-        .iter()
-        .any(|err| err.is_some())
+        !send_and_confirm_transactions_with_spinner(client, false, transactions, authorized_staker)?
+            .iter()
+            .any(|err| err.is_some())
     };
 
     if !ok {
@@ -862,7 +828,10 @@ mod test {
     use crate::lamports_to_sol;
     use {
         super::*,
-        crate::rpc_client_utils::{new_tpu_client_with_retry, test::*},
+        crate::{
+            rpc_client_utils::{new_tpu_client_with_retry, test::*},
+            Config,
+        },
         solana_sdk::{
             clock::Epoch,
             epoch_schedule::{EpochSchedule, MINIMUM_SLOTS_PER_EPOCH},
@@ -892,7 +861,6 @@ mod test {
     fn uniform_stake_pool_apply(
         stake_pool: &mut StakePool,
         client: &MultiClient,
-        config: &Config,
         validators: &[ValidatorAddressPair],
         stake_state: ValidatorStakeState,
         expected_validator_stake_balance: u64,
@@ -909,7 +877,7 @@ mod test {
             .collect::<Vec<_>>();
 
         stake_pool
-            .apply(client, config, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -918,7 +886,7 @@ mod test {
         );
         let _epoch = wait_for_next_epoch(client).unwrap();
         stake_pool
-            .apply(client, config, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -956,7 +924,7 @@ mod test {
         let (rpc_client, _recent_blockhash, _fee_calculator) = test_validator.rpc_client();
         let rpc_client = Arc::new(rpc_client);
         let tpu_client = new_tpu_client_with_retry(&rpc_client, &config.websocket_url).unwrap();
-        let client = MultiClient::new(rpc_client, tpu_client);
+        let client = MultiClient::new(rpc_client, tpu_client, &config);
 
         let authorized_staker_address = authorized_staker.pubkey();
 
@@ -1032,7 +1000,6 @@ mod test {
         stake_pool
             .apply(
                 &client,
-                &config,
                 false,
                 &validators
                     .iter()
@@ -1075,7 +1042,6 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_pool,
             &client,
-            &config,
             &validators,
             ValidatorStakeState::Baseline,
             baseline_stake_amount,
@@ -1087,7 +1053,6 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_pool,
             &client,
-            &config,
             &validators,
             ValidatorStakeState::Bonus,
             total_stake_amount / validators.len() as u64,
@@ -1118,11 +1083,11 @@ mod test {
         ];
 
         stake_pool
-            .apply(&client, &config, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake)
             .unwrap();
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_pool
-            .apply(&client, &config, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake)
             .unwrap();
 
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
@@ -1150,7 +1115,7 @@ mod test {
 
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_pool
-            .apply(&client, &config, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -1178,10 +1143,10 @@ mod test {
         info!("remove all validators");
 
         // deactivate all validator stake
-        stake_pool.apply(&client, &config, false, &[]).unwrap();
+        stake_pool.apply(&client, false, &[]).unwrap();
         let _epoch = wait_for_next_epoch(&client).unwrap();
         // merge deactivated validator stake back into the reserve
-        stake_pool.apply(&client, &config, false, &[]).unwrap();
+        stake_pool.apply(&client, false, &[]).unwrap();
         // all stake has returned to the reserve account
         assert_reserve_account_only();
     }

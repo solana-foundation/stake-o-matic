@@ -41,6 +41,7 @@ fn new_spinner_progress_bar() -> ProgressBar {
 pub struct MultiClient {
     rpc: Arc<RpcClient>,
     tpu: TpuClient,
+    use_rpc_tx_submission: bool,
 }
 impl Deref for MultiClient {
     type Target = RpcClient;
@@ -49,12 +50,16 @@ impl Deref for MultiClient {
     }
 }
 impl MultiClient {
-    pub fn new(rpc: Arc<RpcClient>, tpu: TpuClient) -> Self {
-        Self { rpc, tpu }
+    pub fn new(rpc: Arc<RpcClient>, tpu: TpuClient, config: &Config) -> Self {
+        Self {
+            rpc,
+            tpu,
+            use_rpc_tx_submission: config.use_rpc_tx_submission,
+        }
     }
 
-    pub fn send_transaction(&self, force_rpc: bool, transaction: &Transaction) -> &'static str {
-        if !force_rpc && self.tpu.send_transaction(transaction) {
+    pub fn send_transaction(&self, transaction: &Transaction) -> &'static str {
+        if !self.use_rpc_tx_submission && self.tpu.send_transaction(transaction) {
             "TPU"
         } else {
             let _ = self.rpc.send_transaction_with_config(
@@ -103,7 +108,6 @@ pub fn new_tpu_client_with_retry(
 
 pub fn send_and_confirm_transactions_with_spinner(
     client: &MultiClient,
-    config: &Config,
     dry_run: bool,
     transactions: Vec<Transaction>,
     signer: &Keypair,
@@ -165,7 +169,7 @@ pub fn send_and_confirm_transactions_with_spinner(
                     let method = if dry_run {
                         "DRY RUN"
                     } else {
-                        client.send_transaction(config.use_rpc_tx_submission, transaction)
+                        client.send_transaction(transaction)
                     };
                     set_message(
                         confirmed_transactions,

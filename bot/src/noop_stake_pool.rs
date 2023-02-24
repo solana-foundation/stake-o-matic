@@ -1,6 +1,6 @@
 use solana_sdk::pubkey::Pubkey;
 use {
-    crate::{generic_stake_pool::*, rpc_client_utils::MultiClient, Config},
+    crate::{generic_stake_pool::*, rpc_client_utils::MultiClient},
     std::{
         collections::{HashMap, HashSet},
         error,
@@ -17,7 +17,6 @@ impl GenericStakePool for NoopStakePool {
     fn apply(
         &mut self,
         _client: &MultiClient,
-        _config: &Config,
         _dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
