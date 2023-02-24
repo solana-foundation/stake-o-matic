@@ -78,7 +78,7 @@ MAINNET_BETA_ARGS=(
   --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
-  --min-release-version 1.13.3
+  --min-release-version 1.14.15
   --max-infrastructure-concentration 10
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
@@ -89,7 +89,6 @@ MAINNET_BETA_ARGS=(
   --min-self-stake-exceptions-key ${SELF_STAKE_EXCEPTIONS_KEY:?}
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
-  --performance-waiver-release-version 1.14.14
   $MAYBE_USE_RPC_TX_SUBMISSION
 #  --require-performance-metrics-reporting
 )
