@@ -994,7 +994,8 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         _ => unreachable!(),
     };
 
-    Ok((config, MultiClient::new(rpc_client, tpu_client), stake_pool))
+    let client = MultiClient::new(rpc_client, tpu_client, &config);
+    Ok((config, client, stake_pool))
 }
 
 type ClassifyResult = (
@@ -2427,7 +2428,6 @@ fn main() -> BoxResult<()> {
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(
                 &client,
-                &config,
                 pre_run_dry_run || config.dry_run,
                 &desired_validator_stake,
             )?;

@@ -1,5 +1,5 @@
 use {
-    crate::{rpc_client_utils::MultiClient, Config},
+    crate::rpc_client_utils::MultiClient,
     serde::{Deserialize, Serialize},
     solana_sdk::pubkey::Pubkey,
     std::{
@@ -38,7 +38,6 @@ pub trait GenericStakePool {
     fn apply(
         &mut self,
         client: &MultiClient,
-        config: &Config,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<

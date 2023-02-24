@@ -4,7 +4,6 @@ use {
         rpc_client_utils::{
             get_all_stake, send_and_confirm_transactions_with_spinner, MultiClient,
         },
-        Config,
     },
     log::*,
     solana_client::{rpc_client::RpcClient, rpc_response::StakeActivationState},
@@ -121,15 +120,10 @@ impl StakePoolOMatic {
     /// Perform the double update, required at the start of an epoch:
     /// * call into the stake pool program to update the accounting of lamports
     /// * update the StakePool and ValidatorList objects based on the accounting
-    pub fn epoch_update(
-        &mut self,
-        client: &MultiClient,
-        config: &Config,
-    ) -> Result<(), Box<dyn error::Error>> {
+    pub fn epoch_update(&mut self, client: &MultiClient) -> Result<(), Box<dyn error::Error>> {
         self.update(client)?;
         update_stake_pool(
             client,
-            config,
             &self.authorized_staker,
             &self.stake_pool_address,
             &self.stake_pool,
@@ -161,7 +155,6 @@ impl GenericStakePool for StakePoolOMatic {
     fn apply(
         &mut self,
         client: &MultiClient,
-        config: &Config,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
@@ -197,10 +190,10 @@ impl GenericStakePool for StakePoolOMatic {
         }
 
         info!("Withdraw inactive transient stake accounts to the staker");
-        withdraw_inactive_stakes_to_staker(client, config, &self.authorized_staker, dry_run)?;
+        withdraw_inactive_stakes_to_staker(client, &self.authorized_staker, dry_run)?;
 
         info!("Update the stake pool, merging transient stakes and orphaned accounts");
-        self.epoch_update(client, config)?;
+        self.epoch_update(client)?;
 
         let all_vote_addresses: HashSet<Pubkey> = self
             .validator_list
@@ -211,7 +204,6 @@ impl GenericStakePool for StakePoolOMatic {
         info!("Remove validators no longer present in the desired list");
         remove_validators_from_pool(
             client,
-            config,
             &self.authorized_staker,
             &self.stake_pool_address,
             &self.stake_pool,
@@ -223,7 +215,6 @@ impl GenericStakePool for StakePoolOMatic {
         info!("Add new validators to pool");
         add_validators_to_pool(
             client,
-            config,
             &self.authorized_staker,
             desired_validator_stake,
             &self.stake_pool_address,
@@ -337,7 +328,6 @@ impl GenericStakePool for StakePoolOMatic {
         let mut unfunded_validators = HashSet::default();
         distribute_validator_stake(
             client,
-            config,
             dry_run,
             &self.authorized_staker,
             &self.stake_pool_address,
@@ -426,7 +416,6 @@ fn add_unmerged_transient_stake_accounts(
 /// and withdraws the entirety back to the staker.
 fn withdraw_inactive_stakes_to_staker(
     client: &MultiClient,
-    config: &Config,
     authorized_staker: &Keypair,
     dry_run: bool,
 ) -> Result<(), Box<dyn error::Error>> {
@@ -473,7 +462,6 @@ fn withdraw_inactive_stakes_to_staker(
         Ok(())
     } else if send_and_confirm_transactions_with_spinner(
         client,
-        config,
         false,
         transactions,
         authorized_staker,
@@ -491,7 +479,6 @@ fn withdraw_inactive_stakes_to_staker(
 /// once per epoch to perform any operations on the stake pool.
 fn update_stake_pool(
     client: &MultiClient,
-    config: &Config,
     payer: &Keypair,
     stake_pool_address: &Pubkey,
     stake_pool: &StakePool,
@@ -516,7 +503,7 @@ fn update_stake_pool(
         .map(|i| Transaction::new_with_payer(&[i], Some(&payer.pubkey())))
         .collect();
 
-    if send_and_confirm_transactions_with_spinner(client, config, false, transactions, payer)?
+    if send_and_confirm_transactions_with_spinner(client, false, transactions, payer)?
         .iter()
         .any(|err| err.is_some())
     {
@@ -528,7 +515,7 @@ fn update_stake_pool(
         .map(|i| Transaction::new_with_payer(&[i], Some(&payer.pubkey())))
         .collect();
 
-    if send_and_confirm_transactions_with_spinner(client, config, false, transactions, payer)?
+    if send_and_confirm_transactions_with_spinner(client, false, transactions, payer)?
         .iter()
         .any(|err| err.is_some())
     {
@@ -547,7 +534,6 @@ fn update_stake_pool(
 #[allow(clippy::too_many_arguments)]
 fn remove_validators_from_pool(
     client: &MultiClient,
-    config: &Config,
     authorized_staker: &Keypair,
     stake_pool_address: &Pubkey,
     stake_pool: &StakePool,
@@ -625,7 +611,6 @@ fn remove_validators_from_pool(
         Ok(())
     } else if send_and_confirm_transactions_with_spinner(
         client,
-        config,
         false,
         transactions,
         authorized_staker,
@@ -644,7 +629,6 @@ fn remove_validators_from_pool(
 #[allow(clippy::too_many_arguments)]
 fn add_validators_to_pool(
     client: &MultiClient,
-    config: &Config,
     authorized_staker: &Keypair,
     desired_validator_stake: &[ValidatorStake],
     stake_pool_address: &Pubkey,
@@ -683,7 +667,6 @@ fn add_validators_to_pool(
         Ok(())
     } else if send_and_confirm_transactions_with_spinner(
         client,
-        config,
         false,
         transactions,
         authorized_staker,
@@ -700,7 +683,6 @@ fn add_validators_to_pool(
 #[allow(clippy::too_many_arguments)]
 fn distribute_validator_stake<V>(
     client: &MultiClient,
-    config: &Config,
     dry_run: bool,
     authorized_staker: &Keypair,
     stake_pool_address: &Pubkey,
@@ -869,15 +851,9 @@ where
     let ok = if dry_run {
         true
     } else {
-        !send_and_confirm_transactions_with_spinner(
-            client,
-            config,
-            false,
-            transactions,
-            authorized_staker,
-        )?
-        .iter()
-        .any(|err| err.is_some())
+        !send_and_confirm_transactions_with_spinner(client, false, transactions, authorized_staker)?
+            .iter()
+            .any(|err| err.is_some())
     };
 
     if !ok {
@@ -890,7 +866,10 @@ where
 mod test {
     use {
         super::*,
-        crate::rpc_client_utils::{new_tpu_client_with_retry, test::*},
+        crate::{
+            rpc_client_utils::{new_tpu_client_with_retry, test::*},
+            Config,
+        },
         solana_sdk::{
             clock::Epoch,
             epoch_schedule::{EpochSchedule, MINIMUM_SLOTS_PER_EPOCH},
@@ -928,7 +907,6 @@ mod test {
     fn uniform_stake_pool_apply(
         stake_o_matic: &mut StakePoolOMatic,
         client: &MultiClient,
-        config: &Config,
         validators: &[ValidatorAddressPair],
         stake_state: ValidatorStakeState,
         expected_validator_stake_balance: u64,
@@ -951,13 +929,13 @@ mod test {
             .collect::<Vec<_>>();
 
         stake_o_matic
-            .apply(client, config, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake)
             .unwrap();
 
         assert!(num_stake_accounts(client, pool_withdraw_authority) > 1 + validators.len());
         let _epoch = wait_for_next_epoch(client).unwrap();
         stake_o_matic
-            .apply(client, config, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -998,7 +976,7 @@ mod test {
         let (rpc_client, _recent_blockhash, _fee_calculator) = test_validator.rpc_client();
         let rpc_client = Arc::new(rpc_client);
         let tpu_client = new_tpu_client_with_retry(&rpc_client, &config.websocket_url).unwrap();
-        let client = MultiClient::new(rpc_client, tpu_client);
+        let client = MultiClient::new(rpc_client, tpu_client, &config);
 
         let stake_pool = Keypair::new();
         let pool_withdraw_authority =
@@ -1102,7 +1080,6 @@ mod test {
         stake_o_matic
             .apply(
                 &client,
-                &config,
                 false,
                 &validators
                     .iter()
@@ -1164,7 +1141,6 @@ mod test {
         stake_o_matic
             .apply(
                 &client,
-                &config,
                 false,
                 &validators
                     .iter()
@@ -1212,7 +1188,6 @@ mod test {
         stake_o_matic
             .apply(
                 &client,
-                &config,
                 false,
                 &validators
                     .iter()
@@ -1232,7 +1207,6 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_o_matic,
             &client,
-            &config,
             &validators,
             ValidatorStakeState::Baseline,
             baseline_stake_amount,
@@ -1244,7 +1218,6 @@ mod test {
         uniform_stake_pool_apply(
             &mut stake_o_matic,
             &client,
-            &config,
             &validators,
             ValidatorStakeState::Bonus,
             baseline_stake_amount + bonus_stake_amount,
@@ -1275,11 +1248,11 @@ mod test {
         ];
 
         stake_o_matic
-            .apply(&client, &config, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake)
             .unwrap();
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_o_matic
-            .apply(&client, &config, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake)
             .unwrap();
 
         info!("Check after first epoch");
@@ -1307,7 +1280,7 @@ mod test {
         info!("Check after second epoch");
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_o_matic
-            .apply(&client, &config, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake)
             .unwrap();
 
         assert_eq!(
@@ -1332,11 +1305,11 @@ mod test {
         // ===========================================================
         info!("remove all validators");
         // deactivate all validator stake and remove from pool
-        stake_o_matic.apply(&client, &config, false, &[]).unwrap();
+        stake_o_matic.apply(&client, false, &[]).unwrap();
 
         // withdraw removed validator stake into the staker
         let _epoch = wait_for_next_epoch(&client).unwrap();
-        stake_o_matic.apply(&client, &config, false, &[]).unwrap();
+        stake_o_matic.apply(&client, false, &[]).unwrap();
         // all stake has been returned to the reserve account
         assert_reserve_account_only(
             min_reserve_stake_balance + stake_rent_exemption + total_stake_amount,
