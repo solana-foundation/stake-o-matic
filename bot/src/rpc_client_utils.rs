@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use {
+    crate::Config,
     indicatif::{ProgressBar, ProgressStyle},
     log::*,
     solana_client::{
@@ -70,7 +71,7 @@ fn new_tpu_client_with_retry(
 
 pub fn send_and_confirm_transactions_with_spinner(
     rpc_client: Arc<RpcClient>,
-    websocket_url: &str,
+    config: &Config,
     dry_run: bool,
     transactions: Vec<Transaction>,
     signer: &Keypair,
@@ -84,7 +85,7 @@ pub fn send_and_confirm_transactions_with_spinner(
     let transaction_resend_interval = Duration::from_secs(4); /* Retry batch send after 4 seconds */
 
     progress_bar.set_message("Connecting...");
-    let tpu_client = new_tpu_client_with_retry(&rpc_client, websocket_url)?;
+    let tpu_client = new_tpu_client_with_retry(&rpc_client, &config.websocket_url)?;
 
     let mut transactions = transactions.into_iter().enumerate().collect::<Vec<_>>();
     let num_transactions = transactions.len() as f64;
@@ -132,7 +133,9 @@ pub fn send_and_confirm_transactions_with_spinner(
                 for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
                     let method = if dry_run {
                         "DRY RUN"
-                    } else if tpu_client.send_transaction(transaction) {
+                    } else if !config.use_rpc_tx_submission
+                        && tpu_client.send_transaction(transaction)
+                    {
                         "TPU"
                     } else {
                         let _ = rpc_client.send_transaction_with_config(

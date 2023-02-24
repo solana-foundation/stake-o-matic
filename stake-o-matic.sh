@@ -45,6 +45,11 @@ if [[ -n $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE ]]; then
   REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE="--require-dry-run-to-distribute-stake"
 fi
 
+: "${USE_RPC_TX_SUBMISSION:=false}"
+if $USE_RPC_TX_SUBMISSION; then
+  MAYBE_USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission"
+fi
+
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
   --url ${URL[@]:?}
@@ -59,6 +64,7 @@ TESTNET_ARGS=(
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
+  $MAYBE_USE_RPC_TX_SUBMISSION
 #  --require-performance-metrics-reporting
 )
 
@@ -84,6 +90,7 @@ MAINNET_BETA_ARGS=(
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
   --performance-waiver-release-version 1.14.14
+  $MAYBE_USE_RPC_TX_SUBMISSION
 #  --require-performance-metrics-reporting
 )
 
