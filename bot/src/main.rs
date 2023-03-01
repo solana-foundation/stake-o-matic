@@ -1620,7 +1620,6 @@ fn classify(
         // if mainnet, get list of validators that have been poor reporters on testnet
         let poor_testnet_reporters: Option<Vec<(Pubkey, String)>> = if config.cluster == MainnetBeta
         {
-            let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
             Some(
                 EpochClassification::load_previous(
                     testnet_epoch,
