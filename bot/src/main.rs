@@ -36,7 +36,7 @@ use {
         native_token::*,
         pubkey::Pubkey,
         slot_history::{self, SlotHistory},
-        stake::{self, state::StakeState},
+        stake::state::StakeState,
         stake_history::StakeHistory,
         sysvar,
     },
@@ -1213,7 +1213,7 @@ fn get_self_stake_by_vote_account(
     }
 
     info!("Fetching stake accounts...");
-    let all_stake_accounts = rpc_client.get_program_accounts(&stake::program::id())?;
+    let all_stake_accounts = get_all_stake_with_retry(rpc_client, None)?;
 
     let stake_history_account = rpc_client
         .get_account_with_commitment(&sysvar::stake_history::id(), CommitmentConfig::finalized())?

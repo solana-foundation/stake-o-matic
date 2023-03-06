@@ -2,7 +2,7 @@ use {
     crate::{
         generic_stake_pool::*,
         rpc_client_utils::{
-            get_all_stake, send_and_confirm_transactions_with_spinner, MultiClient,
+            get_all_stake_by_staker, send_and_confirm_transactions_with_spinner, MultiClient,
         },
     },
     log::*,
@@ -145,7 +145,7 @@ impl GenericStakePool for StakePool {
         }
 
         let (all_stake_addresses, all_stake_total_amount) =
-            get_all_stake(client, self.authorized_staker.pubkey())?;
+            get_all_stake_by_staker(client, self.authorized_staker.pubkey())?;
 
         info!("Merge orphaned stake into the reserve");
         let deactivated_merged_stake = merge_orphaned_stake_accounts(
@@ -843,7 +843,7 @@ mod test {
     };
 
     fn num_stake_accounts(rpc_client: &RpcClient, authorized_staker: &Keypair) -> usize {
-        get_all_stake(rpc_client, authorized_staker.pubkey())
+        get_all_stake_by_staker(rpc_client, authorized_staker.pubkey())
             .unwrap()
             .0
             .len()
@@ -908,7 +908,6 @@ mod test {
     }
 
     #[test]
-    #[ignore = "Fails on occasion due to timing issues with short epochs in test framework"]
     fn this_test_is_too_big_and_slow() {
         solana_logger::setup_with_default("solana_stake_o_matic=info");
 
@@ -978,7 +977,7 @@ mod test {
                 );
 
                 let (all_stake, all_stake_total_amount) =
-                    get_all_stake(&client, authorized_staker_address).unwrap();
+                    get_all_stake_by_staker(&client, authorized_staker_address).unwrap();
                 assert_eq!(all_stake_total_amount, total_stake_amount_plus_min);
                 assert_eq!(all_stake.len(), 1);
                 assert!(all_stake.contains(&reserve_stake_address));
