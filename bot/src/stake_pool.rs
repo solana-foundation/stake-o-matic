@@ -2,7 +2,7 @@ use {
     crate::{
         generic_stake_pool::*,
         rpc_client_utils::{
-            get_all_stake, send_and_confirm_transactions_with_spinner, MultiClient,
+            get_all_stake_by_staker, send_and_confirm_transactions_with_spinner, MultiClient,
         },
     },
     log::*,
@@ -421,7 +421,7 @@ fn withdraw_inactive_stakes_to_staker(
 ) -> Result<(), Box<dyn error::Error>> {
     let mut transactions = vec![];
     let (all_stake_addresses, _all_stake_total_amount) =
-        get_all_stake(client, authorized_staker.pubkey())?;
+        get_all_stake_by_staker(client, authorized_staker.pubkey())?;
 
     for stake_address in all_stake_addresses {
         let stake_account = client
@@ -882,7 +882,10 @@ mod test {
     };
 
     fn num_stake_accounts(rpc_client: &RpcClient, authority: Pubkey) -> usize {
-        get_all_stake(rpc_client, authority).unwrap().0.len()
+        get_all_stake_by_staker(rpc_client, authority)
+            .unwrap()
+            .0
+            .len()
     }
 
     fn validator_stake_balance(
@@ -1055,7 +1058,7 @@ mod test {
             );
             {
                 let (all_stake, all_stake_total_amount) =
-                    get_all_stake(&client, withdraw_authority).unwrap();
+                    get_all_stake_by_staker(&client, withdraw_authority).unwrap();
                 assert_eq!(all_stake_total_amount, current_reserve_amount);
                 assert_eq!(all_stake.len(), 1);
                 assert!(all_stake.contains(&pool_reserve_stake));

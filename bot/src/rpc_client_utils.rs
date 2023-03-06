@@ -1,18 +1,19 @@
-use solana_client::rpc_filter;
-use std::borrow::Borrow;
 use {
     crate::Config,
     indicatif::{ProgressBar, ProgressStyle},
     log::*,
     solana_client::{
+        client_error::{reqwest, ClientError, ClientErrorKind},
         pubsub_client::PubsubClientError,
         rpc_client::RpcClient,
         rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig},
+        rpc_filter,
         rpc_request::MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS,
         rpc_response::{RpcVoteAccountInfo, RpcVoteAccountStatus},
         tpu_client::{TpuClient, TpuClientConfig, TpuSenderError},
     },
     solana_sdk::{
+        account::Account,
         clock::Epoch,
         pubkey::Pubkey,
         signature::Keypair,
@@ -20,6 +21,7 @@ use {
         transaction::{Transaction, TransactionError},
     },
     std::{
+        borrow::Borrow,
         collections::{HashMap, HashSet},
         error,
         ops::Deref,
@@ -338,31 +340,61 @@ pub fn get_vote_account_info(
     ))
 }
 
-pub fn get_all_stake(
+pub fn get_all_stake_with_retry(
+    rpc_client: &RpcClient,
+    authorized_staker: Option<Pubkey>,
+) -> Result<Vec<(Pubkey, Account)>, Box<dyn error::Error>> {
+    let filters = authorized_staker.map(|s| {
+        vec![rpc_filter::RpcFilterType::Memcmp(rpc_filter::Memcmp {
+            offset: 12,
+            bytes: rpc_filter::MemcmpEncodedBytes::Base58(s.to_string()),
+            encoding: Some(rpc_filter::MemcmpEncoding::Binary),
+        })]
+    });
+    let config = RpcProgramAccountsConfig {
+        filters,
+        account_config: RpcAccountInfoConfig {
+            encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+            commitment: Some(rpc_client.commitment()),
+            ..RpcAccountInfoConfig::default()
+        },
+        ..RpcProgramAccountsConfig::default()
+    };
+    let mut retries = 5u8;
+    let retry_delay = Duration::from_secs(10);
+    loop {
+        if retries == 0 {
+            return Err("Exhausted retries; connection to server is unhealthy".into());
+        }
+        let maybe_accounts =
+            rpc_client.get_program_accounts_with_config(&stake::program::id(), config.clone());
+
+        match maybe_accounts {
+            Err(ClientError {
+                kind: ClientErrorKind::Reqwest(err),
+                ..
+            }) if reqwest::Error::is_timeout(&err) => {
+                retries = retries.saturating_sub(1);
+                info!(
+                    "get_program_accounts timed out, {} retries remaining, sleeping for {} seconds",
+                    retries,
+                    retry_delay.as_secs()
+                );
+                std::thread::sleep(retry_delay);
+            }
+            _ => return maybe_accounts.map_err(|e| e.into()),
+        };
+    }
+}
+
+pub fn get_all_stake_by_staker(
     rpc_client: &RpcClient,
     authorized_staker: Pubkey,
 ) -> Result<(HashSet<Pubkey>, u64), Box<dyn error::Error>> {
     let mut all_stake_addresses = HashSet::new();
     let mut total_stake_balance = 0;
 
-    let all_stake_accounts = rpc_client.get_program_accounts_with_config(
-        &stake::program::id(),
-        RpcProgramAccountsConfig {
-            filters: Some(vec![rpc_filter::RpcFilterType::Memcmp(
-                rpc_filter::Memcmp {
-                    offset: 12,
-                    bytes: rpc_filter::MemcmpEncodedBytes::Base58(authorized_staker.to_string()),
-                    encoding: Some(rpc_filter::MemcmpEncoding::Binary),
-                },
-            )]),
-            account_config: RpcAccountInfoConfig {
-                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
-                commitment: Some(rpc_client.commitment()),
-                ..RpcAccountInfoConfig::default()
-            },
-            ..RpcProgramAccountsConfig::default()
-        },
-    )?;
+    let all_stake_accounts = get_all_stake_with_retry(rpc_client, Some(authorized_staker))?;
 
     for (address, account) in all_stake_accounts {
         all_stake_addresses.insert(address);
