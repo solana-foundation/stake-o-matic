@@ -10,15 +10,15 @@ repository = "https://github.com/solana-foundation/stake-o-matic"
 [dependencies]
 borsh = "0.9"
 borsh-derive = "0.9"
-solana-program = "1.7.11"
+solana-program = "1.13.6"
 
 [features]
 test-bpf = []
 
 [dev-dependencies]
 assert_matches = "1.4.0"
-solana-program-test = "1.7.11"
-solana-sdk = "1.7.11"
+solana-program-test = "1.13.6"
+solana-sdk = "1.13.6"
 
 [lib]
 crate-type = ["cdylib", "lib"]

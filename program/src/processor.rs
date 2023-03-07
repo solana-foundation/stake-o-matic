@@ -147,13 +147,13 @@ mod test {
     }
 
     #[tokio::test]
-    #[ignore = "Fails on occasion due to UnbalancedInstruction error; not fixing for now"]
     async fn test_signup() {
         let program_id = crate::id();
 
         let participant = Keypair::new();
         let mainnet_validator_identity = Keypair::new();
         let testnet_validator_identity = Keypair::new();
+        let refundee = Keypair::new();
 
         let (mut banks_client, payer, recent_blockhash) = ProgramTest::new(
             "solana_foundation_delegation_program_registry",
@@ -330,6 +330,10 @@ mod test {
 
         // Withdraw...
         assert_eq!(
+            banks_client.get_balance(refundee.pubkey()).await.unwrap(),
+            0
+        );
+        assert_eq!(
             banks_client
                 .get_balance(testnet_validator_identity.pubkey())
                 .await
@@ -347,7 +351,7 @@ mod test {
             &[withdraw(
                 participant.pubkey(),
                 testnet_validator_identity.pubkey(),
-                testnet_validator_identity.pubkey(),
+                refundee.pubkey(),
             )],
             Some(&payer.pubkey()),
         );
@@ -355,11 +359,15 @@ mod test {
         assert_matches!(banks_client.process_transaction(transaction).await, Ok(()));
 
         assert_eq!(
+            banks_client.get_balance(refundee.pubkey()).await.unwrap(),
+            rent
+        );
+        assert_eq!(
             banks_client
                 .get_balance(testnet_validator_identity.pubkey())
                 .await
                 .unwrap(),
-            rent
+            0
         );
         assert_eq!(
             banks_client
