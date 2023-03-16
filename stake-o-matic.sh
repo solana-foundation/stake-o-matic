@@ -45,6 +45,14 @@ if [[ -n $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE ]]; then
   REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE="--require-dry-run-to-distribute-stake"
 fi
 
+if [[ -n $MIN_RELEASE_VERSION ]]; then
+  MIN_RELEASE_VERSION="--max-release-version $MIN_RELEASE_VERSION"
+fi
+
+if [[ -n $MAX_RELEASE_VERSION ]]; then
+  MAX_RELEASE_VERSION="--max-release-version $MAX_RELEASE_VERSION"
+fi
+
 : "${USE_RPC_TX_SUBMISSION:=false}"
 if $USE_RPC_TX_SUBMISSION; then
   MAYBE_USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission"
@@ -56,11 +64,9 @@ TESTNET_ARGS=(
   --participant-url ${PARTICIPANT_URL:?}
   --cluster testnet
   --quality-block-producer-percentage 30
-  ${MAX_POOR_BLOCK_PRODUCER_PERCENTAGE}
   --max-infrastructure-concentration 25
   --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
-  --min-release-version 1.14.16
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
@@ -74,11 +80,9 @@ MAINNET_BETA_ARGS=(
   --participant-url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
-  ${MAX_POOR_BLOCK_PRODUCER_PERCENTAGE}
   --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
-  --min-release-version 1.13.5
   --max-infrastructure-concentration 10
   --infrastructure-concentration-affects destake-new
   --min-self-stake 100
@@ -95,12 +99,6 @@ MAINNET_BETA_ARGS=(
 
 # shellcheck disable=SC2206
 NOT_A_STAKE_POOL_ARGS=(
-  $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE
-  $BLOCKLIST
-  $CSV_OUTPUT_MODE
-  $EPOCH_CLASSIFICATION
-  $CONFIRM
-  $REQUIRE_CLASSIFICATION
   stake-pool-v0
   --min-reserve-stake-balance ${MIN_RESERVE_STAKE_BALANCE:?}
   ${RESERVE_ACCOUNT_ADDRESS:?}
@@ -108,15 +106,8 @@ NOT_A_STAKE_POOL_ARGS=(
   ${BASELINE_STAKE_AMOUNT:?}
 )
 
-
-
 # shellcheck disable=SC2206
 STAKE_POOL_ARGS=(
-  $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE
-  $BLOCKLIST
-  $EPOCH_CLASSIFICATION
-  $CONFIRM
-  $REQUIRE_CLASSIFICATION
   --db-suffix stake-pool
   stake-pool
   ${STAKE_POOL_ADDRESS:?}
@@ -124,14 +115,26 @@ STAKE_POOL_ARGS=(
   ${BASELINE_STAKE_AMOUNT:?}
 )
 
+SHARED_ARGS=(
+  ${MAX_POOR_BLOCK_PRODUCER_PERCENTAGE}
+  $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE
+  $BLOCKLIST
+  $CSV_OUTPUT_MODE
+  $EPOCH_CLASSIFICATION
+  $CONFIRM
+  $REQUIRE_CLASSIFICATION
+  $MIN_RELEASE_VERSION
+  $MAX_RELEASE_VERSION
+)
+
 if [[ $CLUSTER = "testnet-stake-pool" ]]; then
-  ./solana-stake-o-matic "${TESTNET_ARGS[@]}" "${STAKE_POOL_ARGS[@]}"
+  ./solana-stake-o-matic "${TESTNET_ARGS[@]}" "${SHARED_ARGS[@]}" "${STAKE_POOL_ARGS[@]}"
 elif [[ $CLUSTER = "mainnet-beta-stake-pool" ]]; then
-  ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}" "${STAKE_POOL_ARGS[@]}"
+  ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}" "${SHARED_ARGS[@]}" "${STAKE_POOL_ARGS[@]}"
 elif [[ $CLUSTER == "testnet" ]]; then
-  ./solana-stake-o-matic "${TESTNET_ARGS[@]}" "${NOT_A_STAKE_POOL_ARGS[@]}"
+  ./solana-stake-o-matic "${TESTNET_ARGS[@]}" "${SHARED_ARGS[@]}" "${NOT_A_STAKE_POOL_ARGS[@]}"
 elif [[ $CLUSTER == "mainnet-beta" ]]; then
-  ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}" "${NOT_A_STAKE_POOL_ARGS[@]}"
+  ./solana-stake-o-matic "${MAINNET_BETA_ARGS[@]}" "${SHARED_ARGS[@]}" "${NOT_A_STAKE_POOL_ARGS[@]}"
 else
   echo "CLUSTER must be set to testnet-stake-pool, mainnet-beta-stake-pool, testnet, or mainnet-beta"
   exit 1

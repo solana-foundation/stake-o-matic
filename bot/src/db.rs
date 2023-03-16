@@ -116,6 +116,7 @@ pub struct EpochConfig {
     pub max_poor_block_producer_percentage: Option<usize>,
     pub max_commission: Option<u8>,
     pub min_release_version: Option<semver::Version>,
+    pub max_release_version: Option<semver::Version>,
     pub max_old_release_version_percentage: Option<usize>,
     pub max_poor_voter_percentage: Option<usize>,
     pub max_infrastructure_concentration: Option<f64>,

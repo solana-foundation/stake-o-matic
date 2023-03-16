@@ -192,6 +192,9 @@ pub struct Config {
     /// `max_old_release_version_percentage` limit
     min_release_version: Option<semver::Version>,
 
+    /// If Some(), destake validators with a version greater than this version
+    max_release_version: Option<semver::Version>,
+
     /// Do not unstake more than this percentage of the cluster at one time for running an
     /// older software version
     max_old_release_version_percentage: usize,
@@ -288,6 +291,7 @@ impl Config {
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
             min_release_version: None,
+            max_release_version: None,
             max_old_release_version_percentage: 10,
             max_poor_voter_percentage: 20,
             confirmed_block_cache_path: default_confirmed_block_cache_path(),
@@ -486,6 +490,15 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
                 .validator(is_release_version)
                 .help("Remove the base and bonus stake from validators with \
                        a release version older than this one")
+        )
+        .arg(
+            Arg::with_name("max_release_version")
+                .long("max-release-version")
+                .value_name("SEMVER")
+                .takes_value(true)
+                .validator(is_release_version)
+                .help("Remove the base and bonus stake from validators with \
+                       a release version greater than this one")
         )
         .arg(
             Arg::with_name("performance_waiver_release_version")
@@ -757,6 +770,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
     let max_old_release_version_percentage =
         value_t_or_exit!(matches, "max_old_release_version_percentage", usize);
     let min_release_version = release_version_of(&matches, "min_release_version");
+    let max_release_version = release_version_of(&matches, "max_release_version");
     let performance_waiver_release_version =
         release_version_of(&matches, "performance_waiver_release_version");
 
@@ -920,6 +934,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         max_poor_block_producer_percentage,
         max_commission,
         min_release_version,
+        max_release_version,
         max_old_release_version_percentage,
         max_poor_voter_percentage,
         confirmed_block_cache_path,
@@ -1392,6 +1407,7 @@ fn classify(
         get_self_stake_by_vote_account(rpc_client, epoch, &vote_account_info)?;
 
     let mut cluster_nodes_with_old_version: HashMap<String, _> = HashMap::new();
+    let mut cluster_nodes_with_too_new_version: HashMap<String, _> = HashMap::new();
 
     let release_versions: HashMap<Pubkey, semver::Version> = rpc_client
         .get_cluster_nodes()?
@@ -1404,6 +1420,12 @@ fn classify(
                             if let Some(min_release_version) = &config.min_release_version {
                                 if semver < *min_release_version {
                                     cluster_nodes_with_old_version
+                                        .insert(identity.to_string(), semver.clone());
+                                }
+                            }
+                            if let Some(max_release_version) = &config.max_release_version {
+                                if semver > *max_release_version {
+                                    cluster_nodes_with_too_new_version
                                         .insert(identity.to_string(), semver.clone());
                                 }
                             }
@@ -1425,6 +1447,12 @@ fn classify(
         info!(
             "Validators running a release older than {}: {:?}",
             min_release_version, cluster_nodes_with_old_version,
+        );
+    }
+    if let Some(ref max_release_version) = config.max_release_version {
+        info!(
+            "Validators running a release newer than {}: {:?}",
+            max_release_version, cluster_nodes_with_too_new_version,
         );
     }
 
@@ -1899,6 +1927,17 @@ fn classify(
                             .unwrap()
                     ),
                 )
+            } else if cluster_nodes_with_too_new_version.contains_key(&identity.to_string()) {
+                (
+                    ValidatorStakeState::None,
+                    format!(
+                        "Running Solana release greater than {}: {}",
+                        config.max_release_version.as_ref().unwrap(),
+                        cluster_nodes_with_too_new_version
+                            .get(&identity.to_string())
+                            .unwrap()
+                    ),
+                )
             } else if quality_block_producers.contains(&identity) {
                 (
                     ValidatorStakeState::Bonus,
@@ -2049,6 +2088,7 @@ fn classify(
         max_poor_block_producer_percentage: Some(config.max_poor_block_producer_percentage),
         max_commission: Some(config.max_commission),
         min_release_version: config.min_release_version.clone(),
+        max_release_version: config.max_release_version.clone(),
         max_old_release_version_percentage: Some(config.max_old_release_version_percentage),
         max_poor_voter_percentage: Some(config.max_poor_block_producer_percentage),
         max_infrastructure_concentration: config.max_infrastructure_concentration,
