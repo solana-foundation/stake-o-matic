@@ -2090,7 +2090,7 @@ fn classify(
         min_release_version: config.min_release_version.clone(),
         max_release_version: config.max_release_version.clone(),
         max_old_release_version_percentage: Some(config.max_old_release_version_percentage),
-        max_poor_voter_percentage: Some(config.max_poor_block_producer_percentage),
+        max_poor_voter_percentage: Some(config.max_poor_voter_percentage),
         max_infrastructure_concentration: config.max_infrastructure_concentration,
         infrastructure_concentration_affects: Some(
             config.infrastructure_concentration_affects.clone(),
