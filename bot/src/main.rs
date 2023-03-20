@@ -765,6 +765,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         value_t_or_exit!(matches, "min_epoch_credit_percentage_of_average", usize);
     let max_commission = value_t_or_exit!(matches, "max_commission", u8);
     let max_poor_voter_percentage = value_t_or_exit!(matches, "max_poor_voter_percentage", usize);
+    info!("max_poor_voter_percentage: {}", max_poor_voter_percentage);
     let max_poor_block_producer_percentage =
         value_t_or_exit!(matches, "max_poor_block_producer_percentage", usize);
     let max_old_release_version_percentage =
