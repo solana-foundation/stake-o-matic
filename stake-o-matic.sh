@@ -53,6 +53,14 @@ if [[ -n $MAX_RELEASE_VERSION ]]; then
   MAX_RELEASE_VERSION="--max-release-version $MAX_RELEASE_VERSION"
 fi
 
+if [[ -n $MAX_POOR_VOTER_PERCENTAGE ]]; then
+  MAX_POOR_VOTER_PERCENTAGE="--max-poor-voter-percentage $MAX_POOR_VOTER_PERCENTAGE"
+fi
+
+if [[ -n $MIN_EPOCH_CREDIT_PERCENTAGE_OF_AVERAGE ]]; then
+  MIN_EPOCH_CREDIT_PERCENTAGE_OF_AVERAGE="--min-epoch-credit-percentage-of-average $MIN_EPOCH_CREDIT_PERCENTAGE_OF_AVERAGE"
+fi
+
 if [[ -n $PERFORMANCE_WAIVER_RELEASE_VERSION ]]; then
   PERFORMANCE_WAIVER_RELEASE_VERSION="--performance-waiver-release-version $PERFORMANCE_WAIVER_RELEASE_VERSION"
 fi
@@ -69,7 +77,6 @@ TESTNET_ARGS=(
   --cluster testnet
   --quality-block-producer-percentage 30
   --max-infrastructure-concentration 25
-  --min-epoch-credit-percentage-of-average 35
   --infrastructure-concentration-affects destake-new
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
@@ -84,7 +91,6 @@ MAINNET_BETA_ARGS=(
   --participant-url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
-  --min-epoch-credit-percentage-of-average 35
   --max-active-stake 3000000
   --max-commission 10
   --max-infrastructure-concentration 10
@@ -131,6 +137,8 @@ SHARED_ARGS=(
   $MIN_RELEASE_VERSION
   $MAX_RELEASE_VERSION
   $PERFORMANCE_WAIVER_RELEASE_VERSION
+  $MAX_POOR_VOTER_PERCENTAGE
+  $MIN_EPOCH_CREDIT_PERCENTAGE_OF_AVERAGE
 )
 
 if [[ $CLUSTER = "testnet-stake-pool" ]]; then
