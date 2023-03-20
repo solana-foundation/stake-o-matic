@@ -959,6 +959,11 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         use_rpc_tx_submission,
     };
 
+    info!(
+        "config.max_poor_voter_percentage: {}",
+        config.max_poor_voter_percentage
+    );
+
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
