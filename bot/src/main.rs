@@ -1,4 +1,5 @@
 use crate::data_center_info::{DataCenterInfo, DataCenters};
+use crate::db::DistributionState;
 use crate::performance_db_utils::{
     get_reported_performance_metrics, NUM_SAMPLED_REPORTING_EPOCHS, SUCCESS_MIN_PERCENT,
 };
@@ -177,6 +178,9 @@ pub struct Config {
     /// Perform all stake processing, without sending transactions to the network
     dry_run: bool,
 
+    /// If set, classifies validators even if an existing classification exists in a wiki file
+    ignore_existing_classification: bool,
+
     /// Quality validators produce within this percentage of the cluster average skip rate over
     /// the previous epoch
     quality_block_producer_percentage: usize,
@@ -287,6 +291,7 @@ impl Config {
             epoch_classification: OutputMode::No,
             require_classification: false,
             dry_run: true,
+            ignore_existing_classification: false,
             quality_block_producer_percentage: 15,
             max_poor_block_producer_percentage: 20,
             max_commission: 100,
@@ -393,6 +398,12 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
                 .long("confirm")
                 .takes_value(false)
                 .help("Confirm that the stake adjustments should actually be made")
+        )
+        .arg(
+            Arg::with_name("ignore_existing_classification")
+                .long("ignore-existing-classification")
+                .takes_value(false)
+                .help("Forces new classification of validators to happen, even if an existing one exists")
         )
         .arg(
             Arg::with_name("csv-output-mode")
@@ -754,6 +765,8 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         info!("Doing a dry run; stake will not be distributed");
     }
 
+    let ignore_existing_classification = matches.is_present("ignore_existing_classification");
+
     let cluster = match value_t_or_exit!(matches, "cluster", String).as_str() {
         "mainnet-beta" => Cluster::MainnetBeta,
         "testnet" => Cluster::Testnet,
@@ -930,6 +943,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         csv_output_mode,
         epoch_classification,
         dry_run,
+        ignore_existing_classification,
         quality_block_producer_percentage,
         max_poor_block_producer_percentage,
         max_commission,
@@ -2123,6 +2137,11 @@ fn classify(
         notes,
         config: Some(epoch_config),
         stats: Some(epoch_stats),
+        distribution_state: Some(if config.require_dry_run_to_distribute_stake {
+            DistributionState::Pending
+        } else {
+            DistributionState::Distributing
+        }),
     })
 }
 
@@ -2336,26 +2355,6 @@ fn main() -> BoxResult<()> {
     info!("{} participants loaded", approved_participants.len());
     assert!(approved_participants.len() > 450); // Hard coded sanity check...
 
-    let (validator_list, identity_to_participant): (ValidatorList, HashMap<Pubkey, Pubkey>) =
-        match config.cluster {
-            Cluster::MainnetBeta => (
-                mainnet_identity_to_participant.keys().cloned().collect(),
-                mainnet_identity_to_participant,
-            ),
-            Cluster::Testnet => {
-                let approved_for_validator_list = validator_list::testnet_validators();
-
-                (
-                    non_rejected_participants
-                        .iter()
-                        .map(|(_k, v)| v.testnet_identity)
-                        .filter(|pk| approved_for_validator_list.contains(pk))
-                        .collect(),
-                    testnet_identity_to_participant,
-                )
-            }
-        };
-
     let notifier = if config.dry_run {
         Notifier::new("DRYRUN")
     } else {
@@ -2376,36 +2375,72 @@ fn main() -> BoxResult<()> {
             .unwrap_or_default()
             .into_current();
 
-    let (mut epoch_classification, first_time, post_notifications) =
-        if EpochClassification::exists(epoch, &config.cluster_db_path()) {
-            info!("Classification for epoch {} already exists", epoch);
-            (
-                EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
-                false,
-                config.require_classification,
-            )
+    let epoch_classification_exists = EpochClassification::exists(epoch, &config.cluster_db_path());
+    info!(
+        "Classification for epoch {} {}",
+        epoch,
+        if epoch_classification_exists {
+            "already exists"
         } else {
-            if config.require_classification {
-                return Err(format!("Classification for epoch {} does not exist", epoch).into());
-            }
-            (
-                classify(
-                    &client,
-                    &config,
-                    epoch,
-                    &validator_list,
-                    &identity_to_participant,
-                    previous_epoch_classification
-                        .validator_classifications
-                        .as_ref(),
-                    non_rejected_participants,
-                )?,
-                true,
-                true,
-            )
-        };
+            "does not exist"
+        }
+    );
+
+    if !epoch_classification_exists && config.require_classification {
+        return Err(format!(
+            "--require-classification is set, but classification for epoch {} does not exist",
+            epoch
+        )
+        .into());
+    }
+
+    let (mut epoch_classification, new_classification) = if epoch_classification_exists
+        && !config.ignore_existing_classification
+    {
+        (
+            EpochClassification::load(epoch, &config.cluster_db_path())?.into_current(),
+            false,
+        )
+    } else {
+        let (validator_list, identity_to_participant): (ValidatorList, HashMap<Pubkey, Pubkey>) =
+            match config.cluster {
+                MainnetBeta => (
+                    mainnet_identity_to_participant.keys().cloned().collect(),
+                    mainnet_identity_to_participant,
+                ),
+                Testnet => {
+                    let approved_for_validator_list = validator_list::testnet_validators();
+
+                    (
+                        non_rejected_participants
+                            .iter()
+                            .map(|(_k, v)| v.testnet_identity)
+                            .filter(|pk| approved_for_validator_list.contains(pk))
+                            .collect(),
+                        testnet_identity_to_participant,
+                    )
+                }
+            };
+
+        (
+            classify(
+                &client,
+                &config,
+                epoch,
+                &validator_list,
+                &identity_to_participant,
+                previous_epoch_classification
+                    .validator_classifications
+                    .as_ref(),
+                non_rejected_participants,
+            )?,
+            true,
+        )
+    };
 
     let mut notifications = epoch_classification.notes.clone();
+
+    let mut first_time_distributing_stake = false;
 
     if let Some(ref mut validator_classifications) = epoch_classification.validator_classifications
     {
@@ -2462,90 +2497,108 @@ fn main() -> BoxResult<()> {
             })
             .collect();
 
-        // if true, we are doing a preliminary dry run
-        let pre_run_dry_run = config.require_dry_run_to_distribute_stake
-            && !DryRunStats::exists(epoch, &config.cluster_db_path());
+        // if true, we are classifying validators and saving the classifications, but _not_ distributing stake
+        let pre_run_dry_run = config.require_dry_run_to_distribute_stake && new_classification;
+        info!("pre_run_dry_run {}", pre_run_dry_run);
+        if pre_run_dry_run {
+            info!("Doing a pre-run dry run; validators will be classified, but stake will not be distributed until the next time the bot runs");
+        }
+
+        let distribute_stake = match epoch_classification.distribution_state {
+            None => {
+                first_time_distributing_stake = !config.dry_run && new_classification;
+
+                !config.dry_run
+            }
+            Some(DistributionState::Pending) => {
+                first_time_distributing_stake = !config.dry_run && !pre_run_dry_run;
+                if !pre_run_dry_run {
+                    //second time running; start distributing
+                    epoch_classification.distribution_state = Some(DistributionState::Distributing);
+                }
+
+                first_time_distributing_stake
+            }
+            Some(DistributionState::Distributing) => !config.dry_run,
+            Some(DistributionState::Cancelled) => {
+                info!("Stake not being distributed: Distributing stake cancelled");
+                false
+                // TODO: exit?
+            }
+        };
+
+        info!("Distributing stake: {}", distribute_stake);
+        info!(
+            "First time distributing stake: {}",
+            first_time_distributing_stake
+        );
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
-            stake_pool.apply(
-                &client,
-                pre_run_dry_run || config.dry_run,
-                &desired_validator_stake,
-            )?;
+            stake_pool.apply(&client, !distribute_stake, &desired_validator_stake)?;
 
-        // Send Slack notification on dry run or first live run
-        if env::var("SEND_SLACK_MESSAGES").is_ok() && (first_time || pre_run_dry_run) {
-            let mut slack_message = if pre_run_dry_run {
-                "Stake bot DRY run estimates".to_string()
+        let mut summary_messages: Vec<String> = vec![format!(
+            "summary for {:?}/{:?}\n",
+            config.cluster,
+            epoch - 1
+        )];
+
+        // Get previous epoch's stats so we can show the change
+        let mut prev_none_count = 0;
+        let mut prev_baseline_count = 0;
+        let mut prev_bonus_count = 0;
+        previous_epoch_classification
+            .validator_classifications
+            .unwrap()
+            .iter()
+            .for_each(|(_, classification)| match classification.stake_state {
+                ValidatorStakeState::None => {
+                    prev_none_count += 1;
+                }
+                ValidatorStakeState::Baseline => {
+                    prev_baseline_count += 1;
+                }
+                ValidatorStakeState::Bonus => {
+                    prev_bonus_count += 1;
+                }
+            });
+
+        summary_messages.push(format!(
+            "None: {:?} (prev epoch {:?}; {:?}% change)\n",
+            min_stake_node_count,
+            prev_none_count,
+            (100.0 * ((min_stake_node_count as f32 / prev_none_count as f32) - 1.0)).round() as i8
+        ));
+        summary_messages.push(format!(
+            "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
+            baseline_stake_node_count,
+            prev_baseline_count,
+            (100.0 * ((baseline_stake_node_count as f32 / prev_baseline_count as f32) - 1.0))
+                .round() as i8
+        ));
+        summary_messages.push(format!(
+            "Bonus: {:?} (prev epoch {:?}; {:?}% change)\n",
+            bonus_stake_node_count,
+            prev_bonus_count,
+            (100.0 * ((bonus_stake_node_count as f32 / prev_bonus_count as f32) - 1.0)).round()
+                as i8
+        ));
+        summary_messages.extend(stake_pool_notes.clone());
+
+        // Send Slack notification on pre-run dry run or first live run
+        if env::var("SEND_SLACK_MESSAGES").is_ok()
+            && (first_time_distributing_stake || pre_run_dry_run)
+        {
+            if pre_run_dry_run {
+                summary_messages.insert(0, "Stake bot DRY run estimates".to_string());
             } else {
                 // first_time = true
-                "Stake bot LIVE run".to_string()
-            };
+                summary_messages.insert(0, "Stake bot LIVE run".to_string());
+            }
 
-            slack_message += &*format!(" for {:?}/{:?}\n", config.cluster, epoch - 1);
-
-            // Get previous epoch's stats so we can show the change
-            let mut prev_none_count = 0;
-            let mut prev_baseline_count = 0;
-            let mut prev_bonus_count = 0;
-            previous_epoch_classification
-                .validator_classifications
-                .unwrap()
-                .iter()
-                .for_each(|(_, classification)| match classification.stake_state {
-                    ValidatorStakeState::None => {
-                        prev_none_count += 1;
-                    }
-                    ValidatorStakeState::Baseline => {
-                        prev_baseline_count += 1;
-                    }
-                    ValidatorStakeState::Bonus => {
-                        prev_bonus_count += 1;
-                    }
-                });
-
-            slack_message = slack_message
-                + &*format!(
-                    "None: {:?} (prev epoch {:?}; {:?}% change)\n",
-                    min_stake_node_count,
-                    prev_none_count,
-                    (100.0 * ((min_stake_node_count as f32 / prev_none_count as f32) - 1.0)).round()
-                        as i8
-                )
-                + &*format!(
-                    "Baseline: {:?} (prev epoch {:?}; {:?}% change)\n",
-                    baseline_stake_node_count,
-                    prev_baseline_count,
-                    (100.0
-                        * ((baseline_stake_node_count as f32 / prev_baseline_count as f32) - 1.0))
-                        .round() as i8
-                )
-                + &*format!(
-                    "Bonus: {:?} (prev epoch {:?}; {:?}% change)\n",
-                    bonus_stake_node_count,
-                    prev_bonus_count,
-                    (100.0 * ((bonus_stake_node_count as f32 / prev_bonus_count as f32) - 1.0))
-                        .round() as i8
-                )
-                + &*stake_pool_notes.join("\n");
-
-            if let Err(e) = send_slack_channel_message(&slack_message) {
+            if let Err(e) = send_slack_channel_message(&summary_messages.join("\n")) {
                 info!("Could not send slack message: {:?}", e);
-                info!("Slack message: {:?}", slack_message)
             };
-        }
-
-        if pre_run_dry_run {
-            let dry_run_stats = DryRunStats {
-                none_count: min_stake_node_count,
-                baseline_count: baseline_stake_node_count,
-                bonus_count: bonus_stake_node_count,
-            };
-            dry_run_stats.save(epoch, &config.cluster_db_path())?;
-
-            info!("require_dry_run_to_distribute_stake is set; this was a dry run and stake was not distributed. The next time the bot is run for this cluster, stake _will_ be distributed.");
-            return Ok(());
-        }
+        };
 
         notifications.extend(stake_pool_notes.clone());
         epoch_classification.notes.extend(stake_pool_notes);
@@ -2570,27 +2623,27 @@ fn main() -> BoxResult<()> {
 
         if let Some(ref mut stats) = epoch_classification.stats {
             stats.bonus_stake_amount = bonus_stake_amount;
-        }
+        };
     }
 
-    match (first_time, config.epoch_classification) {
-        (true, OutputMode::First) | (_, OutputMode::Yes) => {
-            EpochClassification::new(epoch_classification)
-                .save(epoch, &config.cluster_db_path())?;
-        }
-        _ => {}
+    if config.epoch_classification == OutputMode::Yes
+        || (first_time_distributing_stake && config.epoch_classification == OutputMode::First)
+        || (config.require_dry_run_to_distribute_stake
+            && config.epoch_classification == OutputMode::First)
+    {
+        EpochClassification::new(epoch_classification).save(epoch, &config.cluster_db_path())?;
     }
-    match (first_time, config.csv_output_mode) {
-        (true, OutputMode::First) | (_, OutputMode::Yes) => {
-            generate_csv(epoch, &config)?;
-        }
-        _ => {}
+
+    if config.csv_output_mode == OutputMode::Yes
+        || (first_time_distributing_stake && config.csv_output_mode == OutputMode::First)
+    {
+        generate_csv(epoch, &config)?;
     }
 
     for notification in notifications {
         info!("notification: {}", notification);
         // Only notify the user if this is the first run for this epoch
-        if first_time && post_notifications {
+        if first_time_distributing_stake {
             notifier.send(&notification);
         }
     }

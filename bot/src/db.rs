@@ -97,6 +97,22 @@ pub struct EpochClassificationV1 {
 
     // General info about the Epoch
     pub stats: Option<EpochStats>,
+
+    // Whether distribution of stake is pending, in progress, or has been cancelled.
+    // If --require-dry-run-to-distribute-stake is set, distribution_state will be set to `Pending`, and stake will be distributed the next time the bot is run.
+    //
+    // To prevent the bot from distributing stake, set distribution_state to `Cancelled`.
+    // To re-classify validators, delete the yml file or set the --ignore-existing-classification flag
+    pub distribution_state: Option<DistributionState>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum DistributionState {
+    // Stake has not been distributed yet, but next time the bot is run it will be distributed
+    Pending,
+    Distributing,
+    // if set, prevents stake from being distributed
+    Cancelled,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -237,46 +253,6 @@ impl EpochClassification {
             }
         }
         Ok(None)
-    }
-
-    pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
-    where
-        P: AsRef<Path>,
-    {
-        let serialized = serde_yaml::to_string(self)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))?;
-
-        fs::create_dir_all(&path)?;
-        let mut file = File::create(Self::file_name(epoch, path))?;
-        file.write_all(&serialized.into_bytes())?;
-
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DryRunStats {
-    pub none_count: u64,
-    pub baseline_count: u64,
-    pub bonus_count: u64,
-}
-
-/**
- Holds information about dry runs.
-*/
-impl DryRunStats {
-    fn file_name<P>(epoch: Epoch, path: P) -> PathBuf
-    where
-        P: AsRef<Path>,
-    {
-        path.as_ref().join(format!("epoch-{}-dryrun.yml", epoch))
-    }
-
-    pub fn exists<P>(epoch: Epoch, path: P) -> bool
-    where
-        P: AsRef<Path>,
-    {
-        Path::new(&Self::file_name(epoch, path)).exists()
     }
 
     pub fn save<P>(&self, epoch: Epoch, path: P) -> Result<(), io::Error>
