@@ -1,3 +1,4 @@
+use log::info;
 use solana_sdk::pubkey::Pubkey;
 use {
     crate::{generic_stake_pool::*, rpc_client_utils::MultiClient},
@@ -17,7 +18,7 @@ impl GenericStakePool for NoopStakePool {
     fn apply(
         &mut self,
         _client: &MultiClient,
-        _dry_run: bool,
+        dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
     ) -> Result<
         (
@@ -38,7 +39,12 @@ impl GenericStakePool for NoopStakePool {
             })
             .collect();
 
-        let notes = vec!["This is the noop stake pool. All number are make-believe.".to_string()];
+        info!("NoopStakePool run with dry_run={}", dry_run);
+
+        let notes = vec![
+            "This is the noop stake pool. All number are make-believe, and stake never distributed"
+                .to_string(),
+        ];
 
         Ok((notes, validator_stake_actions, HashSet::new(), 12_345))
     }

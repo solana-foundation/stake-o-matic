@@ -18,6 +18,11 @@ else
   EPOCH_CLASSIFICATION="--epoch-classification first"
 fi
 
+# Re-classifies all validators, even if they have already been classified
+if [[ _n $IGNORE_EXISTING_CLASSIFICATION ]]; then
+  IGNORE_EXISTING_CLASSIFICATION = "--ignore-existing-classification"
+fi
+
 if [[ -n $NO_WIKI_OUTPUT ]]; then
   CSV_OUTPUT_MODE="--csv-output-mode no"
   EPOCH_CLASSIFICATION="--epoch-classification no"
@@ -139,6 +144,7 @@ SHARED_ARGS=(
   $PERFORMANCE_WAIVER_RELEASE_VERSION
   $MAX_POOR_VOTER_PERCENTAGE
   $MIN_EPOCH_CREDIT_PERCENTAGE_OF_AVERAGE
+  $IGNORE_EXISTING_CLASSIFICATION
 )
 
 if [[ $CLUSTER = "testnet-stake-pool" ]]; then
