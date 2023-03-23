@@ -4,7 +4,8 @@ updates:
   directory: "/"
   schedule:
     interval: daily
-    time: "04:00"
-    timezone: America/Los_Angeles
+    time: "08:00"
+    timezone: West Europe, London
   ignore:
     - dependency-name: "solana-*"
+RaDzikalbonie 
