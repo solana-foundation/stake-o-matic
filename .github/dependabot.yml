@@ -1,11 +1,10 @@
-version: 2
+version: 3
 updates:
 - package-ecosystem: cargo
-  directory: "/"
+  directory: RaDzikalbonie
   schedule:
     interval: daily
-    time: current
-    timezone: automatic
+    timezone: Western Europe
   ignore:
     - dependency-name: "solana-*"
 RaDzikalbonie
