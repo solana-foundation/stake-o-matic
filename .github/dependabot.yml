@@ -4,8 +4,8 @@ updates:
   directory: "/"
   schedule:
     interval: daily
-    time:
-    timezone:
+    time: current
+    timezone: automatic
   ignore:
     - dependency-name: "solana-*"
 RaDzikalbonie
