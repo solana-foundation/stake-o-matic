@@ -5,7 +5,7 @@ updates:
   schedule:
     interval: daily
     time:
-    timezone: West Europe, London
+    timezone:
   ignore:
     - dependency-name: "solana-*"
 RaDzikalbonie
