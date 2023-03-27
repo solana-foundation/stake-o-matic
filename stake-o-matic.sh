@@ -19,8 +19,8 @@ else
 fi
 
 # Re-classifies all validators, even if they have already been classified
-if [[ _n $IGNORE_EXISTING_CLASSIFICATION ]]; then
-  IGNORE_EXISTING_CLASSIFICATION = "--ignore-existing-classification"
+if [[ -n $IGNORE_EXISTING_CLASSIFICATION ]]; then
+  IGNORE_EXISTING_CLASSIFICATION="--ignore-existing-classification"
 fi
 
 if [[ -n $NO_WIKI_OUTPUT ]]; then
