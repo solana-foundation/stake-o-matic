@@ -919,11 +919,11 @@ mod test {
         ));
         let (test_validator, authorized_staker) = test_validator_genesis.start();
 
-        let mut config = Config::default_for_test();
-        config.websocket_url = test_validator.rpc_pubsub_url();
+        let config = Config::default_for_test();
+        let websocket_url = test_validator.rpc_pubsub_url();
         let rpc_client = test_validator.get_rpc_client();
         let rpc_client = Arc::new(rpc_client);
-        let tpu_client = new_tpu_client_with_retry(&rpc_client, &config.websocket_url).unwrap();
+        let tpu_client = new_tpu_client_with_retry(&rpc_client, &websocket_url).unwrap();
         let client = MultiClient::new(rpc_client, tpu_client, &config);
 
         let authorized_staker_address = authorized_staker.pubkey();
