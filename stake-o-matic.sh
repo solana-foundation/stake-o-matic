@@ -7,7 +7,8 @@ set -ex
 DIR="$(dirname "$0")"
 
 # Convert space-delimited string into array
-IFS=" " read -r -a URL <<< "$URL"
+IFS=" " read -r -a MAINNET_BETA_JSON_RPC_URL <<< "$MAINNET_BETA_JSON_RPC_URL"
+IFS=" " read -r -a TESTNET_JSON_RPC_URL <<< "$TESTNET_JSON_RPC_URL"
 
 "$DIR"/fetch-release.sh "$STAKE_O_MATIC_RELEASE"
 
@@ -72,8 +73,6 @@ fi
 
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
-  --url ${URL[@]:?}
-  --participant-url ${PARTICIPANT_URL:?}
   --cluster testnet
   --quality-block-producer-percentage 30
   --max-infrastructure-concentration 25
@@ -87,8 +86,6 @@ TESTNET_ARGS=(
 
 # shellcheck disable=SC2206
 MAINNET_BETA_ARGS=(
-  --url ${URL[@]:?}
-  --participant-url ${URL:?}
   --cluster mainnet-beta
   --quality-block-producer-percentage 30
   --max-active-stake 3000000
@@ -127,6 +124,8 @@ STAKE_POOL_ARGS=(
 
 # shellcheck disable=SC2206
 SHARED_ARGS=(
+  --mainnet-beta-json-rpc-url ${MAINNET_BETA_JSON_RPC_URL[@]:?}
+  --testnet-json-rpc-url ${TESTNET_JSON_RPC_URL[@]:?}
   $MAX_POOR_BLOCK_PRODUCER_PERCENTAGE
   $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE
   $BLOCKLIST

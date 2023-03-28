@@ -6,6 +6,7 @@ use crate::slack_utils::send_slack_channel_message;
 use crate::stake_pool_v0::MIN_STAKE_ACCOUNT_BALANCE;
 use crate::validators_app::CommissionChangeIndexHistoryEntry;
 use crate::Cluster::{MainnetBeta, Testnet};
+use solana_client::tpu_client::TpuClient;
 use std::env;
 use {
     crate::{db::*, generic_stake_pool::*, rpc_client_utils::*},
@@ -164,9 +165,6 @@ impl std::fmt::Display for Cluster {
 
 #[derive(Debug, Serialize)]
 pub struct Config {
-    json_rpc_url: String,
-    websocket_url: String,
-    participant_json_rpc_url: String,
     cluster: Cluster,
     db_path: PathBuf,
     db_suffix: String,
@@ -275,12 +273,7 @@ impl Config {
     #[cfg(test)]
     pub fn default_for_test() -> Self {
         Self {
-            json_rpc_url: DEFAULT_MAINNET_BETA_JSON_RPC_URL.to_string(),
-            websocket_url: solana_cli_config::Config::compute_websocket_url(
-                DEFAULT_MAINNET_BETA_JSON_RPC_URL,
-            ),
-            participant_json_rpc_url: DEFAULT_MAINNET_BETA_JSON_RPC_URL.to_string(),
-            cluster: Cluster::MainnetBeta,
+            cluster: MainnetBeta,
             db_path: PathBuf::default(),
             db_suffix: "".to_string(),
             csv_output_mode: OutputMode::No,
@@ -347,7 +340,14 @@ fn app_version() -> String {
     })
 }
 
-fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
+struct GetConfigResult {
+    config: Config,
+    mainnet_beta_multi_client: MultiClient,
+    testnet_multi_client: MultiClient,
+    stake_pool: Box<dyn GenericStakePool>,
+}
+
+fn get_config() -> BoxResult<GetConfigResult> {
     let default_confirmed_block_cache_path = default_confirmed_block_cache_path()
         .to_str()
         .unwrap()
@@ -361,22 +361,22 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         .setting(AppSettings::VersionlessSubcommands)
         .setting(AppSettings::InferSubcommands)
         .arg(
-            Arg::with_name("json_rpc_url")
-                .long("url")
+            Arg::with_name("mainnet_beta_json_rpc_url")
+                .long("mainnet-beta-json-rpc-url")
                 .value_name("URL")
                 .takes_value(true)
                 .multiple(true)
                 .validator(is_url)
-                .help("JSON RPC URLs for the cluster. Bot will use first URL that works")
+                .help("Mainnet Beta JSON RPC URLs for the cluster. Bot will use first URL that works")
         )
         .arg(
-            Arg::with_name("participant_json_rpc_url")
-                .long("participant-url")
+            Arg::with_name("testnet_json_rpc_url")
+                .long("testnet-json-rpc-url")
                 .value_name("URL")
                 .takes_value(true)
+                .multiple(true)
                 .validator(is_url)
-                .default_value(DEFAULT_MAINNET_BETA_JSON_RPC_URL)
-                .help("JSON RPC URL for the participant cluster, typically a mainnet URL")
+                .help("Testnet JSON RPC URLs for the cluster. Bot will use first URL that works")
         )
         .arg(
             Arg::with_name("cluster")
@@ -868,62 +868,9 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
     let require_dry_run_to_distribute_stake =
         matches.is_present("require_dry_run_to_distribute_stake");
 
-    let default_json_rpc_url = match cluster {
-        Cluster::MainnetBeta => DEFAULT_MAINNET_BETA_JSON_RPC_URL,
-        Cluster::Testnet => DEFAULT_TESTNET_JSON_RPC_URL,
-    }
-    .to_string();
-
-    // Create a list of RPC URLs to try. The first URL that returns a successful "getHealth" response
-    // will be used for all requests
-    let json_rpc_urls_to_try: Vec<String> = match values_t!(matches, "json_rpc_url", String) {
-        Ok(argument_urls) => {
-            let mut urls = argument_urls;
-            urls.push(default_json_rpc_url);
-
-            urls
-        }
-        _ => {
-            vec![default_json_rpc_url]
-        }
-    };
-
-    let (rpc_client, json_rpc_url) = json_rpc_urls_to_try
-        .iter()
-        .map(|url| {
-            let rpc_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
-                url.clone(),
-                Duration::from_secs(180),
-                CommitmentConfig::confirmed(),
-            ));
-            (rpc_client, url.clone())
-        })
-        .find(|(rpc_client, url)| {
-            info!("Checking health of {}", url);
-            matches!(check_rpc_health(rpc_client), Ok(_))
-        })
-        .unwrap_or_else(|| {
-            error!("All RPC servers are unhealthy. Exiting.");
-            process::exit(1);
-        });
-
-    info!("using RPC URL: {}", json_rpc_url);
-
-    let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
-    let tpu_client = new_tpu_client_with_retry(&rpc_client, &websocket_url).unwrap_or_else(|e| {
-        error!("Unable to connect to TPU at {websocket_url}: {e:?}");
-        process::exit(1);
-    });
-    let participant_json_rpc_url = matches
-        .value_of("participant_json_rpc_url")
-        .unwrap()
-        .to_string();
     let use_rpc_tx_submission = matches.is_present("use_rpc_tx_submission");
 
     let mut config = Config {
-        json_rpc_url,
-        websocket_url,
-        participant_json_rpc_url,
         cluster,
         db_path,
         db_suffix,
@@ -959,10 +906,30 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         use_rpc_tx_submission,
     };
 
+    let mut mainnet_urls_to_try =
+        values_t!(matches, "mainnet_beta_json_rpc_url", String).unwrap_or_default();
+    mainnet_urls_to_try.push(DEFAULT_MAINNET_BETA_JSON_RPC_URL.parse().unwrap());
+    let (mainnet_beta_rpc_client, mainnet_beta_tpu_client) =
+        try_json_rpc_urls(mainnet_urls_to_try)?;
+    let mainnet_beta_multi_client =
+        MultiClient::new(mainnet_beta_rpc_client, mainnet_beta_tpu_client, &config);
+
     info!(
-        "config.max_poor_voter_percentage: {}",
-        config.max_poor_voter_percentage
+        "Using Mainnet Beta RPC URL {}",
+        mainnet_beta_multi_client.url()
     );
+
+    let mut testnet_urls_to_try =
+        values_t!(matches, "testnet_json_rpc_url", String).unwrap_or_default();
+    testnet_urls_to_try.push(DEFAULT_TESTNET_JSON_RPC_URL.parse().unwrap());
+    let (testnet_rpc_client, testnet_tpu_client) = try_json_rpc_urls(testnet_urls_to_try)?;
+    let testnet_multi_client = MultiClient::new(testnet_rpc_client, testnet_tpu_client, &config);
+    info!("Using Testnet RPC URL {}", testnet_multi_client.url());
+
+    let cluster_multi_client = match cluster {
+        Testnet => &testnet_multi_client,
+        MainnetBeta => &mainnet_beta_multi_client,
+    };
 
     let stake_pool: Box<dyn GenericStakePool> = match matches.subcommand() {
         ("stake-pool-v0", Some(matches)) => {
@@ -981,7 +948,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
             config.baseline_stake_amount_lamports = Some(baseline_stake_amount);
 
             Box::new(stake_pool_v0::new(
-                &rpc_client,
+                cluster_multi_client,
                 authorized_staker,
                 baseline_stake_amount,
                 reserve_stake_address,
@@ -1004,7 +971,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
             config.baseline_stake_amount_lamports = Some(baseline_stake_amount);
 
             Box::new(stake_pool::new(
-                &rpc_client,
+                cluster_multi_client,
                 authorized_staker,
                 pool_address,
                 baseline_stake_amount,
@@ -1015,8 +982,42 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
         _ => unreachable!(),
     };
 
-    let client = MultiClient::new(rpc_client, tpu_client, &config);
-    Ok((config, client, stake_pool))
+    Ok(GetConfigResult {
+        config,
+        mainnet_beta_multi_client,
+        testnet_multi_client,
+        stake_pool,
+    })
+}
+
+/// Takes a list of JSON RPC Urls, and returns an RpcClient and TpuClient for the first server that is health
+fn try_json_rpc_urls(urls_to_try: Vec<String>) -> BoxResult<(Arc<RpcClient>, TpuClient)> {
+    let (rpc_client, json_rpc_url) = urls_to_try
+        .iter()
+        .map(|url| {
+            let rpc_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
+                url.clone(),
+                Duration::from_secs(180),
+                CommitmentConfig::confirmed(),
+            ));
+            (rpc_client, url.clone())
+        })
+        .find(|(rpc_client, url)| {
+            info!("Checking health of {}", url);
+            matches!(check_rpc_health(rpc_client), Ok(_))
+        })
+        .unwrap_or_else(|| {
+            error!("All RPC servers are unhealthy. Exiting.");
+            process::exit(1);
+        });
+
+    let websocket_url = solana_cli_config::Config::compute_websocket_url(&json_rpc_url);
+    let tpu_client = new_tpu_client_with_retry(&rpc_client, &websocket_url).unwrap_or_else(|e| {
+        error!("Unable to connect to TPU at {websocket_url}: {e:?}");
+        process::exit(1);
+    });
+
+    Ok((rpc_client, tpu_client))
 }
 
 type ClassifyResult = (
@@ -1331,8 +1332,10 @@ fn get_testnet_participation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn classify(
     rpc_client: &RpcClient,
+    testnet_rpc_client: &RpcClient,
     config: &Config,
     epoch: Epoch,
     validator_list: &ValidatorList,
@@ -1342,10 +1345,6 @@ fn classify(
 ) -> BoxResult<EpochClassificationV1> {
     let last_epoch = epoch - 1;
 
-    let testnet_rpc_client = RpcClient::new_with_timeout(
-        DEFAULT_TESTNET_JSON_RPC_URL.to_string(), // TODO: should be configurable
-        Duration::from_secs(180),
-    );
     let testnet_epoch = testnet_rpc_client.get_epoch_info()?.epoch;
     info!(
         "Using testnet epoch {:?} as most recent epoch for testnet metrics",
@@ -2290,13 +2289,15 @@ fn warn_validator_for_infrastructure_concentration(
 fn main() -> BoxResult<()> {
     solana_logger::setup_with_default("solana=info");
 
-    let (config, client, mut stake_pool) = get_config()?;
+    let GetConfigResult {
+        config,
+        mainnet_beta_multi_client,
+        testnet_multi_client,
+        mut stake_pool,
+    } = get_config()?;
 
     info!("Loading participants...");
-    let all_participants = get_participants_with_state(
-        &RpcClient::new(config.participant_json_rpc_url.clone()),
-        None,
-    )?;
+    let all_participants = get_participants_with_state(&mainnet_beta_multi_client, None)?;
 
     let (approved_participants, non_rejected_participants) = all_participants.iter().fold(
         (HashMap::new(), HashMap::new()),
@@ -2368,7 +2369,12 @@ fn main() -> BoxResult<()> {
         Notifier::default()
     };
 
-    let epoch = client.get_epoch_info()?.epoch;
+    let cluster_multi_client = match config.cluster {
+        Testnet => &testnet_multi_client,
+        MainnetBeta => &mainnet_beta_multi_client,
+    };
+
+    let epoch = cluster_multi_client.get_epoch_info()?.epoch;
     info!("Current epoch: {:?}", epoch);
     if epoch == 0 {
         return Ok(());
@@ -2396,7 +2402,8 @@ fn main() -> BoxResult<()> {
             }
             (
                 classify(
-                    &client,
+                    cluster_multi_client,
+                    &testnet_multi_client,
                     &config,
                     epoch,
                     &validator_list,
@@ -2474,7 +2481,7 @@ fn main() -> BoxResult<()> {
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
             stake_pool.apply(
-                &client,
+                cluster_multi_client,
                 pre_run_dry_run || config.dry_run,
                 &desired_validator_stake,
             )?;
