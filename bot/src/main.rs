@@ -907,7 +907,7 @@ fn get_config() -> BoxResult<(Config, MultiClient, Box<dyn GenericStakePool>)> {
             let rpc_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
                 url.clone(),
                 Duration::from_secs(180),
-                CommitmentConfig::confirmed(),
+                CommitmentConfig::finalized(),
             ));
             (rpc_client, url.clone())
         })
