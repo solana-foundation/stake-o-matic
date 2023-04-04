@@ -67,7 +67,7 @@ impl MultiClient {
             let _ = self.rpc.send_transaction_with_config(
                 transaction,
                 RpcSendTransactionConfig {
-                    skip_preflight: true,
+                    skip_preflight: false,
                     ..RpcSendTransactionConfig::default()
                 },
             );
