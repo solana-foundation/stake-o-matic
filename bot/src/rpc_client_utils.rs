@@ -64,13 +64,18 @@ impl MultiClient {
         if !self.use_rpc_tx_submission && self.tpu.send_transaction(transaction) {
             "TPU"
         } else {
-            let _ = self.rpc.send_transaction_with_config(
+            let r = self.rpc.send_transaction_with_config(
                 transaction,
                 RpcSendTransactionConfig {
                     skip_preflight: false,
                     ..RpcSendTransactionConfig::default()
                 },
             );
+
+            if let Err(e) = r {
+                warn!("Error sending transaction: {:?}", e);
+            }
+
             "RPC"
         }
     }
