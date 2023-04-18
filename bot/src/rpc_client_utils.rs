@@ -44,6 +44,7 @@ pub struct MultiClient {
     rpc: Arc<RpcClient>,
     tpu: TpuClient,
     use_rpc_tx_submission: bool,
+    skip_preflight: bool,
 }
 impl Deref for MultiClient {
     type Target = RpcClient;
@@ -57,6 +58,7 @@ impl MultiClient {
             rpc,
             tpu,
             use_rpc_tx_submission: config.use_rpc_tx_submission,
+            skip_preflight: !config.use_preflight,
         }
     }
 
@@ -64,13 +66,18 @@ impl MultiClient {
         if !self.use_rpc_tx_submission && self.tpu.send_transaction(transaction) {
             "TPU"
         } else {
-            let _ = self.rpc.send_transaction_with_config(
+            match self.rpc.send_transaction_with_config(
                 transaction,
                 RpcSendTransactionConfig {
-                    skip_preflight: true,
+                    skip_preflight: self.skip_preflight,
                     ..RpcSendTransactionConfig::default()
                 },
-            );
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    warn!("Error sending transaction: {:?}", error);
+                }
+            };
             "RPC"
         }
     }
