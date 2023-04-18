@@ -268,6 +268,7 @@ pub struct Config {
     require_dry_run_to_distribute_stake: bool,
     performance_waiver_release_version: Option<semver::Version>,
     use_rpc_tx_submission: bool,
+    use_preflight: bool,
 }
 
 const DEFAULT_MAINNET_BETA_JSON_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -312,6 +313,7 @@ impl Config {
             require_dry_run_to_distribute_stake: false,
             performance_waiver_release_version: None,
             use_rpc_tx_submission: false,
+            use_preflight: false,
         }
     }
 
@@ -674,8 +676,8 @@ fn get_config() -> BoxResult<GetConfigResult> {
         .arg(
             Arg::with_name("use_rpc_tx_submission")
                 .long("use-rpc-tx-submission")
-                .takes_value(false)
-                .help("Submit transactions via RPC client instead of TPU client")
+                .takes_value(true)
+                .help("Submit transactions via RPC client instead of TPU client. If \"preflight\" does preflight")
         )
         .subcommand(
             SubCommand::with_name("stake-pool-v0").about("Use the stake-pool v0 solution")
@@ -881,7 +883,10 @@ fn get_config() -> BoxResult<GetConfigResult> {
     let require_dry_run_to_distribute_stake =
         matches.is_present("require_dry_run_to_distribute_stake");
 
-    let use_rpc_tx_submission = matches.is_present("use_rpc_tx_submission");
+    let (use_rpc_tx_submission, use_preflight) = match matches.value_of("use_rpc_tx_submission") {
+        None => (false, false),
+        Some(value) => (true, value == "preflight"),
+    };
 
     let mut config = Config {
         cluster,
@@ -918,6 +923,7 @@ fn get_config() -> BoxResult<GetConfigResult> {
         require_dry_run_to_distribute_stake,
         performance_waiver_release_version,
         use_rpc_tx_submission,
+        use_preflight,
     };
 
     let mut mainnet_urls_to_try =

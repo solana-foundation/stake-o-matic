@@ -73,7 +73,7 @@ fi
 
 : "${USE_RPC_TX_SUBMISSION:=false}"
 if $USE_RPC_TX_SUBMISSION; then
-  MAYBE_USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission"
+  MAYBE_USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission $USE_RPC_TX_SUBMISSION"
 fi
 
 # shellcheck disable=SC2206
