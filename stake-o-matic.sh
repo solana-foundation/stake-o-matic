@@ -71,9 +71,8 @@ if [[ -n $PERFORMANCE_WAIVER_RELEASE_VERSION ]]; then
   PERFORMANCE_WAIVER_RELEASE_VERSION="--performance-waiver-release-version $PERFORMANCE_WAIVER_RELEASE_VERSION"
 fi
 
-: "${USE_RPC_TX_SUBMISSION:=false}"
-if $USE_RPC_TX_SUBMISSION; then
-  MAYBE_USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission $USE_RPC_TX_SUBMISSION"
+if [[ -n $USE_RPC_TX_SUBMISSION ]]; then
+  USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission $USE_RPC_TX_SUBMISSION"
 fi
 
 # shellcheck disable=SC2206
@@ -85,7 +84,6 @@ TESTNET_ARGS=(
   --max-old-release-version-percentage 20
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
-  $MAYBE_USE_RPC_TX_SUBMISSION
 #  --require-performance-metrics-reporting
 )
 
@@ -105,7 +103,6 @@ MAINNET_BETA_ARGS=(
   --min-self-stake-exceptions-key ${SELF_STAKE_EXCEPTIONS_KEY:?}
   --performance-db-url ${PERFORMANCE_DB_URL:?}
   --performance-db-token ${PERFORMANCE_DB_TOKEN:?}
-  $MAYBE_USE_RPC_TX_SUBMISSION
 #  --require-performance-metrics-reporting
 )
 
@@ -131,6 +128,7 @@ STAKE_POOL_ARGS=(
 SHARED_ARGS=(
   --mainnet-beta-json-rpc-url ${MAINNET_BETA_JSON_RPC_URL[@]:?}
   --testnet-json-rpc-url ${TESTNET_JSON_RPC_URL[@]:?}
+  $USE_RPC_TX_SUBMISSION
   $MAX_POOR_BLOCK_PRODUCER_PERCENTAGE
   $REQUIRE_DRY_RUN_TO_DISTRIBUTE_STAKE
   $BLOCKLIST
