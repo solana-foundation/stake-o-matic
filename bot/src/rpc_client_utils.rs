@@ -70,6 +70,7 @@ impl MultiClient {
                 transaction,
                 RpcSendTransactionConfig {
                     skip_preflight: self.skip_preflight,
+                    preflight_commitment: Some(self.rpc.commitment().commitment),
                     ..RpcSendTransactionConfig::default()
                 },
             ) {
