@@ -808,16 +808,20 @@ where
         Sol(reserve_stake_balance)
     );
 
-    let ok = if dry_run {
-        true
+    let num_errors = if dry_run {
+        0
     } else {
-        !send_and_confirm_transactions_with_spinner(client, false, transactions, authorized_staker)?
+        send_and_confirm_transactions_with_spinner(client, false, transactions, authorized_staker)?
             .iter()
-            .any(|err| err.is_some())
+            .filter(|err| err.is_some())
+            .count()
     };
 
-    if !ok {
-        Err("One or more transactions failed to execute".into())
+    if num_errors > 0 {
+        error!("{:?} transactions failed to execute.", num_errors);
+        // Err("One or more transactions failed to execute".into())
+        // for now, ignore errors while distributing stake. The next time the bot runs it should retry all failed transactions.
+        Ok((activating_total, deactivating_total))
     } else {
         Ok((activating_total, deactivating_total))
     }
