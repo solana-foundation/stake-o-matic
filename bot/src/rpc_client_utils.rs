@@ -70,6 +70,7 @@ impl MultiClient {
                 transaction,
                 RpcSendTransactionConfig {
                     skip_preflight: self.skip_preflight,
+                    preflight_commitment: Some(self.rpc.commitment().commitment),
                     ..RpcSendTransactionConfig::default()
                 },
             ) {
@@ -158,6 +159,7 @@ pub fn send_and_confirm_transactions_with_spinner(
     while expired_blockhash_retries > 0 {
         let blockhash = client.get_latest_blockhash()?;
         let last_valid_block_height = client.get_block_height()?;
+        info!("Sending transactions with blockhash {:?}", blockhash);
 
         let mut pending_transactions = HashMap::new();
         for (i, mut transaction) in transactions {
@@ -179,7 +181,7 @@ pub fn send_and_confirm_transactions_with_spinner(
                     };
                     set_message(
                         confirmed_transactions,
-                        None, //block_height,
+                        None, // Some(block_height),
                         last_valid_block_height,
                         &format!(
                             "Sending {}/{} transactions (via {})",
@@ -193,12 +195,15 @@ pub fn send_and_confirm_transactions_with_spinner(
                 last_resend = Instant::now();
             }
 
-            // Wait for the next block before checking for transaction statuses
+            // Wait for the next block before resending transactions
             set_message(
                 confirmed_transactions,
                 Some(block_height),
                 last_valid_block_height,
-                &format!("Waiting for next block, {} pending...", num_transactions),
+                &format!(
+                    "Waiting for next block, {} transactions pending...",
+                    num_transactions
+                ),
             );
 
             let mut new_block_height = block_height;
@@ -210,7 +215,14 @@ pub fn send_and_confirm_transactions_with_spinner(
             if dry_run {
                 return Ok(transaction_errors);
             }
+        }
 
+        info!("Verifying transactions");
+        let mut verify_tries = 0;
+        // loop through pending transaction ten times, or until no found transactions are in the "Processed" state
+        loop {
+            let mut some_pending = false;
+            verify_tries += 1;
             // Collect statuses for the transactions, drop those that are confirmed
             let pending_signatures = pending_transactions.keys().cloned().collect::<Vec<_>>();
             for pending_signatures_chunk in
@@ -233,7 +245,15 @@ pub fn send_and_confirm_transactions_with_spinner(
                                     }
                                     transaction_errors[i] = status.err;
                                 }
+                            } else {
+                                some_pending = true;
+                                debug!(
+                                    "Transaction {:?} did not satisfy commitment. Status: {:?}",
+                                    signature, status
+                                );
                             }
+                        } else {
+                            debug!("Transaction status not found for {:?}", signature);
                         }
                     }
                 }
@@ -248,6 +268,11 @@ pub fn send_and_confirm_transactions_with_spinner(
             if pending_transactions.is_empty() {
                 return Ok(transaction_errors);
             }
+
+            if !some_pending && verify_tries > 10 {
+                break;
+            }
+            sleep(Duration::from_millis(500));
         }
 
         transactions = pending_transactions.into_iter().map(|(_k, v)| v).collect();
