@@ -158,6 +158,7 @@ pub fn send_and_confirm_transactions_with_spinner(
     while expired_blockhash_retries > 0 {
         let blockhash = client.get_latest_blockhash()?;
         let last_valid_block_height = client.get_block_height()?;
+        info!("Sending transactions with blockhash {:?}", blockhash);
 
         let mut pending_transactions = HashMap::new();
         for (i, mut transaction) in transactions {
@@ -198,7 +199,10 @@ pub fn send_and_confirm_transactions_with_spinner(
                 confirmed_transactions,
                 Some(block_height),
                 last_valid_block_height,
-                &format!("Waiting for next block, {} pending...", num_transactions),
+                &format!(
+                    "Waiting for next block, {} transactions pending...",
+                    num_transactions
+                ),
             );
 
             let mut new_block_height = block_height;
@@ -233,7 +237,14 @@ pub fn send_and_confirm_transactions_with_spinner(
                                     }
                                     transaction_errors[i] = status.err;
                                 }
+                            } else {
+                                info!(
+                                    "Transaction {:?} did not satisfy commitment. Status: {:?}",
+                                    signature, status
+                                );
                             }
+                        } else {
+                            info!("Transaction status not found for {:?}", signature);
                         }
                     }
                 }
