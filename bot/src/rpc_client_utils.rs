@@ -220,45 +220,54 @@ pub fn send_and_confirm_transactions_with_spinner(
                 return Ok(transaction_errors);
             }
 
-            // Collect statuses for the transactions, drop those that are confirmed
-            let pending_signatures = pending_transactions.keys().cloned().collect::<Vec<_>>();
-            for pending_signatures_chunk in
-                pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS)
-            {
-                if let Ok(result) = client.get_signature_statuses(pending_signatures_chunk) {
-                    let statuses = result.value;
-                    for (signature, status) in
-                        pending_signatures_chunk.iter().zip(statuses.into_iter())
-                    {
-                        if let Some(status) = status {
-                            if status.satisfies_commitment(client.commitment()) {
-                                if let Some((i, _)) = pending_transactions.remove(signature) {
-                                    confirmed_transactions += 1;
-                                    if status.err.is_some() {
-                                        progress_bar.println(format!(
-                                            "Failed transaction {}: {:?}",
-                                            signature, status
-                                        ));
+            // loop through pending transaction until all are in the "confirmed" state
+            loop {
+                let mut some_pending = false;
+                // Collect statuses for the transactions, drop those that are confirmed
+                let pending_signatures = pending_transactions.keys().cloned().collect::<Vec<_>>();
+                for pending_signatures_chunk in
+                    pending_signatures.chunks(MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS)
+                {
+                    if let Ok(result) = client.get_signature_statuses(pending_signatures_chunk) {
+                        let statuses = result.value;
+                        for (signature, status) in
+                            pending_signatures_chunk.iter().zip(statuses.into_iter())
+                        {
+                            if let Some(status) = status {
+                                if status.satisfies_commitment(client.commitment()) {
+                                    if let Some((i, _)) = pending_transactions.remove(signature) {
+                                        confirmed_transactions += 1;
+                                        if status.err.is_some() {
+                                            progress_bar.println(format!(
+                                                "Failed transaction {}: {:?}",
+                                                signature, status
+                                            ));
+                                        }
+                                        transaction_errors[i] = status.err;
                                     }
-                                    transaction_errors[i] = status.err;
+                                } else {
+                                    some_pending = true;
+                                    info!(
+                                        "Transaction {:?} did not satisfy commitment. Status: {:?}",
+                                        signature, status
+                                    );
                                 }
                             } else {
-                                info!(
-                                    "Transaction {:?} did not satisfy commitment. Status: {:?}",
-                                    signature, status
-                                );
+                                info!("Transaction status not found for {:?}", signature);
                             }
-                        } else {
-                            info!("Transaction status not found for {:?}", signature);
                         }
                     }
+                    set_message(
+                        confirmed_transactions,
+                        Some(block_height),
+                        last_valid_block_height,
+                        "Checking transaction status...",
+                    );
                 }
-                set_message(
-                    confirmed_transactions,
-                    Some(block_height),
-                    last_valid_block_height,
-                    "Checking transaction status...",
-                );
+
+                if some_pending {
+                    break;
+                }
             }
 
             if pending_transactions.is_empty() {
