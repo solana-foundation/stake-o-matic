@@ -196,23 +196,18 @@ pub fn send_and_confirm_transactions_with_spinner(
             }
 
             // Wait for the next block before checking for transaction statuses
-            // set_message(
-            //     confirmed_transactions,
-            //     Some(block_height),
-            //     last_valid_block_height,
-            //     &format!(
-            //         "Waiting for next block, {} transactions pending...",
-            //         num_transactions
-            //     ),
-            // );
-
-            info!(
-                "Waiting for next block, {} transactions pending...",
-                num_transactions
+            set_message(
+                confirmed_transactions,
+                Some(block_height),
+                last_valid_block_height,
+                &format!(
+                    "Waiting for next block, {} transactions pending...",
+                    num_transactions
+                ),
             );
 
             let mut new_block_height = block_height;
-            while block_height > new_block_height + 150 {
+            while block_height == new_block_height {
                 sleep(Duration::from_millis(500));
                 new_block_height = client.get_block_height()?;
             }
@@ -221,6 +216,8 @@ pub fn send_and_confirm_transactions_with_spinner(
                 return Ok(transaction_errors);
             }
         }
+
+        info!("Verify transactions");
 
         // loop through pending transaction until all are in the "confirmed" state
         loop {
