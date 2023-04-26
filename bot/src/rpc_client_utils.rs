@@ -1,3 +1,4 @@
+use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use {
     crate::Config,
     indicatif::{ProgressBar, ProgressStyle},
@@ -219,9 +220,12 @@ pub fn send_and_confirm_transactions_with_spinner(
 
         info!("Verify transactions");
 
-        // loop through pending transaction until all are in the "confirmed" state
+        let mut verify_tries = 0;
+
+        // loop through pending transaction ten times, or until no found transactions are in the "Processed" state
         loop {
             let mut some_pending = false;
+            verify_tries += 1;
             // Collect statuses for the transactions, drop those that are confirmed
             let pending_signatures = pending_transactions.keys().cloned().collect::<Vec<_>>();
             for pending_signatures_chunk in
@@ -264,9 +268,20 @@ pub fn send_and_confirm_transactions_with_spinner(
                 );
             }
 
-            if !some_pending {
+            info!(
+                "Blockhash is valid?: {:?}",
+                client.is_blockhash_valid(
+                    &blockhash,
+                    CommitmentConfig {
+                        commitment: CommitmentLevel::Finalized
+                    }
+                )
+            );
+
+            if pending_transactions.is_empty() || (!some_pending && verify_tries > 10) {
                 break;
             }
+            sleep(Duration::from_millis(500));
         }
 
         if pending_transactions.is_empty() {
