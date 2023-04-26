@@ -1,4 +1,3 @@
-use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use {
     crate::Config,
     indicatif::{ProgressBar, ProgressStyle},
@@ -196,7 +195,7 @@ pub fn send_and_confirm_transactions_with_spinner(
                 last_resend = Instant::now();
             }
 
-            // Wait for the next block before checking for transaction statuses
+            // Wait for the next block before resending transactions
             set_message(
                 confirmed_transactions,
                 Some(block_height),
@@ -218,10 +217,8 @@ pub fn send_and_confirm_transactions_with_spinner(
             }
         }
 
-        info!("Verify transactions");
-
+        info!("Verifying transactions");
         let mut verify_tries = 0;
-
         // loop through pending transaction ten times, or until no found transactions are in the "Processed" state
         loop {
             let mut some_pending = false;
@@ -250,13 +247,13 @@ pub fn send_and_confirm_transactions_with_spinner(
                                 }
                             } else {
                                 some_pending = true;
-                                info!(
+                                debug!(
                                     "Transaction {:?} did not satisfy commitment. Status: {:?}",
                                     signature, status
                                 );
                             }
                         } else {
-                            info!("Transaction status not found for {:?}", signature);
+                            debug!("Transaction status not found for {:?}", signature);
                         }
                     }
                 }
@@ -268,24 +265,14 @@ pub fn send_and_confirm_transactions_with_spinner(
                 );
             }
 
-            info!(
-                "Blockhash is valid?: {:?}",
-                client.is_blockhash_valid(
-                    &blockhash,
-                    CommitmentConfig {
-                        commitment: CommitmentLevel::Finalized
-                    }
-                )
-            );
+            if pending_transactions.is_empty() {
+                return Ok(transaction_errors);
+            }
 
-            if pending_transactions.is_empty() || (!some_pending && verify_tries > 10) {
+            if !some_pending && verify_tries > 10 {
                 break;
             }
             sleep(Duration::from_millis(500));
-        }
-
-        if pending_transactions.is_empty() {
-            return Ok(transaction_errors);
         }
 
         transactions = pending_transactions.into_iter().map(|(_k, v)| v).collect();
