@@ -1,3 +1,4 @@
+use spl_stake_pool::find_stake_program_address;
 use {
     crate::{
         generic_stake_pool::*,
@@ -573,6 +574,22 @@ fn remove_validators_from_pool(
                             ),
                         );
                     }
+
+                    let (stake_account_address, _) = find_stake_program_address(
+                        &spl_stake_pool::id(),
+                        &vote_address,
+                        stake_pool_address,
+                    );
+                    info!(
+                        "stake_account_address is  {} from stake pool",
+                        stake_account_address
+                    );
+
+                    let stake_account = client.get_account(stake_pool_address)?;
+
+                    let stake_state =
+                        try_from_slice_unchecked::<stake::state::StakeState>(&stake_account.data)?;
+                    println!("stake_state: {:?}", stake_state);
 
                     instructions.push(
                         spl_stake_pool::instruction::remove_validator_from_pool_with_vote(
