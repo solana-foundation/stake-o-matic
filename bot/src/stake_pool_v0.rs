@@ -40,6 +40,7 @@ pub struct StakePool {
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
+    ignore_stake_distribution_errors: bool,
 }
 
 pub fn new(
@@ -48,6 +49,7 @@ pub fn new(
     baseline_stake_amount: u64,
     reserve_stake_address: Pubkey,
     min_reserve_stake_balance: u64,
+    ignore_stake_distribution_errors: bool,
 ) -> Result<StakePool, Box<dyn error::Error>> {
     if baseline_stake_amount < MIN_STAKE_CHANGE_AMOUNT {
         return Err(format!(
@@ -70,6 +72,7 @@ pub fn new(
         baseline_stake_amount,
         reserve_stake_address,
         min_reserve_stake_balance,
+        ignore_stake_distribution_errors,
     })
 }
 
@@ -275,6 +278,7 @@ impl GenericStakePool for StakePool {
             bonus_stake_amount,
             &mut validator_stake_actions,
             &mut unfunded_validators,
+            self.ignore_stake_distribution_errors,
         )?;
 
         notes.push(format!(
@@ -629,6 +633,7 @@ fn distribute_validator_stake<V>(
     bonus_stake_amount: u64,
     validator_stake_actions: &mut ValidatorStakeActions,
     unfunded_validators: &mut HashSet<Pubkey>,
+    ignore_stake_distribution_errors: bool,
 ) -> Result<(u64, u64), Box<dyn error::Error>>
 where
     V: IntoIterator<Item = ValidatorStake>,
@@ -820,7 +825,11 @@ where
             Ok(errors) => errors.iter().filter(|err| err.is_some()).count(),
             Err(e) => {
                 error!("Sending transactions failed: {:?}", e);
-                return Ok((activating_total, deactivating_total));
+                if ignore_stake_distribution_errors {
+                    return Ok((activating_total, deactivating_total));
+                } else {
+                    return Err("Some transactions failed to land".into());
+                }
             }
         }
     };
@@ -830,9 +839,12 @@ where
             "{:?} transactions failed to execute due to errors.",
             num_transaction_errors
         );
-        // Err("One or more transactions failed to execute".into())
-        // for now, ignore errors while distributing stake. The next time the bot runs it should retry all failed transactions.
-        Ok((activating_total, deactivating_total))
+        if ignore_stake_distribution_errors {
+            error!("Ignoring stake distribution errors");
+            Ok((activating_total, deactivating_total))
+        } else {
+            Err("One or more transactions failed to execute".into())
+        }
     } else {
         Ok((activating_total, deactivating_total))
     }
@@ -1006,6 +1018,7 @@ mod test {
             baseline_stake_amount,
             reserve_stake_address,
             min_reserve_stake_balance,
+            false,
         )
         .unwrap();
 

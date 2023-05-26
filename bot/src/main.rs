@@ -717,6 +717,13 @@ fn get_config() -> BoxResult<GetConfigResult> {
                         .takes_value(true)
                         .help("The baseline SOL amount to stake to validators with adequate performance")
                 )
+                .arg(
+                    Arg::with_name("ignore_stake_distribution_errors")
+                        .required(false)
+                        .takes_value(false)
+                        .help("If set, do not ")
+
+                )
         )
         .subcommand(
             SubCommand::with_name("stake-pool").about("Use a stake pool")
@@ -955,6 +962,9 @@ fn get_config() -> BoxResult<GetConfigResult> {
         ("stake-pool-v0", Some(matches)) => {
             let authorized_staker = keypair_of(matches, "authorized_staker").unwrap();
             let reserve_stake_address = pubkey_of(matches, "reserve_stake_address").unwrap();
+
+            let ignore_stake_distribution_errors =
+                matches.is_present("ignore_stake_distribution_errors");
             let min_reserve_stake_balance =
                 sol_to_lamports(value_t_or_exit!(matches, "min_reserve_stake_balance", f64));
             let baseline_stake_amount = match value_t!(matches, "baseline_stake_amount", f64) {
@@ -973,6 +983,7 @@ fn get_config() -> BoxResult<GetConfigResult> {
                 baseline_stake_amount,
                 reserve_stake_address,
                 min_reserve_stake_balance,
+                ignore_stake_distribution_errors,
             )?)
         }
         ("stake-pool", Some(matches)) => {
