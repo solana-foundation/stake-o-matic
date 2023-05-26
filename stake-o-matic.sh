@@ -75,6 +75,10 @@ if [[ -n $USE_RPC_TX_SUBMISSION ]]; then
   USE_RPC_TX_SUBMISSION="--use-rpc-tx-submission $USE_RPC_TX_SUBMISSION"
 fi
 
+if [[ -n $IGNORE_STAKE_DISTRIBUTION_ERRORS ]]; then
+  IGNORE_STAKE_DISTRIBUTION_ERRORS="--ignore-stake-distribution-errors"
+fi
+
 # shellcheck disable=SC2206
 TESTNET_ARGS=(
   --cluster testnet
@@ -109,6 +113,7 @@ MAINNET_BETA_ARGS=(
 # shellcheck disable=SC2206
 NOT_A_STAKE_POOL_ARGS=(
   stake-pool-v0
+  $IGNORE_STAKE_DISTRIBUTION_ERRORS
   --min-reserve-stake-balance ${MIN_RESERVE_STAKE_BALANCE:?}
   ${RESERVE_ACCOUNT_ADDRESS:?}
   ${STAKE_AUTHORITY_KEYPAIR:?}
