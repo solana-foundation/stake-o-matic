@@ -1,4 +1,4 @@
-use spl_stake_pool::find_stake_program_address;
+use spl_stake_pool::{find_stake_program_address, find_transient_stake_program_address};
 use {
     crate::{
         generic_stake_pool::*,
@@ -580,12 +580,22 @@ fn remove_validators_from_pool(
                         &vote_address,
                         stake_pool_address,
                     );
-                    info!(
-                        "stake_account_address is  {} from stake pool",
-                        stake_account_address
+                    info!("stake_account_address is {}", stake_account_address);
+                    let (transient_stake_account, _) = find_transient_stake_program_address(
+                        &spl_stake_pool::id(),
+                        &vote_address,
+                        stake_pool_address,
+                        validator_list_entry.transient_seed_suffix_start,
                     );
+                    info!("transient_stake_account is {}", transient_stake_account);
 
                     let stake_account = client.get_account(stake_pool_address)?;
+                    println!("stake_account info: {:?}", stake_account);
+                    let transient_stake_account = client.get_account(stake_pool_address)?;
+                    println!(
+                        "transient_stake_account info: {:?}",
+                        transient_stake_account
+                    );
 
                     let stake_state =
                         try_from_slice_unchecked::<stake::state::StakeState>(&stake_account.data)?;
