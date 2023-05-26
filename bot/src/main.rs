@@ -719,9 +719,10 @@ fn get_config() -> BoxResult<GetConfigResult> {
                 )
                 .arg(
                     Arg::with_name("ignore_stake_distribution_errors")
+                        .long("ignore-stake-distribution-errors")
                         .required(false)
                         .takes_value(false)
-                        .help("If set, do not ")
+                        .help("If set, do not fail when transactions fail while distributing stake")
 
                 )
         )
