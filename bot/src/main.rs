@@ -1017,7 +1017,7 @@ fn try_json_rpc_urls(urls_to_try: Vec<String>) -> BoxResult<(Arc<RpcClient>, Tpu
         .map(|url| {
             let rpc_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
                 url.clone(),
-                Duration::from_secs(180),
+                Duration::from_secs(360),
                 CommitmentConfig::confirmed(),
             ));
             (rpc_client, url.clone())
