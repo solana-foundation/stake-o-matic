@@ -545,14 +545,17 @@ fn remove_validators_from_pool(
     let mut transactions = vec![];
     let stake_rent_exemption = get_minimum_stake_balance_for_rent_exemption(client)?;
 
-    for vote_address in remove_vote_addresses {
-        if let Some(validator_list_entry) = validator_list.find(&vote_address) {
+    for vote_account_address in remove_vote_addresses {
+        if let Some(validator_list_entry) = validator_list.find(&vote_account_address) {
             if validator_list_entry.status == StakeStatus::Active {
                 if is_removable(validator_list_entry, stake_rent_exemption) {
-                    info!("Removing {} from stake pool", vote_address);
-                    let destination_stake_address =
-                        staker_transient_stake_address(authorized_staker.pubkey(), vote_address);
-                    let destination_stake_seed = staker_transient_stake_address_seed(vote_address);
+                    info!("Removing {} from stake pool", vote_account_address);
+                    let destination_stake_address = staker_transient_stake_address(
+                        authorized_staker.pubkey(),
+                        vote_account_address,
+                    );
+                    let destination_stake_seed =
+                        staker_transient_stake_address_seed(vote_account_address);
                     let mut instructions = vec![system_instruction::create_account_with_seed(
                         &authorized_staker.pubkey(),
                         &destination_stake_address,
@@ -568,7 +571,7 @@ fn remove_validators_from_pool(
                                 &spl_stake_pool::id(),
                                 stake_pool,
                                 stake_pool_address,
-                                &vote_address,
+                                &vote_account_address,
                                 validator_list_entry.active_stake_lamports,
                                 validator_list_entry.transient_seed_suffix_start,
                             ),
@@ -577,13 +580,13 @@ fn remove_validators_from_pool(
 
                     let (stake_account_address, _) = find_stake_program_address(
                         &spl_stake_pool::id(),
-                        &vote_address,
+                        &vote_account_address,
                         stake_pool_address,
                     );
                     info!("stake_account_address is {}", stake_account_address);
                     let (transient_stake_account, _) = find_transient_stake_program_address(
                         &spl_stake_pool::id(),
-                        &vote_address,
+                        &vote_account_address,
                         stake_pool_address,
                         validator_list_entry.transient_seed_suffix_start,
                     );
@@ -597,16 +600,32 @@ fn remove_validators_from_pool(
                         transient_stake_account
                     );
 
-                    let stake_state =
-                        try_from_slice_unchecked::<stake::state::StakeState>(&stake_account.data)?;
-                    println!("stake_state: {:?}", stake_state);
+                    match try_from_slice_unchecked::<stake::state::StakeState>(&stake_account.data)
+                    {
+                        Ok(ss) => {
+                            info!("stake_account StakeState: {:?}", ss);
+                        }
+                        Err(_) => {
+                            info!("stake_account Not a stake state");
+                        }
+                    };
+                    match try_from_slice_unchecked::<stake::state::StakeState>(
+                        &transient_stake_account.data,
+                    ) {
+                        Ok(ss) => {
+                            info!("transient_stake_account StakeState: {:?}", ss);
+                        }
+                        Err(_) => {
+                            info!("transient_stake_account Not a stake state");
+                        }
+                    };
 
                     instructions.push(
                         spl_stake_pool::instruction::remove_validator_from_pool_with_vote(
                             &spl_stake_pool::id(),
                             stake_pool,
                             stake_pool_address,
-                            &vote_address,
+                            &vote_account_address,
                             &authorized_staker.pubkey(),
                             validator_list_entry.transient_seed_suffix_start,
                             &destination_stake_address,
@@ -621,15 +640,18 @@ fn remove_validators_from_pool(
                         Some(&authorized_staker.pubkey()),
                     ));
                 } else {
-                    warn!("Validator {} cannot be removed because of existing transient stake or dust active stake, ignoring", vote_address);
+                    warn!("Validator {} cannot be removed because of existing transient stake or dust active stake, ignoring", vote_account_address);
                 }
             } else {
-                debug!("Validator {} already removed, ignoring", vote_address);
+                debug!(
+                    "Validator {} already removed, ignoring",
+                    vote_account_address
+                );
             }
         } else {
             warn!(
                 "Validator {} not present in stake pool {}, ignoring removal",
-                vote_address, stake_pool_address
+                vote_account_address, stake_pool_address
             );
         }
     }
