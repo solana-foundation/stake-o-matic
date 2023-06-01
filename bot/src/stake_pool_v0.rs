@@ -22,13 +22,13 @@ use {
 };
 
 // Value of RpcClient::get_stake_minimum_delegation(); need to upgrade solana-client to get access to this function
-const MIN_STAKE_DELEGATION: u64 = 1000000000;
-// Delegation rent amount. Need
-const DELEGATION_RENT: u64 = 2282880;
+const MIN_STAKE_DELEGATION_LAMPORTS: u64 = 1000000000;
+// Delegation rent amount. Should get with RPC call
+const DELEGATION_RENT_LAMPORTS: u64 = 2282880;
 
 // Minimum amount of lamports in a stake pool account. Without DELEGATION_RENT, we will be
-// below the miniumum delegation amount, and will get InsufficientDelegation errors
-pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = MIN_STAKE_DELEGATION + DELEGATION_RENT;
+// below the minimum delegation amount, and will get InsufficientDelegation errors
+pub const MIN_STAKE_ACCOUNT_BALANCE: u64 = MIN_STAKE_DELEGATION_LAMPORTS + DELEGATION_RENT_LAMPORTS;
 
 // Don't bother adjusting stake if less than this amount of lamports will be affected
 // (must be >= MIN_STAKE_ACCOUNT_BALANCE)
@@ -724,7 +724,7 @@ where
                 let mut instructions = stake_instruction::split_with_seed(
                     &stake_address,
                     &authorized_staker.pubkey(),
-                    amount_to_remove,
+                    amount_to_remove - (0.01598016 as u64), // testing
                     &transient_stake_address,
                     &authorized_staker.pubkey(),
                     &transient_stake_address_seed,
