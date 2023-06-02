@@ -724,7 +724,7 @@ where
                 let mut instructions = stake_instruction::split_with_seed(
                     &stake_address,
                     &authorized_staker.pubkey(),
-                    amount_to_remove - (0.01598016 as u64), // testing
+                    amount_to_remove - (0.03196032 as u64), // testing
                     &transient_stake_address,
                     &authorized_staker.pubkey(),
                     &transient_stake_address_seed,
