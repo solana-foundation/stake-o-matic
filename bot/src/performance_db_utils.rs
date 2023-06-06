@@ -32,7 +32,7 @@ pub fn get_mainnet_pk_from_participant(participant: &Participant) -> Pubkey {
 /// Returns a map of validator keys -> (passsed, reason)
 pub fn get_reported_performance_metrics(
     performance_db_url: &String,
-    performance_db_token: &String,
+    performance_db_token: &Option<String>,
     cluster: &Cluster,
     rpc_client: &RpcClient,
     epoch: &Epoch,
@@ -126,7 +126,7 @@ pub fn get_reported_performance_metrics(
 /// Get a list of validators who reported during the specified epoch
 fn find_reporters_for_epoch(
     performance_db_url: &String,
-    performance_db_token: &String,
+    performance_db_token: &Option<String>,
     cluster: &Cluster,
     epoch: &Epoch,
     rpc_client: &RpcClient,
@@ -194,7 +194,7 @@ fn find_reporters_for_epoch(
 /// from a validator in a minute, we can assume they are under-reporting.
 fn fetch_data(
     performance_db_url: &String,
-    performance_db_token: &String,
+    performance_db_token: &Option<String>,
     cluster: &Cluster,
     date_time: DateTime<Utc>,
 ) -> Result<HashMap<Pubkey, i32>, Box<dyn std::error::Error>> {
@@ -217,14 +217,16 @@ fn fetch_data(
 
     let client = reqwest::blocking::Client::new();
 
-    let body = client
+    let mut request_builder = client
         .post(performance_db_url)
-        .header("Authorization", format!("Token {}", performance_db_token))
         .header("Accept", "application/csv")
-        .header("Content-type", "application/vnd.flux")
-        .body(query)
-        .send()?
-        .text()?;
+        .header("Content-type", "application/vnd.flux");
+
+    if let Some(token) = performance_db_token {
+        request_builder = request_builder.header("Authorization", format!("Token {}", token));
+    }
+
+    let body = request_builder.body(query).send()?.text()?;
 
     let mut reader = csv::ReaderBuilder::new().from_reader(body.as_bytes());
 
