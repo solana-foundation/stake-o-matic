@@ -1604,12 +1604,10 @@ fn classify(
             validators_app_client.get_all_commision_changes_since(five_days_ago)?;
 
         let performance_metrics_for_this_epoch: Option<HashMap<Pubkey, (bool, String)>> =
-            if let (Some(performance_db_url), Some(performance_db_token)) =
-                (&config.performance_db_url, &config.performance_db_token)
-            {
+            if let Some(performance_db_url) = &config.performance_db_url {
                 let reported_performance_metrics = get_reported_performance_metrics(
                     performance_db_url,
-                    performance_db_token,
+                    &config.performance_db_token,
                     &config.cluster,
                     rpc_client,
                     &(epoch - 1),
