@@ -285,6 +285,26 @@ pub fn send_and_confirm_transactions_with_spinner(
     Err("Max retries exceeded".into())
 }
 
+pub(crate) fn get_stake_with_fallback(
+    rpc_client: &RpcClient,
+    stake_address: &Pubkey,
+) -> Result<(u64, u64), Box<dyn error::Error>> {
+    let stake_activation = rpc_client.get_stake_activation(*stake_address, None);
+    if let Ok(stake_activation) = stake_activation {
+        Ok((stake_activation.active, stake_activation.inactive))
+    } else {
+        Ok((
+            0,
+            rpc_client.get_balance(stake_address).map_err(|err| {
+                format!(
+                    "Unable to get stake account balance: {}: {}",
+                    stake_address, err
+                )
+            })?,
+        ))
+    }
+}
+
 pub struct VoteAccountInfo {
     pub identity: Pubkey,
     pub vote_address: Pubkey,
