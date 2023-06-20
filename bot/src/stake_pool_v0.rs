@@ -2,7 +2,8 @@ use {
     crate::{
         generic_stake_pool::*,
         rpc_client_utils::{
-            get_all_stake_by_staker, send_and_confirm_transactions_with_spinner, MultiClient,
+            get_all_stake_by_staker, get_stake_with_fallback,
+            send_and_confirm_transactions_with_spinner, MultiClient,
         },
     },
     log::*,
@@ -654,19 +655,9 @@ where
             validator_stake.vote_address,
         );
 
-        let balance = client.get_balance(&stake_address).map_err(|err| {
-            format!(
-                "Unable to get stake account balance: {}: {}",
-                stake_address, err
-            )
-        })? + client
-            .get_balance(&transient_stake_address)
-            .map_err(|err| {
-                format!(
-                    "Unable to get transient stake account balance: {}: {}",
-                    transient_stake_address, err
-                )
-            })?;
+        let (active_balance, inactive_balance) = get_stake_with_fallback(client, &stake_address)?;
+        let (transient_active_balance, transient_inactive_balance) =
+            get_stake_with_fallback(client, &transient_stake_address)?;
 
         let list = if validator_stake.priority {
             &mut priority_stake
@@ -678,7 +669,8 @@ where
             }
         };
         list.push((
-            balance,
+            active_balance + transient_active_balance,
+            inactive_balance + transient_inactive_balance,
             stake_address,
             transient_stake_address,
             validator_stake,
@@ -696,7 +688,8 @@ where
 
     let mut transactions = vec![];
     for (
-        balance,
+        active_balance,
+        inactive_balance,
         stake_address,
         transient_stake_address,
         ValidatorStake {
@@ -711,8 +704,11 @@ where
         .chain(baseline_stake)
         .chain(bonus_stake)
     {
+        let balance = active_balance + inactive_balance;
         let desired_balance = match stake_state {
-            ValidatorStakeState::None => MIN_STAKE_ACCOUNT_BALANCE,
+            // there might be some additional inactive balance due to merges,
+            // so be sure to leave `MIN_STAKE_DELEGATION` + inactive balance
+            ValidatorStakeState::None => MIN_STAKE_DELEGATION + inactive_balance,
             ValidatorStakeState::Baseline => baseline_stake_amount,
             ValidatorStakeState::Bonus => bonus_stake_amount,
         };
