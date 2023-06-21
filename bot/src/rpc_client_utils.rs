@@ -175,6 +175,10 @@ pub fn send_and_confirm_transactions_with_spinner(
             if Instant::now().duration_since(last_resend) > transaction_resend_interval {
                 for (index, (_i, transaction)) in pending_transactions.values().enumerate() {
                     let method = if dry_run {
+                        client
+                            .simulate_transaction(transaction)
+                            .map_err(|e| transaction_errors.push(e.get_transaction_error()))
+                            .ok();
                         "DRY RUN"
                     } else {
                         client.send_transaction(transaction)
