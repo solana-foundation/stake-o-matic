@@ -2,7 +2,7 @@ use {
     crate::{
         generic_stake_pool::*,
         rpc_client_utils::{
-            get_all_stake_by_staker, get_stake_with_fallback,
+            get_active_and_inactive_stake, get_all_stake_by_staker,
             send_and_confirm_transactions_with_spinner, MultiClient,
         },
     },
@@ -655,9 +655,10 @@ where
             validator_stake.vote_address,
         );
 
-        let (active_balance, inactive_balance) = get_stake_with_fallback(client, &stake_address)?;
+        let (active_balance, inactive_balance) =
+            get_active_and_inactive_stake(client, &stake_address)?;
         let (transient_active_balance, transient_inactive_balance) =
-            get_stake_with_fallback(client, &transient_stake_address)?;
+            get_active_and_inactive_stake(client, &transient_stake_address)?;
 
         let list = if validator_stake.priority {
             &mut priority_stake
@@ -848,7 +849,6 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::lamports_to_sol;
     use {
         super::*,
         crate::{
@@ -1116,13 +1116,16 @@ mod test {
 
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
         // needs one more epoch for the additional bonus stake to arrive
-        for (validator, expected_sol_balance) in
-            validators
-                .iter()
-                .zip(&[lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE), 10., 110.])
-        {
+        for (validator, expected_sol_balance) in validators.iter().zip(&[
+            // this one needs to maintain a bit more, since it has the extra rents
+            MIN_STAKE_ACCOUNT_BALANCE + DELEGATION_RENT * 2,
+            sol_to_lamports(10.),
+            sol_to_lamports(110.),
+        ]) {
             assert_eq!(
-                sol_to_lamports(*expected_sol_balance),
+                // since two movements have been done, expect two extra stake
+                // rent-exemption amounts in the account
+                *expected_sol_balance,
                 validator_stake_balance(&client, stake_pool.authorized_staker.pubkey(), validator,),
                 "stake balance mismatch for validator {}, expected {}",
                 validator.identity,
@@ -1151,12 +1154,15 @@ mod test {
 
         // after the second epoch, validator 2 is now has all the bonus stake
         for (validator, expected_sol_balance) in validators.iter().zip(&[
-            lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE),
-            10.,
-            320. - lamports_to_sol(MIN_STAKE_ACCOUNT_BALANCE),
+            // this account needs to maintain the extra rent-exempt amounts
+            MIN_STAKE_ACCOUNT_BALANCE + DELEGATION_RENT * 2,
+            // no change here still
+            sol_to_lamports(10.),
+            // this account doesn't get the extra rent-exempt amounts
+            sol_to_lamports(320.) - MIN_STAKE_ACCOUNT_BALANCE - DELEGATION_RENT * 2,
         ]) {
             assert_eq!(
-                sol_to_lamports(*expected_sol_balance),
+                *expected_sol_balance,
                 validator_stake_balance(&client, stake_pool.authorized_staker.pubkey(), validator,),
                 "stake balance mismatch for validator {}",
                 validator.identity
