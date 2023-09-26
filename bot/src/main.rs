@@ -1860,17 +1860,19 @@ fn classify(
             let insufficent_testnet_participation: Option<String> = testnet_participation
                 .as_ref()
                 .and_then(|testnet_participation| {
-                    testnet_participation.get(&identity).and_then(|passed| {
-                        if !passed {
-                            let note = "Insufficient testnet participation".to_string();
-                            if config.enforce_testnet_participation {
-                                return Some(note);
-                            } else {
-                                validator_notes.push(note);
-                            }
+                    let passed = testnet_participation
+                        .get(&identity)
+                        .map_or(false, |found_passed| *found_passed);
+
+                    if !passed {
+                        let note = "Insufficient testnet participation".to_string();
+                        if config.enforce_testnet_participation {
+                            return Some(note);
+                        } else {
+                            validator_notes.push(note);
                         }
-                        None
-                    })
+                    }
+                    None
                 });
 
             let performance_requirements_waived =
