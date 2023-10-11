@@ -1592,6 +1592,13 @@ fn classify(
         || too_many_poor_block_producers
     {
         notes.push("Stake adjustments skipped this epoch".to_string());
+
+        if env::var("SEND_SLACK_MESSAGES").is_ok() {
+            if let Err(e) = send_slack_channel_message(&notes.join("\n")) {
+                info!("Could not send slack message: {:?}", e);
+            };
+        }
+
         None
     } else {
         let mut validator_classifications = HashMap::new();
