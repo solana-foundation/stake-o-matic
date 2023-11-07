@@ -138,7 +138,8 @@ pub struct CommissionChangeIndexHistoryEntry {
     pub commission_before: Option<f32>,
     // This has shown up as null in at least once case. Not sure what it indicates.
     pub commission_after: Option<f32>,
-    pub epoch: u64,
+    // recently there was an example of epoch being null
+    pub epoch: Option<u64>,
     pub network: String,
     pub id: i32,
     pub epoch_completion: f32,
@@ -154,7 +155,7 @@ impl Default for CommissionChangeIndexHistoryEntry {
             created_at: "".to_string(),
             commission_before: None,
             commission_after: None,
-            epoch: 0,
+            epoch: None,
             network: "".to_string(),
             id: 0,
             epoch_completion: 0.0,

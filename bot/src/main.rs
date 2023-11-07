@@ -1592,6 +1592,13 @@ fn classify(
         || too_many_poor_block_producers
     {
         notes.push("Stake adjustments skipped this epoch".to_string());
+
+        if env::var("SEND_SLACK_MESSAGES").is_ok() {
+            if let Err(e) = send_slack_channel_message(&notes.join("\n")) {
+                info!("Could not send slack message: {:?}", e);
+            };
+        }
+
         None
     } else {
         let mut validator_classifications = HashMap::new();
@@ -1860,17 +1867,19 @@ fn classify(
             let insufficent_testnet_participation: Option<String> = testnet_participation
                 .as_ref()
                 .and_then(|testnet_participation| {
-                    testnet_participation.get(&identity).and_then(|passed| {
-                        if !passed {
-                            let note = "Insufficient testnet participation".to_string();
-                            if config.enforce_testnet_participation {
-                                return Some(note);
-                            } else {
-                                validator_notes.push(note);
-                            }
+                    let passed = testnet_participation
+                        .get(&identity)
+                        .map_or(false, |found_passed| *found_passed);
+
+                    if !passed {
+                        let note = "Insufficient testnet participation".to_string();
+                        if config.enforce_testnet_participation {
+                            return Some(note);
+                        } else {
+                            validator_notes.push(note);
                         }
-                        None
-                    })
+                    }
+                    None
                 });
 
             let performance_requirements_waived =
@@ -2754,13 +2763,16 @@ fn calculate_commission_at_end_of_epoch(
         Some(records) => {
             // First check if there is a commission change record in `epoch`. The last one will
             // give us the commision at the end of the epoch.
-            let mut rs: Vec<&CommissionChangeIndexHistoryEntry> =
-                records.iter().filter(|r| r.epoch <= epoch).collect();
+            let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
+                .iter()
+                .filter(|r| r.epoch.is_some() && r.epoch.unwrap() <= epoch)
+                .collect();
 
             if !rs.is_empty() {
                 rs.sort_by(|a, b| {
                     a.epoch
-                        .cmp(&b.epoch)
+                        .unwrap()
+                        .cmp(&b.epoch.unwrap())
                         .then(a.epoch_completion.partial_cmp(&b.epoch_completion).unwrap())
                 });
                 rs.last().unwrap().commission_after.unwrap() as u8
@@ -2769,7 +2781,11 @@ fn calculate_commission_at_end_of_epoch(
                 // `epoch + 1`. The first one will give us the commission at the end of `epoch`.
                 let mut rs: Vec<&CommissionChangeIndexHistoryEntry> = records
                     .iter()
-                    .filter(|r| r.commission_before.is_some() && r.epoch > epoch)
+                    .filter(|r| {
+                        r.commission_before.is_some()
+                            && r.epoch.is_some()
+                            && r.epoch.unwrap() > epoch
+                    })
                     .collect();
                 if rs.is_empty() {
                     // no commission changes in epoch `epoch + 1`; commission is the current
@@ -2915,7 +2931,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(expected_commission as f32),
                 commission_after: Some(10.0),
-                epoch: epoch + 2,
+                epoch: Some(epoch + 2),
                 epoch_completion: 50.0,
                 ..Default::default()
             },
@@ -2944,7 +2960,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(50.0),
                 commission_after: Some(40.0),
-                epoch: epoch + 1,
+                epoch: Some(epoch + 1),
                 epoch_completion: 50.0,
                 ..Default::default()
             },
@@ -2952,7 +2968,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: None,
                 commission_after: Some(10.0),
-                epoch: 120,
+                epoch: Some(120),
                 epoch_completion: 10.0,
                 ..Default::default()
             },
@@ -2960,7 +2976,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(10.0),
                 commission_after: Some(expected_commission),
-                epoch,
+                epoch: Some(epoch),
                 epoch_completion: 99.0,
                 ..Default::default()
             },
@@ -2968,7 +2984,7 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(expected_commission),
                 commission_after: Some(50.0),
-                epoch: epoch + 1,
+                epoch: Some(epoch + 1),
                 epoch_completion: 10.0,
                 ..Default::default()
             },
@@ -2991,7 +3007,7 @@ mod test {
         let history = [CommissionChangeIndexHistoryEntry {
             commission_before: Some(expected_commission),
             commission_after: Some(current_commission),
-            epoch: epoch + 1,
+            epoch: Some(epoch + 1),
             epoch_completion: 50.0,
             ..Default::default()
         }]
@@ -3015,14 +3031,14 @@ mod test {
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(expected_commission),
                 commission_after: Some(10.0),
-                epoch: epoch + 1,
+                epoch: Some(epoch + 1),
                 epoch_completion: 50.0,
                 ..Default::default()
             },
             CommissionChangeIndexHistoryEntry {
                 commission_before: Some(10.0),
                 commission_after: Some(50.0),
-                epoch: epoch + 1,
+                epoch: Some(epoch + 1),
                 epoch_completion: 60.0,
                 ..Default::default()
             },
