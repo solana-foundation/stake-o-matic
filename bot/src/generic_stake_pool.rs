@@ -40,6 +40,7 @@ pub trait GenericStakePool {
         client: &MultiClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
+        bonus_multiplier: Option<f64>,
     ) -> Result<
         (
             EpochStakeNotes,
