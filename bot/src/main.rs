@@ -2576,6 +2576,11 @@ fn main() -> BoxResult<()> {
                 cluster_multi_client,
                 pre_run_dry_run || config.dry_run,
                 &desired_validator_stake,
+                if config.cluster == Testnet {
+                    Some(0.85)
+                } else {
+                    None
+                },
             )?;
 
         let mut summary_messages: Vec<String> = vec![format!(

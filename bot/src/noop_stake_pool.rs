@@ -20,6 +20,7 @@ impl GenericStakePool for NoopStakePool {
         _client: &MultiClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
+        _bonus_multiplier: Option<f64>,
     ) -> Result<
         (
             EpochStakeNotes,

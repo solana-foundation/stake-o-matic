@@ -157,6 +157,7 @@ impl GenericStakePool for StakePoolOMatic {
         client: &MultiClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
+        _bonus_multiplier: Option<f64>,
     ) -> Result<
         (
             EpochStakeNotes,
@@ -932,13 +933,13 @@ mod test {
             .collect::<Vec<_>>();
 
         stake_o_matic
-            .apply(client, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake, None)
             .unwrap();
 
         assert!(num_stake_accounts(client, pool_withdraw_authority) > 1 + validators.len());
         let _epoch = wait_for_next_epoch(client).unwrap();
         stake_o_matic
-            .apply(client, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake, None)
             .unwrap();
 
         assert_eq!(
@@ -1095,6 +1096,7 @@ mod test {
                         priority: false,
                     })
                     .collect::<Vec<_>>(),
+                None,
             )
             .unwrap();
 
@@ -1156,6 +1158,7 @@ mod test {
                         priority: false,
                     })
                     .collect::<Vec<_>>(),
+                None,
             )
             .unwrap();
 
@@ -1203,6 +1206,7 @@ mod test {
                         priority: false,
                     })
                     .collect::<Vec<_>>(),
+                None,
             )
             .unwrap();
 
@@ -1253,11 +1257,11 @@ mod test {
         ];
 
         stake_o_matic
-            .apply(&client, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake, None)
             .unwrap();
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_o_matic
-            .apply(&client, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake, None)
             .unwrap();
 
         info!("Check after first epoch");
@@ -1285,7 +1289,7 @@ mod test {
         info!("Check after second epoch");
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_o_matic
-            .apply(&client, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake, None)
             .unwrap();
 
         assert_eq!(
@@ -1310,11 +1314,11 @@ mod test {
         // ===========================================================
         info!("remove all validators");
         // deactivate all validator stake and remove from pool
-        stake_o_matic.apply(&client, false, &[]).unwrap();
+        stake_o_matic.apply(&client, false, &[], None).unwrap();
 
         // withdraw removed validator stake into the staker
         let _epoch = wait_for_next_epoch(&client).unwrap();
-        stake_o_matic.apply(&client, false, &[]).unwrap();
+        stake_o_matic.apply(&client, false, &[], None).unwrap();
         // all stake has been returned to the reserve account
         assert_reserve_account_only(
             min_reserve_stake_balance + stake_rent_exemption + total_stake_amount,
