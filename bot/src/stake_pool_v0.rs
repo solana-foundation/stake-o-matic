@@ -109,6 +109,7 @@ impl GenericStakePool for StakePool {
         client: &MultiClient,
         dry_run: bool,
         desired_validator_stake: &[ValidatorStake],
+        bonus_multiplier: Option<f64>,
     ) -> Result<
         (
             EpochStakeNotes,
@@ -210,10 +211,11 @@ impl GenericStakePool for StakePool {
             Sol(total_bonus_stake_amount)
         );
 
-        let bonus_stake_amount = if bonus_stake_node_count == 0 {
+        let bonus_stake_amount: u64 = if bonus_stake_node_count == 0 {
             0
         } else {
-            total_bonus_stake_amount / (bonus_stake_node_count as u64)
+            (bonus_multiplier.unwrap_or(1.0)
+                * ((total_bonus_stake_amount / bonus_stake_node_count) as f64)) as u64
         };
 
         info!("Bonus stake amount: {}", Sol(bonus_stake_amount));
@@ -900,7 +902,7 @@ mod test {
             .collect::<Vec<_>>();
 
         stake_pool
-            .apply(client, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake, None)
             .unwrap();
 
         assert_eq!(
@@ -909,7 +911,7 @@ mod test {
         );
         let _epoch = wait_for_next_epoch(client).unwrap();
         stake_pool
-            .apply(client, false, &desired_validator_stake)
+            .apply(client, false, &desired_validator_stake, None)
             .unwrap();
 
         assert_eq!(
@@ -1034,6 +1036,7 @@ mod test {
                         priority: false,
                     })
                     .collect::<Vec<_>>(),
+                None,
             )
             .unwrap();
 
@@ -1107,11 +1110,11 @@ mod test {
         ];
 
         stake_pool
-            .apply(&client, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake, None)
             .unwrap();
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_pool
-            .apply(&client, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake, None)
             .unwrap();
 
         // after the first epoch, validators 0 and 1 are at their target levels but validator 2
@@ -1142,7 +1145,7 @@ mod test {
 
         let _epoch = wait_for_next_epoch(&client).unwrap();
         stake_pool
-            .apply(&client, false, &desired_validator_stake)
+            .apply(&client, false, &desired_validator_stake, None)
             .unwrap();
 
         assert_eq!(
@@ -1173,10 +1176,10 @@ mod test {
         info!("remove all validators");
 
         // deactivate all validator stake
-        stake_pool.apply(&client, false, &[]).unwrap();
+        stake_pool.apply(&client, false, &[], None).unwrap();
         let _epoch = wait_for_next_epoch(&client).unwrap();
         // merge deactivated validator stake back into the reserve
-        stake_pool.apply(&client, false, &[]).unwrap();
+        stake_pool.apply(&client, false, &[], None).unwrap();
         // all stake has returned to the reserve account
         assert_reserve_account_only();
     }
