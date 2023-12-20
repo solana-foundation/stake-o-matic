@@ -1,3 +1,5 @@
+use solana_sdk::instruction::Instruction;
+use solana_sdk::system_instruction;
 use {
     crate::{
         generic_stake_pool::*,
@@ -725,14 +727,21 @@ where
             } else {
                 deactivating_total += amount_to_remove;
 
-                let mut instructions = stake_instruction::split_with_seed(
+                let mut instructions: Vec<Instruction> = vec![system_instruction::transfer(
+                    &authorized_staker.pubkey(),
+                    &transient_stake_address,
+                    DELEGATION_RENT,
+                )];
+
+                instructions.append(&mut stake_instruction::split_with_seed(
                     &stake_address,
                     &authorized_staker.pubkey(),
                     amount_to_remove,
                     &transient_stake_address,
                     &authorized_staker.pubkey(),
                     &transient_stake_address_seed,
-                );
+                ));
+
                 instructions.push(stake_instruction::deactivate_stake(
                     &transient_stake_address,
                     &authorized_staker.pubkey(),
