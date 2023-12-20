@@ -821,23 +821,19 @@ where
         Sol(reserve_stake_balance)
     );
 
-    let num_transaction_errors = if dry_run {
-        0
-    } else {
-        match send_and_confirm_transactions_with_spinner(
-            client,
-            false,
-            transactions,
-            authorized_staker,
-        ) {
-            Ok(errors) => errors.iter().filter(|err| err.is_some()).count(),
-            Err(e) => {
-                error!("Sending transactions failed: {:?}", e);
-                if ignore_stake_distribution_errors {
-                    return Ok((activating_total, deactivating_total));
-                } else {
-                    return Err("Some transactions failed to land".into());
-                }
+    let num_transaction_errors = match send_and_confirm_transactions_with_spinner(
+        client,
+        dry_run,
+        transactions,
+        authorized_staker,
+    ) {
+        Ok(errors) => errors.iter().filter(|err| err.is_some()).count(),
+        Err(e) => {
+            error!("Sending transactions failed: {:?}", e);
+            if ignore_stake_distribution_errors {
+                return Ok((activating_total, deactivating_total));
+            } else {
+                return Err("Some transactions failed to land".into());
             }
         }
     };
