@@ -1,5 +1,6 @@
 use solana_sdk::instruction::Instruction;
 use solana_sdk::system_instruction;
+use std::env;
 use {
     crate::{
         generic_stake_pool::*,
@@ -727,11 +728,16 @@ where
             } else {
                 deactivating_total += amount_to_remove;
 
-                let mut instructions: Vec<Instruction> = vec![system_instruction::transfer(
-                    &authorized_staker.pubkey(),
-                    &transient_stake_address,
-                    DELEGATION_RENT,
-                )];
+                let mut instructions: Vec<Instruction> = vec![];
+
+                // Testnet now requires that stake accounts have a rent-exempt minimum
+                if env::var("ADD_RENT_EXEMPT_MINIMUM").is_ok() {
+                    instructions.push(system_instruction::transfer(
+                        &authorized_staker.pubkey(),
+                        &transient_stake_address,
+                        DELEGATION_RENT,
+                    ));
+                }
 
                 instructions.append(&mut stake_instruction::split_with_seed(
                     &stake_address,
