@@ -2687,6 +2687,8 @@ fn main() -> BoxResult<()> {
         generate_csv(epoch, &config)?;
     }
 
+    info!("{:?} notifications to print", notifications.len());
+
     for notification in notifications {
         info!("notification: {}", notification);
         // Only notify the user if this is the first run for this epoch
@@ -2694,6 +2696,7 @@ fn main() -> BoxResult<()> {
             notifier.send(&notification);
         }
     }
+    info!("Notifications printed! Exiting (hopefully!)");
 
     Ok(())
 }

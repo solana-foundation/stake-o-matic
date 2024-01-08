@@ -213,6 +213,7 @@ pub fn send_and_confirm_transactions_with_spinner(
             let mut new_block_height = block_height;
             while block_height == new_block_height {
                 sleep(Duration::from_millis(500));
+                info!("Checking block height again");
                 new_block_height = client.get_block_height()?;
             }
             block_height = new_block_height;
