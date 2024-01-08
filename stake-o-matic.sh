@@ -162,7 +162,10 @@ else
   exit 1
 fi
 
+echo "solana-stake-o-matic exited"
+
 if [[ -z $FOLLOWER && $BUILDKITE = true ]]; then
+  echo "pushing results to git repo"
   git config --global user.email maintainers@solana.foundation
   git config --global user.name "Solana Maintainers"
   cd db
