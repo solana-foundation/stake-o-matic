@@ -2572,16 +2572,27 @@ fn main() -> BoxResult<()> {
         );
 
         let (stake_pool_notes, validator_stake_actions, unfunded_validators, bonus_stake_amount) =
-            stake_pool.apply(
-                cluster_multi_client,
-                pre_run_dry_run || config.dry_run,
-                &desired_validator_stake,
-                if config.cluster == Testnet {
-                    Some(0.85)
-                } else {
-                    None
-                },
-            )?;
+            match config.cluster {
+                Testnet => {
+                    // Don't apply stake pool for Testnet. We only care about None/Baseline/Bonus values
+                    (
+                        vec!["No stake distribution for Testnet".to_string()],
+                        ValidatorStakeActions::new(),
+                        UnfundedValidators::new(),
+                        42_000 * LAMPORTS_PER_SOL,
+                    )
+                }
+                MainnetBeta => stake_pool.apply(
+                    cluster_multi_client,
+                    pre_run_dry_run || config.dry_run,
+                    &desired_validator_stake,
+                    if config.cluster == Testnet {
+                        Some(0.85)
+                    } else {
+                        None
+                    },
+                )?,
+            };
 
         let mut summary_messages: Vec<String> = vec![format!(
             "summary for {:?}/{:?}\n",
