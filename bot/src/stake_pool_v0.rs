@@ -527,52 +527,51 @@ fn create_validator_stake_accounts(
 
         if stake_account.is_some() {
             // Check if the stake account is busy
-            let stake_activation =
-                client
-                    .get_stake_activation(stake_address, None)
-                    .map_err(|err| {
-                        format!(
-                            "Unable to get activation information for stake account: {}: {}",
-                            stake_address, err
-                        )
-                    })?;
+            match client.get_stake_activation(stake_address, None) {
+                Ok(stake_activation) => match stake_activation.state {
+                    StakeActivationState::Activating => {
+                        let action = format!(
+                            "stake account busy due to stake activation of {}",
+                            stake_address
+                        );
+                        warn!("Busy validator {}: {}", *identity, action);
+                        validator_stake_actions.insert(*identity, action);
+                    }
+                    StakeActivationState::Deactivating => {
+                        let action = format!(
+                            "stake account busy due to stake deactivation of {}",
+                            stake_address
+                        );
+                        warn!("Busy validator {}: {}", *identity, action);
+                        validator_stake_actions.insert(*identity, action);
+                    }
+                    StakeActivationState::Active => {}
+                    StakeActivationState::Inactive => {
+                        let action =
+                            format!("stake account busy due to inactive stake {}", stake_address);
+                        warn!("Busy validator {}: {}", *identity, action);
 
-            match stake_activation.state {
-                StakeActivationState::Activating => {
-                    let action = format!(
-                        "stake account busy due to stake activation of {}",
-                        stake_address
+                        transactions.push(Transaction::new_with_payer(
+                            &[stake_instruction::delegate_stake(
+                                &stake_address,
+                                &authorized_staker.pubkey(),
+                                vote_address,
+                            )],
+                            Some(&authorized_staker.pubkey()),
+                        ));
+                        debug!(
+                            "Activating stake account for validator {} ({})",
+                            identity, stake_address
+                        );
+                        validator_stake_actions.insert(*identity, action);
+                    }
+                },
+                Err(err) => {
+                    // Just ignore these errors
+                    warn!(
+                        "Unable to get activation information for stake account: {}: {}",
+                        stake_address, err
                     );
-                    warn!("Busy validator {}: {}", *identity, action);
-                    validator_stake_actions.insert(*identity, action);
-                }
-                StakeActivationState::Deactivating => {
-                    let action = format!(
-                        "stake account busy due to stake deactivation of {}",
-                        stake_address
-                    );
-                    warn!("Busy validator {}: {}", *identity, action);
-                    validator_stake_actions.insert(*identity, action);
-                }
-                StakeActivationState::Active => {}
-                StakeActivationState::Inactive => {
-                    let action =
-                        format!("stake account busy due to inactive stake {}", stake_address);
-                    warn!("Busy validator {}: {}", *identity, action);
-
-                    transactions.push(Transaction::new_with_payer(
-                        &[stake_instruction::delegate_stake(
-                            &stake_address,
-                            &authorized_staker.pubkey(),
-                            vote_address,
-                        )],
-                        Some(&authorized_staker.pubkey()),
-                    ));
-                    debug!(
-                        "Activating stake account for validator {} ({})",
-                        identity, stake_address
-                    );
-                    validator_stake_actions.insert(*identity, action);
                 }
             }
         } else {
