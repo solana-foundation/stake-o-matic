@@ -569,8 +569,8 @@ fn create_validator_stake_accounts(
                 Err(err) => {
                     // Just ignore these errors
                     warn!(
-                        "Unable to get activation information for stake account: {}: {}",
-                        stake_address, err
+                        "Unable to get activation information for stake account: {}; vote address: {:?}; validator identity: {:?} {}",
+                        stake_address, vote_address, identity, err
                     );
                 }
             }
