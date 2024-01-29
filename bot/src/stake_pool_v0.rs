@@ -433,33 +433,35 @@ fn merge_transient_stake_accounts(
                     validator_stake_actions.insert(*identity, action);
                 }
                 StakeActivationState::Active => {
-                    let stake_activation = client
-                        .get_stake_activation(stake_address, None)
-                        .map_err(|err| {
-                            format!(
-                                "Unable to get activation information for stake account: {}: {}",
-                                stake_address, err
-                            )
-                        })?;
+                    match client.get_stake_activation(stake_address, None) {
+                        Ok(stake_activation) => {
+                            if stake_activation.state == StakeActivationState::Active {
+                                transactions.push(Transaction::new_with_payer(
+                                    &stake_instruction::merge(
+                                        &stake_address,
+                                        &transient_stake_address,
+                                        &authorized_staker.pubkey(),
+                                    ),
+                                    Some(&authorized_staker.pubkey()),
+                                ));
+                                debug!("Merging active transient stake for {}", identity);
+                            } else {
+                                let action = format!(
+                                    "stake account {} busy because not active, while transient account {} is active",
+                                    stake_address,
+                                    transient_stake_address
+                                );
+                                warn!("Busy validator {}: {}", *identity, action);
+                                validator_stake_actions.insert(*identity, action);
+                            }
+                        }
 
-                    if stake_activation.state == StakeActivationState::Active {
-                        transactions.push(Transaction::new_with_payer(
-                            &stake_instruction::merge(
-                                &stake_address,
-                                &transient_stake_address,
-                                &authorized_staker.pubkey(),
-                            ),
-                            Some(&authorized_staker.pubkey()),
-                        ));
-                        debug!("Merging active transient stake for {}", identity);
-                    } else {
-                        let action = format!(
-                            "stake account {} busy because not active, while transient account {} is active",
-                            stake_address,
-                            transient_stake_address
-                        );
-                        warn!("Busy validator {}: {}", *identity, action);
-                        validator_stake_actions.insert(*identity, action);
+                        Err(err) => {
+                            warn!(
+                                "merge_transient_stake_accounts(): Unable to get activation information for stake account: {}; vote address: {:?}; validator identity: {:?} {}",
+                                stake_address, vote_address, identity, err
+                                );
+                        }
                     }
                 }
                 StakeActivationState::Inactive => {
@@ -569,7 +571,7 @@ fn create_validator_stake_accounts(
                 Err(err) => {
                     // Just ignore these errors
                     warn!(
-                        "Unable to get activation information for stake account: {}; vote address: {:?}; validator identity: {:?} {}",
+                        "create_validator_stake_accounts(): Unable to get activation information for stake account: {}; vote address: {:?}; validator identity: {:?} {}",
                         stake_address, vote_address, identity, err
                     );
                 }
